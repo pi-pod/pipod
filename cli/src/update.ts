@@ -201,9 +201,11 @@ export function distIsStale(root: string): boolean {
 
 function rebuild(root: string, before: string): void {
   // Dependencies move with the source, and a build against stale ones fails confusingly.
+  // `npm ci` installs exactly the committed lockfile and never rewrites it: an update that
+  // dirtied the checkout would make the next one refuse to run.
   info("installing dependencies…");
-  if (!runVisible("npm", ["install", "--no-audit", "--no-fund"], root)) {
-    throw new PiPodError("npm install failed", { hint: `run it by hand in ${root}` });
+  if (!runVisible("npm", ["ci", "--no-audit", "--no-fund"], root)) {
+    throw new PiPodError("npm ci failed", { hint: `run it by hand in ${root}` });
   }
 
   info("building…");
