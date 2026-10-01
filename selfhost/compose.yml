@@ -131,6 +131,10 @@ services:
       SANDBOX_HOST_BACKEND: static
       # The registry below, where selfhost/upgrade publishes the pod base image.
       PI_POD_SANDBOX_IMAGE_MIRROR: 127.0.0.1:5000/pipod
+      # Largest pod a launch may ask for; the sandbox below enforces the same ceiling.
+      POD_MAX_CPU: ${POD_MAX_CPU:-2}
+      POD_MAX_MEMORY_GB: ${POD_MAX_MEMORY_GB:-4}
+      POD_MAX_DISK_GB: ${POD_MAX_DISK_GB:-20}
     # Every interface: pods dial PUBLIC_URL from inside the sandbox, through this host.
     ports:
       - "8080:8080"
@@ -163,6 +167,10 @@ services:
       PI_POD_SANDBOX_FLEET_CPU: ${PI_POD_SANDBOX_FLEET_CPU:-3}
       PI_POD_SANDBOX_RESERVE_MEMORY_GB: ${PI_POD_SANDBOX_RESERVE_MEMORY_GB:-3}
       PI_POD_SANDBOX_RESERVE_CPU: ${PI_POD_SANDBOX_RESERVE_CPU:-0.5}
+      # Kernel-enforced ceiling on each sandbox, from the same .env values as the server's.
+      PI_POD_SANDBOX_MAX_CPU: ${POD_MAX_CPU:-2}
+      PI_POD_SANDBOX_MAX_MEMORY_GB: ${POD_MAX_MEMORY_GB:-4}
+      PI_POD_SANDBOX_MAX_DISK_GB: ${POD_MAX_DISK_GB:-20}
     volumes:
       - sandbox_state:/state
       - /sys/fs/cgroup:/sys/fs/cgroup:rw

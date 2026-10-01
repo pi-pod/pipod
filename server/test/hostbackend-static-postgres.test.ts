@@ -77,7 +77,6 @@ describe("fresh static deployment launches on PI_POD_SANDBOX_URL (postgres)", {
     capabilities: SANDBOX_CAPABILITIES,
     checkAuth: async () => {},
     resolveImage: async () => ({ ref: "fake-present", state: "active" as const }),
-    resourceMaximums: async () => ({ cpu: 2, memoryGB: 4, diskGB: 20 }),
     create: async (spec: SandboxSpec) => {
       const id = `sb-static-${createdSpecs.length}`;
       createdSpecs.push(spec);

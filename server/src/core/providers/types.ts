@@ -391,18 +391,6 @@ export interface SandboxProvider {
   /** Static and honest (§3.2). */
   readonly capabilities: ProviderCapabilities;
 
-  /**
-   * Dynamic upper bounds imposed by this provider deployment or account. Core clamps larger
-   * requests before image selection and provisioning so dry-run describes what will run.
-   * Omitted fields have no known provider maximum; this is capacity, not currently-free quota.
-   *
-   * Optional deployment env (boot snapshot on server paths): adapters whose
-   * maximums depend on deployment flags (e.g. the sandbox 8-GiB gate) read
-   * them here instead of ambient process.env, so ServerEnv stays the single
-   * source of truth. Omitted (CLI/tests): ambient fallback.
-   */
-  resourceMaximums?(env?: { POD_ALLOW_8GIB_MEMORY?: unknown }): Promise<Partial<{ cpu: number; memoryGB: number; diskGB: number }>>;
-
   /** Throws with login instructions (preflight/doctor). */
   checkAuth(): Promise<void>;
   /** `null` = missing → fail fast (§12). */

@@ -11,7 +11,11 @@ unguarded change, not a rollout.
 | --- | --- | --- |
 | `CAPACITY_WAIT_ENABLED` | `false` | Clients render `capacityWait` states (clients stay on immediate errors until then) |
 | `CPU_FAIRNESS_ENABLED` | `false` | Wait subsystem ON (the scheduler refuses to run the allocator without it) **and** native rev3+ on all fleet hosts **and** tenancy debt zero (see below) **and** a canary tick review |
-| `POD_ALLOW_8GIB_MEMORY` | `false` | Qualified 8-GiB workers exist **and** `POD_MAX_MEMORY_GB` raised; standard stays 4 GiB |
+
+Raising the per-pod shape above the standard 2 vCPU / 4 GiB / 20 GiB is not a flag:
+raise `POD_MAX_CPU` / `POD_MAX_MEMORY_GB` / `POD_MAX_DISK_GB` only after every eligible
+host advertises a matching `maxShape` (its `PI_POD_SANDBOX_MAX_*`). A shape no host
+accepts refuses as `unsupported_shape`.
 
 Related ceilings (unchanged by enabling anything):
 `POD_MAX_CONCURRENT_PER_USER=20` (global user budget, atomic),

@@ -30,13 +30,6 @@ export const STANDARD_SHAPE: ResourceShape = Object.freeze({
   diskGB: 20,
 }) as ResourceShape;
 
-/** Largest shape the gated path may admit; the deployment gate decides, not this constant. */
-export const GATED_MAX_SHAPE: ResourceShape = Object.freeze({
-  cpu: 2,
-  memoryGB: 8,
-  diskGB: 20,
-}) as ResourceShape;
-
 export interface ResolvedShape extends ResourceShape {
   memoryBytes: number;
   diskBytes: number;
@@ -436,28 +429,21 @@ export class CapacityTracker {
 }
 
 /**
- * Gated 8-GiB guard (§7.4). The standard stays 4 GiB: while the gate is off, a
- * request above 4 GiB is refused outright — downstream clamping to deployment
- * or provider maximums must never silently turn an advertised 8-GiB request
- * into a 4-GiB sandbox. With the gate on (and POD_MAX_MEMORY_GB raised), up
- * to 8 GiB passes through to capability-aware admission.
+ * Refuse memory beyond what this deployment admits (§7.4). Silently shrinking an explicit
+ * memory request trades a clear refusal for an out-of-memory pod, so a request above
+ * POD_MAX_MEMORY_GB is refused rather than clamped. Up to the standard 4 GiB a request still
+ * clamps to a smaller ceiling like CPU and disk do, so the default shape launches on a small
+ * self-hosted machine.
  */
-export function assertSandboxShapeGate(
-  requested: { cpu?: number; memoryGB?: number; diskGB?: number },
-  env: { POD_ALLOW_8GIB_MEMORY?: unknown },
+export function assertSandboxMemoryWithinDeployment(
+  requested: { memoryGB?: number },
+  env: { POD_MAX_MEMORY_GB: number },
 ): void {
   const memoryGB = requested.memoryGB ?? STANDARD_SHAPE.memoryGB;
-  if (memoryGB <= STANDARD_SHAPE.memoryGB) return;
-  const allowed =
-    env.POD_ALLOW_8GIB_MEMORY === true || env.POD_ALLOW_8GIB_MEMORY === "true";
-  if (allowed && memoryGB <= GATED_MAX_SHAPE.memoryGB) return;
-  const ceiling = allowed ? GATED_MAX_SHAPE.memoryGB : STANDARD_SHAPE.memoryGB;
+  if (memoryGB <= Math.max(env.POD_MAX_MEMORY_GB, STANDARD_SHAPE.memoryGB)) return;
   throw new HttpError(
     400,
-    `memoryGB ${memoryGB} exceeds this deployment's ${ceiling} GiB per-sandbox limit` +
-      (allowed
-        ? "; request at most 8 GiB or register a larger host"
-        : "; 8 GiB is gated in this deployment (POD_ALLOW_8GIB_MEMORY)"),
+    `memoryGB ${memoryGB} exceeds this deployment's ${env.POD_MAX_MEMORY_GB} GiB per-sandbox limit (POD_MAX_MEMORY_GB)`,
     "this sandbox size is not supported on the available hosts",
   );
 }

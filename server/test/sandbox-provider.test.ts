@@ -7,7 +7,6 @@ import { PiPodError } from "../src/core/errors.js";
 import {
   DEFAULT_ARCHIVE_MAX_DELAY_DAYS,
   SANDBOX_CAPABILITIES,
-  SANDBOX_RESOURCE_MAXIMUMS,
   createSandboxProvider,
   deriveSandboxActivityToken,
   sandboxMirrorRef,
@@ -368,13 +367,6 @@ describe("self-hosted sandbox provider", () => {
       if (originalUrl === undefined) delete process.env.PI_POD_SANDBOX_URL;
       else process.env.PI_POD_SANDBOX_URL = originalUrl;
     }
-  });
-
-  it("reports the fixed native resource maximums without contacting the service", async () => {
-    const provider = createSandboxProvider({ url: stub.url });
-    assert.deepEqual(SANDBOX_RESOURCE_MAXIMUMS, { cpu: 2, memoryGB: 4, diskGB: 20 });
-    assert.deepEqual(await provider.resourceMaximums?.(), { cpu: 2, memoryGB: 4, diskGB: 20 });
-    assert.deepEqual(stub.requests, []);
   });
 
   it("declares the design's capability truth table", () => {
