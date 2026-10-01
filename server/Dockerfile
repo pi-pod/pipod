@@ -12,6 +12,11 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 ENV NODE_ENV=production
+# The source commit, so a running server can name its revision (/v1/version) and record it
+# when it opens a migration-held launch gate (UPGRADE_ON_START). CI passes it; a local build
+# can pass --build-arg SOURCE_SHA=$(git rev-parse HEAD).
+ARG SOURCE_SHA=
+ENV PIPOD_SOURCE_SHA=${SOURCE_SHA}
 WORKDIR /app
 # wget is required for the Compose healthcheck.
 RUN apk add --no-cache wget \

@@ -11,6 +11,7 @@ import {
 import { pino } from "pino";
 import { makeAuthHook } from "./auth/plugin.js";
 import { registerAuthRoutes } from "./auth/routes.js";
+import { registerVersionRoute } from "./release.js";
 import { registerOrgRoutes } from "./orgs/routes.js";
 import { registerSettingsRoutes } from "./settings/routes.js";
 import { registerSecretRoutes } from "./secrets/routes.js";
@@ -283,6 +284,7 @@ export async function buildApp(deps: AppDeps) {
   await app.register(async (v1) => {
     if (deps.roles.api) {
       registerAuthRoutes(v1, deps.env);
+      registerVersionRoute(v1);
       registerOrgRoutes(v1, deps.env);
       registerSettingsRoutes(v1);
       registerSecretRoutes(v1, deps.kek);

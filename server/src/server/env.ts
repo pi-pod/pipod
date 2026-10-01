@@ -134,6 +134,14 @@ export const serverEnvShape = {
     HOST: z.string().default("0.0.0.0"),
     PORT: z.coerce.number().int().default(8080),
     DATABASE_URL: z.string().min(1),
+    /**
+     * The server owns its database upgrades: at boot it refuses a database a newer release
+     * migrated, applies pending migrations, and opens a launch gate a migration held (see
+     * db/upgrade.ts). Safe only when no other server process can run against the database —
+     * the single-container self-hosted bundle. Production keeps it off and does both steps in
+     * its deploy pipeline.
+     */
+    UPGRADE_ON_START: z.enum(["true", "false"]).default("false").transform(value => value === "true"),
     LOG_LEVEL: z.string().default("info"),
 
     /**

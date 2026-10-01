@@ -1,9 +1,11 @@
 import { applyProviderDeploymentEnv, type ServerEnv } from "./env.js";
-import { assertHostBackendServed } from "./edition.js";
+import { assertHostBackendServed, edition } from "./edition.js";
 import { describePlatformCredentials, snapshotPlatformCredentials } from "./pods/providercred.js";
 import { initPool } from "./db/index.js";
 import { startPoolWatchdog } from "./db/watchdog.js";
-import { migrate, type MigrationSet } from "./db/migrate.js";
+import { migrate } from "./db/migrate.js";
+import { upgradeOnStart } from "./db/upgrade.js";
+import { releaseIdentity } from "./release.js";
 import { EnvKekProvider } from "./secrets/crypto.js";
 import { assertConfiguredKeyReferences } from "./secrets/maintenance.js";
 import { backfillPiAuthToModelCredentials } from "./model-credentials/backfill.js";
@@ -18,9 +20,9 @@ import { pino } from "pino";
 
 /**
  * Boots every role in `env.ROLE` and serves until SIGINT/SIGTERM. An edition calls
- * `installEdition` first and passes its own parsed environment and migration set.
+ * `installEdition` first and passes its own parsed environment.
  */
-export async function startServer(env: ServerEnv, migrations?: MigrationSet): Promise<void> {
+export async function startServer(env: ServerEnv): Promise<void> {
   assertHostBackendServed(env);
   applyProviderDeploymentEnv(env);
   // Boot snapshot of the platform provider credentials, BEFORE any provider overlay can
@@ -41,9 +43,16 @@ export async function startServer(env: ServerEnv, migrations?: MigrationSet): Pr
     error: (m: string) => log.error(m),
   };
 
-  // Schema changes run through the separate migrate job / `npm run migrate`.
-  // Auto-migrate only in non-production so the runtime role stays non-owner.
-  if (process.env.NODE_ENV !== "production") {
+  const release = releaseIdentity();
+  log.info(`release: version ${release.version} revision ${release.revision ?? "unknown"}`);
+
+  // Schema changes run through the separate migrate job / `npm run migrate`, unless this
+  // deployment declares the server the owner of its own upgrades (UPGRADE_ON_START).
+  // Otherwise auto-migrate only in non-production so the runtime role stays non-owner.
+  const migrations = edition().migrations();
+  if (env.UPGRADE_ON_START) {
+    await upgradeOnStart(env.DATABASE_URL, migrations, release.revision, flatLog);
+  } else if (process.env.NODE_ENV !== "production") {
     const applied = await migrate(env.DATABASE_URL, migrations);
     if (applied.length) log.info(`migrations applied: ${applied.join(", ")}`);
   }
