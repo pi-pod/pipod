@@ -12,11 +12,12 @@
 -- (and plural "boxes" -> "boats") wherever the word starts an identifier or one of its
 -- snake/kebab/camel segments. Words that merely end in it (sandbox, outbox) never change.
 --
--- Stored data: identifier-like values (no whitespace: host ids `box-<uuid>`, codes such
--- as `box_controller`, provider/vendor values, JSON keys) are renamed. The vendor's own
--- webhook event names became `sandbox.*`. Free-form prose (messages, transcripts) is
--- not rewritten. Encrypted sandbox_host rows bind the old host id in their AAD, so
--- hosts created before this migration cannot be decrypted afterwards and must be
+-- Stored data: only values the system itself writes are renamed: host ids `box-<id>`,
+-- the bare value `box`, snake_case codes such as `box_controller`, the vendor's webhook
+-- event names (now `sandbox.*`) and lower/camelCase JSON keys. URLs, hostnames, paths,
+-- UPPER_CASE environment names (user secrets bind their name in their AAD) and prose are
+-- left exactly as stored. Encrypted sandbox_host rows bind the old host id in their AAD,
+-- so hosts created before this migration cannot be decrypted afterwards and must be
 -- recreated.
 
 CREATE FUNCTION pg_temp.boat_name(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
@@ -29,19 +30,23 @@ CREATE FUNCTION pg_temp.boat_name(t text) RETURNS text LANGUAGE sql IMMUTABLE AS
     '(?<![A-Z])BOX(?![A-Z])', 'BOAT', 'g')
 $f$;
 
--- Stored values: only identifier-like tokens; prose is left as written.
 CREATE FUNCTION pg_temp.boat_value(t text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
   SELECT CASE
     WHEN t ~ '^box\.(ready|error|archived|hydrated|degraded|recovered)$' THEN 'sandbox.' || substr(t, 5)
-    WHEN t ~ '^[A-Za-z0-9_.:/@=-]+$' THEN pg_temp.boat_name(t)
+    WHEN t ~ '^(box|boxes)$' OR t ~ '^box-[A-Za-z0-9_-]+$'
+      OR (t ~ '^[a-z0-9_]+$' AND t ~ '(^|_)box(es)?(_|$)') THEN pg_temp.boat_name(t)
     ELSE t END
+$f$;
+
+CREATE FUNCTION pg_temp.boat_key(k text) RETURNS text LANGUAGE sql IMMUTABLE AS $f$
+  SELECT CASE WHEN k ~ '^[a-z][A-Za-z0-9_]*$' THEN pg_temp.boat_name(k) ELSE pg_temp.boat_value(k) END
 $f$;
 
 CREATE FUNCTION pg_temp.boat_json(j jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $f$
 BEGIN
   CASE jsonb_typeof(j)
     WHEN 'object' THEN
-      RETURN coalesce((SELECT jsonb_object_agg(pg_temp.boat_value(k), pg_temp.boat_json(v)) FROM jsonb_each(j) e(k, v)), '{}'::jsonb);
+      RETURN coalesce((SELECT jsonb_object_agg(pg_temp.boat_key(k), pg_temp.boat_json(v)) FROM jsonb_each(j) e(k, v)), '{}'::jsonb);
     WHEN 'array' THEN
       RETURN coalesce((SELECT jsonb_agg(pg_temp.boat_json(v) ORDER BY i) FROM jsonb_array_elements(j) WITH ORDINALITY a(v, i)), '[]'::jsonb);
     WHEN 'string' THEN
@@ -137,7 +142,7 @@ BEGIN
              WHEN t.typname = 'jsonb' THEN format('pg_temp.boat_json(%I)', a.attname)
              WHEN t.typname = 'json' THEN format('pg_temp.boat_json(%I::jsonb)::json', a.attname)
              WHEN t.typcategory = 'A' THEN format(
-               '(SELECT array_agg(pg_temp.boat_value(e) ORDER BY i) FROM unnest(%1$I) WITH ORDINALITY u(e, i))::%2$s',
+               'coalesce((SELECT array_agg(pg_temp.boat_value(e) ORDER BY i) FROM unnest(%1$I) WITH ORDINALITY u(e, i)), %1$I)::%2$s',
                a.attname, format_type(a.atttypid, a.atttypmod))
              ELSE format('pg_temp.boat_value(%I)', a.attname) END), ', '),
            string_agg(format('%I::text ~ %L', a.attname, old_word), ' OR ')
