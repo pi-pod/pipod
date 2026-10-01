@@ -10,6 +10,7 @@ remote sandboxes ("pods"), from a terminal or a phone, on a server you run yours
 | [`sandbox/`](sandbox) | The native sandbox service: one container hosting many isolated pods. |
 | [`ios/`](ios) | The Swift/SwiftUI iOS app. |
 | [`android/`](android) | The Kotlin/Compose Android app. |
+| [`selfhost/`](selfhost) | The self-hosted deployment: one Compose project, installed and upgraded with `selfhost/upgrade`. |
 | [`docs/`](docs) | [Self-hosting](docs/self-host.md) and cross-component notes. |
 
 ## How it fits together
@@ -19,7 +20,8 @@ pod into the sandbox service on the same host; inside a pod it runs pi behind a 
 clients drive that session over the server's gateway. Identity is [Zitadel](https://zitadel.com)
 (OIDC); the server stores no passwords.
 
-To run your own instance, follow [docs/self-host.md](docs/self-host.md).
+To run your own instance, follow [docs/self-host.md](docs/self-host.md); upgrading it later is
+`git pull && selfhost/upgrade`.
 
 ## Development
 

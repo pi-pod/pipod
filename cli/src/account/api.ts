@@ -478,6 +478,20 @@ function sessionTokensChanged(left: AccountAuth, right: AccountAuth): boolean {
   );
 }
 
+/**
+ * GET /v1/version. Every field after `version` is absent on older servers, and `schema` /
+ * `launchAdmission` are null when the server cannot read them.
+ */
+export interface ApiServerVersion {
+  version: string;
+  /** Source commit the server image was built from. */
+  revision?: string | null;
+  /** How the server's database compares with the migrations its release ships. */
+  schema?: { state: "current" | "behind" | "ahead"; pending: number; unknown: number } | null;
+  /** Whether the server admits new launches. */
+  launchAdmission?: "open" | "held" | null;
+}
+
 export class AccountClient {
   private refreshPromise: Promise<void> | null = null;
 
@@ -693,7 +707,8 @@ export class AccountClient {
     return this.request("/me");
   }
 
-  serverVersion(): Promise<{ version: string } | null> {
+  /** Null from a server that predates the route. */
+  serverVersion(): Promise<ApiServerVersion | null> {
     return this.request("/version", { allow404: true });
   }
 

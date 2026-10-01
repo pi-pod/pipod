@@ -6,6 +6,7 @@ export default defineConfig({
     migrate: "src/server/db/migrate-main.ts",
     fleet: "src/server/pods/sandboxfleet-cli.ts",
     "secrets-maintenance": "src/secrets-maintenance.ts",
+    "base-image": "src/server/base-image-cli.ts",
   },
   format: ["esm"],
   target: "node20",

@@ -1,0 +1,52 @@
+name: selfhost
+
+# Static checks of the self-hosted deployment: the upgrade script lints, the Compose project
+# resolves, pulled images are pinned by digest, the backup gates both services that migrate, and
+# the server owns its migrations. Nothing is built or started.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["selfhost/**", ".github/workflows/selfhost.yml"]
+  push:
+    branches: [main]
+    paths: ["selfhost/**", ".github/workflows/selfhost.yml"]
+
+permissions: {}
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: selfhost
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: ShellCheck the upgrade script
+        run: shellcheck upgrade
+
+      - name: Compose project resolves as a release
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -e 's/^\([A-Z_]*\)=$/\1=placeholder/' -e 's#^PUBLIC_URL=.*#PUBLIC_URL=http://203.0.113.1:8080#' \
+            .env.example > .env
+          docker compose config --format json > "$RUNNER_TEMP/selfhost.json"
+          python3 - "$RUNNER_TEMP/selfhost.json" <<'PY'
+          import json, sys
+          services = json.load(open(sys.argv[1]))["services"]
+          for name, svc in services.items():
+              if "build" not in svc:
+                  assert "@sha256:" in svc["image"], f"{name}: pulled image not pinned by digest: {svc['image']}"
+          assert services["sandbox"].get("init") is True, "sandbox must set init: true"
+          for name in ("server", "zitadel"):
+              condition = services[name]["depends_on"]["backup"]["condition"]
+              assert condition == "service_completed_successfully", f"{name} must wait for the backup"
+          assert services["server"]["environment"]["UPGRADE_ON_START"] == "true", "server must own its migrations"
+          print("selfhost: pulled images pinned, backup gates the upgrade, server owns its migrations")
+          PY

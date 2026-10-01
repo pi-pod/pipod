@@ -1,4 +1,5 @@
 # Local development: one Postgres (product + Zitadel DBs), Zitadel v4.17.1, API.
+# Self-hosting uses ../selfhost instead.
 # TLS is disabled for loopback only; the issuer is the host-facing URL.
 services:
   db:

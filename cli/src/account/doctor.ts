@@ -6,6 +6,7 @@ import { EXIT, PiPodError } from "../errors.js";
 import { hint, info, warn } from "../log.js";
 import { checkSecretResolver, hasSecretRefs, mergeSecretResolver } from "../secret-refs.js";
 import { userSecretsDir } from "../userconfig.js";
+import type { ApiServerVersion } from "./api.js";
 import { accountClientOrNull } from "./client.js";
 import { formatSettingsChain, planAccountLaunch, readSecretResolverLayers } from "./launch.js";
 import { projectTemplateStaleness, userLayerStaleness } from "./bundle-bootstrap.js";
@@ -35,8 +36,9 @@ export async function runAccountDoctor(flags: AccountDoctorFlags, cwd = process.
   if (await checkSecretRefs(flags, cwd)) failed = true;
 
   try {
-    const version = await client.serverVersion();
-    info(`server: reachable at ${client.serverUrl} (version ${version?.version ?? "not reported"})`);
+    const release = await client.serverVersion();
+    info(`server: reachable at ${client.serverUrl} (${describeServerRelease(release)})`);
+    if (reportServerUpgradeState(release)) failed = true;
     if (client.isPodToken) {
       info("auth: valid pod-scoped server token");
       info("org: inherited from the parent pod token");
@@ -109,6 +111,39 @@ export async function runAccountDoctor(flags: AccountDoctorFlags, cwd = process.
 
   if (!failed) info("account checks passed");
   return failed ? EXIT.FAILURE : EXIT.OK;
+}
+
+function describeServerRelease(release: ApiServerVersion | null): string {
+  if (!release) return "version not reported";
+  return release.revision
+    ? `version ${release.version}, revision ${release.revision.slice(0, 12)}`
+    : `version ${release.version}`;
+}
+
+/**
+ * Warn about the server-side upgrade state that refuses or endangers work. True when launches
+ * will fail: a database missing this release's migrations, or held launch admission.
+ */
+function reportServerUpgradeState(release: ApiServerVersion | null): boolean {
+  let failed = false;
+  const schema = release?.schema;
+  if (schema?.state === "behind") {
+    warn(`server: its database is missing ${schema.pending} migration(s) this server release needs`);
+    hint(
+      "a self-hosted server applies them when it starts with UPGRADE_ON_START=true, as the Compose bundle does; " +
+        "otherwise run `node dist/migrate.js` in the server image",
+    );
+    failed = true;
+  } else if (schema?.state === "ahead") {
+    warn(`server: its database has ${schema.unknown} migration(s) from a newer server release`);
+    hint("self-hosted: run the newer release again, or restore the backup taken before the upgrade");
+  }
+  if (release?.launchAdmission === "held") {
+    warn("server: launch admission is held, so new launches are refused");
+    hint("self-hosted: `node dist/fleet.js launch-gate status` in the server container says why");
+    failed = true;
+  }
+  return failed;
 }
 
 /**
