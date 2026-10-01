@@ -1,6 +1,6 @@
 name: selfhost
 
-# Static checks of the self-hosted deployment: the upgrade script lints, the Compose project
+# Static checks of the self-hosted deployment: the scripts lint, the Compose project
 # resolves, pulled images are pinned by digest, the backup gates both services that migrate, and
 # the server owns its migrations. Nothing is built or started.
 on:
@@ -27,8 +27,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: ShellCheck the upgrade script
-        run: shellcheck upgrade
+      - name: ShellCheck the scripts
+        run: shellcheck -x upgrade add-user lib.sh
 
       - name: Compose project resolves as a release
         shell: bash

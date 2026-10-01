@@ -39,7 +39,7 @@ export interface PodSubcommand {
 export const POD_SUBCOMMANDS: ReadonlyArray<PodSubcommand> = [
   { name: "local", description: "run a locally rendered extension command here (the pod owns /name by default)" },
   { name: "detach", description: "leave; the pod keeps running and the idle timer takes over" },
-  { name: "archive", description: "leave and mark the pod logically archived" },
+  { name: "archive", description: "leave, stop the pod and hide it from the list" },
   { name: "status", description: "pod id, provider, state, repo@branch, egress and idle policy" },
   { name: "list", description: "pick from this install's pods" },
   { name: "switch", description: "move to another pod's pi session" },

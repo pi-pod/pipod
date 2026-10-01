@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Give someone an account on this pi pod:
+#
+#   selfhost/add-user <email> [--owner] [--new-password]
+#
+# Creates them in the `default` organization with a one-time password, printed once, that they
+# change at first sign-in; an existing user keeps theirs and only gains the grants, unless
+# --new-password issues a fresh one-time password (the way back in without email set up).
+# --owner grants every permission and lets them manage the organization's members in the
+# Zitadel Console; without it they are a member (launch and manage their own pods).
+set -euo pipefail
+cd "$(dirname "$0")"
+# shellcheck source=lib.sh
+. ./lib.sh
+
+admin zitadel/scripts/add-user.mjs "$@"
+echo "sign in: pipod login --server http://127.0.0.1:8080"

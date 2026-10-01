@@ -137,6 +137,7 @@ export async function runAccountLaunch(opts: RunAccountLaunchOptions): Promise<n
   if (flags.forkFrom) {
     warn("fork copies the conversation, not the workspace — commit and push before forking if the new pod needs those changes");
   }
+  warnNoModelProvider(plan.resolve);
   const target = plan.resolve.template
     ? `${plan.resolve.template.name} template`
     : plan.projectName
@@ -159,6 +160,7 @@ export async function runAccountLaunch(opts: RunAccountLaunchOptions): Promise<n
     !placement;
   const launchBody = {
     ...(plan.templateId ? { templateId: plan.templateId } : {}),
+    ...(plan.projectName ? { project: { name: plan.projectName } } : {}),
     ...(piOverrides ? { piOverrides } : {}),
     ...(flags.forkFrom ? { forkFrom: flags.forkFrom } : {}),
     ...(placement ? { placement } : {}),
@@ -439,4 +441,15 @@ function printAccountDryRun(client: AccountClient, plan: AccountLaunchPlan): voi
   if (!r.credential.available) {
     warn(`launch would fail: no ${r.provider} credential — store org secret ${r.credential.envVar} or set it on the server`);
   }
+}
+
+/**
+ * A pod signed in to no model provider has nothing to talk to, and pi's own advice there —
+ * `/login` inside the pod — would keep the sign-in in that one pod. Say what works, up front.
+ */
+export function warnNoModelProvider(resolve: { piAuthProviders: string[] }): boolean {
+  if (resolve.piAuthProviders.length > 0) return false;
+  warn("no model provider is connected, so pi in the pod has no model to use");
+  info("  `pipod credentials connect` connects the ones your local pi uses; `pipod credentials` lists the rest");
+  return true;
 }

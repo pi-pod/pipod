@@ -50,6 +50,7 @@ import { runCredentialLogin } from "./credential-login.js";
 import { GatewayRpcClient, type ConnectionState } from "./gateway-rpc.js";
 import { ensureExactPi } from "./pi-readiness.js";
 import { bindAsleepWake } from "./asleep-wake.js";
+import { podStatusLabel } from "./pod-status.js";
 import { displayRef, matchesRef } from "./ref.js";
 
 export interface AccountSessionOptions {
@@ -753,7 +754,7 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
         for (const ref of refs) counts.set(ref, (counts.get(ref) ?? 0) + 1);
         const labels = candidates.map((p, index) => {
           const ref = refs[index]!;
-          const label = `${counts.get(ref)! > 1 ? p.id : ref}  ${p.project ?? p.name}  ${p.state}`;
+          const label = `${counts.get(ref)! > 1 ? p.id : ref}  ${p.name}  ${podStatusLabel(p)}`;
           return p.id === rpc.podId ? `${label} (current)` : label;
         });
         const choice = await runtime.bridge.ui?.select?.("Switch to pod", labels);
@@ -866,6 +867,9 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
     });
 
     const tuiMode = opts.tuiMode ?? tuiModeFromArgv(context.config.pi.args);
+    // This pi is the one pi pod bundles, pinned to the server's: "run pi update" cannot apply.
+    // `pipod update` is the upgrade path.
+    process.env["PI_SKIP_VERSION_CHECK"] ??= "1";
     mode = new InteractiveMode(runtime.runtimeHost as never, {
       ...(opts.startupPrompt !== undefined ? { initialMessage: opts.startupPrompt } : {}),
       ...(tuiMode ? { tuiMode } : {}),

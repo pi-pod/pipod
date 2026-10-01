@@ -780,6 +780,8 @@ export class AccountClient {
 
   launch(body: {
     templateId?: string;
+    /** The project launching it ({@link currentProjectName}); names the pod and scopes lists. */
+    project?: { name: string };
     piOverrides?: PiLaunchOverrides;
     forkFrom?: { podId: string; sessionPath?: string };
     /** Co-located placement: run the new pod on an existing pod's machine. */
@@ -798,6 +800,7 @@ export class AccountClient {
     podId: string,
     body: {
       templateId?: string;
+      project?: { name: string };
       piOverrides?: PiLaunchOverrides;
     },
   ): Promise<{ pod: ApiPod; report: LaunchReport }> {
@@ -1215,6 +1218,15 @@ async function responseError(res: Response, method: string, apiPath: string): Pr
   // Preserve a safe server `detail` for capacity classification (reason/retryable hints).
   // Presenters render only validated codes/numbers from it — never raw provider text.
   const safeDetail = isSafeCapacityDetail(body.detail) ? body.detail : undefined;
+  // A missing permission is the user's to resolve, not the request's: say which, and who.
+  const permission = res.status === 403 ? /^requires ([a-z:_]+)$/.exec(message)?.[1] : undefined;
+  if (permission) {
+    debug(`account api: ${method} ${apiPath} refused — ${message}`);
+    return new PiPodError(`you do not have the ${permission} permission this needs`, {
+      status: res.status,
+      hint: "an owner of your organization can grant it (`pipod org-admin` opens the console)",
+    });
+  }
   return new PiPodError(`the pi pod server refused ${method} ${apiPath}: ${message}`, {
     status: res.status,
     ...(code ? { code } : {}),

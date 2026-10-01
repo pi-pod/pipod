@@ -224,14 +224,21 @@ async function rmCmd(args: string[], flags: SecretsFlags, cwd: string): Promise<
   const client = clientFor(flags);
   const target = await resolveScopeTarget(scopeToken, { client, cwd, home: flags.home });
 
+  // Removing what is not there leaves the scope as asked: say so, and succeed.
   if (isServerScope(target.scope)) {
-    await client.deleteSecret(target.scope, target.id, name);
+    try {
+      await client.deleteSecret(target.scope, target.id, name);
+    } catch (e) {
+      if (!(e instanceof PiPodError && e.status === 404)) throw e;
+      info(`${name} was not set in ${describeTarget(target)} — nothing to remove`);
+      return 0;
+    }
     info(`removed ${name} from ${describeTarget(target)}`);
     return 0;
   }
   if (!removeFromDotenv(target.id, name)) {
-    warn(`${name} was not set in ${target.label} — nothing to remove`);
-    return 1;
+    info(`${name} was not set in ${target.label} — nothing to remove`);
+    return 0;
   }
   info(`removed ${name} from ${target.label}`);
   return 0;

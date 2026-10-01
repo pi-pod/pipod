@@ -10,6 +10,7 @@ import {
 import { displayPath, mergeConfigLayers, userConfigPath } from "../userconfig.js";
 import type { AccountClient } from "./api.js";
 import type { AccountLaunchFlags } from "./launch-types.js";
+import { resolveSeedRoot } from "./workspace-seed.js";
 
 export function readHostConfig(home?: string | undefined): Record<string, unknown> {
   const file = userConfigPath(home);
@@ -163,10 +164,18 @@ export function currentProjectTemplateRef(cwd = process.cwd(), home?: string | u
   }
 }
 
-/** Project scope for listings: the current project's name, or null outside one. */
+/**
+ * The project a directory belongs to, by name: its config's `name`, else the directory holding
+ * `.pi-pod/`; without config, the git repository's root directory, else the directory itself —
+ * the same root a launch seeds from. Launches record it on the pod; lists, the default pod of
+ * stop/attach, and --reuse go by it. Null in the home directory and at /, which are no project.
+ */
 export function currentProjectName(cwd = process.cwd(), home?: string | undefined): string | null {
   const configPath = findConfigPath(cwd, { home });
-  if (configPath === null) return null;
+  if (configPath === null) {
+    const root = resolveSeedRoot(cwd, home ? { home } : undefined);
+    return root.ok ? path.basename(root.root) : null;
+  }
   try {
     const raw = parseJsonc(fs.readFileSync(configPath, "utf8"), configPath) as Record<string, unknown>;
     const name = raw["name"];

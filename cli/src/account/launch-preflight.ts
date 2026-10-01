@@ -7,7 +7,7 @@ import { parseJsonc } from "../jsonc.js";
 import { confirm } from "../prompt.js";
 import { legacyUserEnvWarning, mergeConfigLayers } from "../userconfig.js";
 import { toOutgoingBundleConfig } from "./bundle-source.js";
-import { assertMachineConfigCurrent } from "./launch-overlays.js";
+import { assertMachineConfigCurrent, currentProjectName } from "./launch-overlays.js";
 import type { AccountClient, ApiTemplate, PiLaunchOverrides, ResolveReport } from "./api.js";
 import { PI_RESOURCE_KEYS, sameResourceList } from "./launch-resources.js";
 import type { AccountLaunchFlags, AccountLaunchPlan } from "./launch-types.js";
@@ -163,12 +163,7 @@ export async function planAccountLaunch(
     seedRoot = projectRoot;
   }
 
-  const rawName = projectRawFull["name"];
-  const projectName = projectRoot === null
-    ? undefined
-    : typeof rawName === "string" && rawName.length > 0
-      ? rawName
-      : path.basename(projectRoot);
+  const projectName = currentProjectName(cwd, flags.home) ?? undefined;
   return {
     ...(projectName ? { projectName } : {}),
     ...(templateId ? { templateId, templateScope: template?.scope ?? "org" } : {}),

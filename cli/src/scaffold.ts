@@ -110,10 +110,11 @@ export function printInitResult(result: InitResult, projectRoot: string): void {
   if (!result.envCreated) warn(`${CONFIG_DIR}/env already exists — left untouched (your keys are safe)`);
   if (result.gitignoreUpdated) info(`added ${color.bold(`${CONFIG_DIR}/env`)} to .gitignore`);
 
-  const steps: string[] = [];
-  steps.push(`edit ${CONFIG_DIR}/env                ${color.dim("# this project's own keys")}`);
-  steps.push("pipod login                  " + color.dim("# if this machine is not signed in"));
-  steps.push(`pipod                        ${color.dim(`# launch a pod session for ${path.basename(projectRoot)}`)}`);
+  const steps = [
+    [`edit ${CONFIG_DIR}/config.json and init.sh`, "what this project's pods get"],
+    [`edit ${CONFIG_DIR}/env`, "this project's own keys"],
+    ["pipod", `launch a pod for ${path.basename(projectRoot)}; the first launch offers to keep these in a template`],
+  ].map(([command, why]) => `${command!.padEnd(40)} ${color.dim(`# ${why}`)}`);
   plain("");
   plain("Next steps:");
   steps.forEach((step, index) => plain(`  ${index + 1}. ${step}`));

@@ -49,7 +49,7 @@ export async function runAccountJobs(
       return listJobs(client, flags);
     case "show":
       assertArgCount(args, 2, "pipod jobs show <job>");
-      return showJob(await selectJob(client, args[1]!, action));
+      return showJob(client, await selectJob(client, args[1]!, action));
     case "runs":
       assertArgCount(args, 2, "pipod jobs runs <job>");
       return listRuns(client, await selectJob(client, args[1]!, action));
@@ -108,7 +108,7 @@ async function listJobs(client: AccountClient, flags: AccountJobFlags): Promise<
   return 0;
 }
 
-function showJob(job: ApiJob): number {
+async function showJob(client: AccountClient, job: ApiJob): Promise<number> {
   info(`${color.bold(job.name)} (${job.id})`);
   if (job.description) info(`  ${job.description}`);
   // Old servers may still return "draft"; render it as-is and let `activate` handle it.
@@ -120,7 +120,7 @@ function showJob(job: ApiJob): number {
     info(`  schedule:  ${job.trigger.times.length === 1 ? "once" : `${job.trigger.times.length} times`} (absolute times)`);
     for (const time of job.trigger.times) info(`               ${time}`);
   }
-  info(`  template:  ${job.templateId ?? "default"}`);
+  info(`  template:  ${job.templateId ? await templateName(client, job.templateId) : "default"}`);
   info(`  model:     ${job.model}`);
   info(`  next run:  ${job.nextRunAt ?? "—"}`);
   info(`  last run:  ${job.lastRunAt ?? "never"}`);
@@ -254,7 +254,8 @@ function printPlan(plan: JobPlan): void {
   const layer = plan.local.layer === "project" ? "project .pi-pod/jobs/" : "~/.pi-pod/jobs/";
   const dest = plan.server ? `server ${displayRef(plan.server.id, "job")} (${plan.server.status})` : "new on the server";
   info(`${color.bold(plan.local.name)}  ${color.dim(`${layer} → ${dest}`)}`);
-  if (plan.staleServer && plan.server) {
+  // A run moves the server's timestamp too; it matters only when the specs differ.
+  if (plan.staleServer && plan.server && plan.changes.length > 0) {
     warn(
       `server copy of "${plan.local.name}" was updated more recently than the local file (server ${plan.server.updatedAt})`,
     );
@@ -353,16 +354,18 @@ async function diffJobs(client: AccountClient, names: string[], flags: AccountJo
   return drifted ? 1 : 0;
 }
 
+/** A template's name, or its id when it cannot be found (deleted, or not visible to you). */
+async function templateName(client: AccountClient, id: string): Promise<string> {
+  try {
+    return (await findTemplate(client, id)).name;
+  } catch {
+    return id;
+  }
+}
+
 async function pullJob(client: AccountClient, ref: string, flags: AccountJobFlags): Promise<number> {
   const job = await selectJob(client, ref, "pull");
-  let template: string | null = job.templateId;
-  if (job.templateId) {
-    try {
-      template = (await findTemplate(client, job.templateId)).name;
-    } catch {
-      template = job.templateId;
-    }
-  }
+  const template = job.templateId ? await templateName(client, job.templateId) : null;
   const written = writeLocalJob(
     {
       name: job.name,

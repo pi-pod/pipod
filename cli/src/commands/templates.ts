@@ -258,8 +258,6 @@ async function createCmd(client: AccountClient, args: string[], flags: Templates
   if (opts.fromHere) {
     info(snapshotSummary(piSettings));
     await syncEnvSecrets(client, created, env, { withSecrets: opts.withSecrets ?? false, reportStale: false });
-  } else {
-    info("it stores this project's authored bundle; future local edits apply after `pipod push`");
   }
   await hintMissingCredentials(client);
   return 0;
@@ -276,11 +274,8 @@ async function hintMissingCredentials(client: AccountClient): Promise<void> {
   } catch {
     return;
   }
-  const ready = new Set(
-    result.credentials.filter((c) => c.state === "ready").map((c) => c.providerId),
-  );
-  if (!result.providers.some((p) => p.brokerSupported && !ready.has(p.id))) return;
-  info("some model providers have no account credential yet — `pipod credentials connect` sets them all up");
+  if (result.credentials.some((c) => c.state === "ready")) return;
+  info("you have no model-provider credential yet — `pipod credentials connect` sets them up");
 }
 
 function requireFromHereForSecrets(opts: TemplateOpts): void {
@@ -443,7 +438,7 @@ async function rmCmd(client: AccountClient, args: string[], flags: TemplatesFlag
     scopeOf(t) === "user" ? `delete your template ${t.name}?` : `delete template ${t.name} for the whole org?`,
     {
       nonInteractiveDefault: false,
-      ...(flags.yes ? { assumeYes: true } : {}),
+      assumeYes: flags.yes === true,
     },
   );
   if (!ok) {

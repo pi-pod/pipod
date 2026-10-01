@@ -239,9 +239,7 @@ export async function watchProvisioning(
       });
     }
     if (pod.stateReason) {
-      throw new PiPodError(`launch failed: ${pod.stateReason}`, {
-        hint: "`pipod list` shows the pod; delete it with `pipod gc --delete` once diagnosed",
-      });
+      throw new PiPodError(`launch failed: ${pod.stateReason}`, { hint: await launchFailureHint(client, pod) });
     }
     if (Date.now() > deadline) throw new PiPodError("launch timed out after 30 minutes");
     // Pace only what the server answered immediately — an older server that ignores the
@@ -249,6 +247,23 @@ export async function watchProvisioning(
     const elapsed = Date.now() - polledAt;
     if (elapsed < pollMs) await new Promise((r) => setTimeout(r, pollMs - elapsed));
   }
+}
+
+/**
+ * What to do about a failed launch. A full host is the common case on a self-hosted server:
+ * every running pod holds its whole memory ceiling until it stops, so name the caller's own.
+ */
+async function launchFailureHint(client: AccountClient, failed: ApiPod): Promise<string> {
+  if (!/admission_denied\b.*\bat capacity\b/.test(failed.stateReason ?? "")) {
+    return "`pipod list` shows the pod; delete it with `pipod gc --delete` once diagnosed";
+  }
+  const { pods } = await client.listPods({ mine: true }).catch(() => ({ pods: [] as ApiPod[] }));
+  const running = pods.filter(
+    (p) => p.id !== failed.id && p.state === "active" && p.ready && p.sandboxState !== "stopped" && p.sandboxState !== "archived",
+  );
+  if (running.length === 0) return "the server is full with other people's pods; try again when one stops";
+  const names = running.map((p) => `${displayRef(p.id, "pod")} (${p.name})`).join(", ");
+  return `the server is full; stop a pod you are not using — ${names} — with \`pipod stop <pod>\`, then launch again`;
 }
 
 /** Translate compatibility errors for request features that require a matching server. */
@@ -401,7 +416,7 @@ async function podsForThisLaunch(client: AccountClient, plan: AccountLaunchPlan)
       mine: true,
       state: "active",
     });
-    return pods.filter((pod) => pod.templateId === (plan.templateId ?? null));
+    return pods.filter((pod) => pod.templateId === (plan.templateId ?? null) && pod.project === (plan.projectName ?? null));
   } catch (e) {
     debug(`could not list this project's pods: ${e instanceof Error ? e.message : String(e)}`);
     return null;
@@ -425,9 +440,11 @@ export async function tryAccountReuse(
       mine: true,
       state: "active",
     });
+    // This project's own stopped pod: another project's disk holds another project's work.
     candidate = pods.find(
       (p) =>
         p.templateId === (plan.templateId ?? null) &&
+        p.project === (plan.projectName ?? null) &&
         !p.ready &&
         !p.initializing &&
         p.stateReason === null,
@@ -455,7 +472,8 @@ export async function tryAccountReuse(
     // Only a definitive "this pod cannot be reused" answer may fall through to a fresh launch.
     // A lost reply, a start-guard, or a cancel must not be rewritten into another mutation.
     if (error instanceof PiPodError && (error.status === 404 || error.status === 409)) {
-      info(`pod ${displayRef(candidate.id, "pod")} not reusable — ${error.message}; launching a fresh pod`);
+      const reason = error.message.replace(/^the pi pod server refused \S+ \S+: /, "");
+      info(`pod ${displayRef(candidate.id, "pod")} not reusable (${reason}); launching a fresh pod`);
       return null;
     }
     throw error;

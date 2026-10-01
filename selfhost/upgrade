@@ -3,28 +3,59 @@
 #
 #   git pull && selfhost/upgrade
 #
-# Builds the server and sandbox images from the checkout, publishes the pod base image the new
-# server launches from to the bundled registry, then `docker compose up -d`: Compose dumps the
-# database first, and the server migrates itself and opens launch admission before it serves.
+# The first run writes .env with new secrets. Every run builds the server and sandbox images
+# from the checkout, publishes the pod base image the new server launches from to the bundled
+# registry, then `docker compose up -d`: Compose dumps the database first, and the server
+# migrates itself and opens launch admission before it serves. Zitadel's pipod project is
+# created on the first run and checked for drift on every later one.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# shellcheck source=lib.sh
+. ./lib.sh
+
+wait_healthy() {
+  for _ in $(seq 1 120); do
+    if [ "$(compose ps "$1" --format '{{.Health}}')" = healthy ]; then return 0; fi
+    sleep 2
+  done
+  compose logs --tail 20 "$1" >&2
+  echo "upgrade: $1 did not become healthy; its log is above" >&2
+  exit 1
+}
+
+first_install=false
+if [ ! -e .env ]; then
+  if docker volume inspect pipod_pgdata >/dev/null 2>&1; then
+    echo "upgrade: this host already has a pi pod database but no selfhost/.env; restore .env from your backup (new secrets cannot open that data)" >&2
+    exit 1
+  fi
+  first_install=true
+  (umask 077 && cp .env.example .env)
+  env_set POSTGRES_PASSWORD "$(openssl rand -hex 24)"
+  env_set ZITADEL_MASTERKEY "$(openssl rand -hex 16)"
+  env_set ZITADEL_ADMIN_PASSWORD "$(openssl rand -hex 12)aA1!"
+  env_set SECRETS_KEK "$(openssl rand -base64 32)"
+  env_set PI_POD_SANDBOX_TOKEN "$(openssl rand -hex 32)"
+  echo "upgrade: wrote selfhost/.env with new secrets; back up ZITADEL_MASTERKEY and SECRETS_KEK offline"
+fi
 
 # The server records this commit when it opens launch admission after a migration held it.
 PIPOD_SOURCE_SHA="$(git rev-parse HEAD)"
 export PIPOD_SOURCE_SHA
 
-docker compose build server sandbox
+compose build server sandbox
 
 # The registry lives in the sandbox's network namespace, so it is reachable once the sandbox is.
-docker compose up -d sandbox registry
+compose up -d sandbox registry
 for _ in $(seq 1 60); do
-  if docker compose exec -T sandbox curl -fsS http://127.0.0.1:8433/v1/healthz >/dev/null 2>&1; then break; fi
+  if compose exec -T sandbox curl -fsS http://127.0.0.1:8433/v1/healthz >/dev/null 2>&1; then break; fi
   sleep 2
 done
 
 # The base image tag digests the pi version, the launcher and the image assets, so only the new
 # server knows it. Rebuilding an unchanged tag is a cache hit and the push a no-op.
-read -r base pi < <(docker compose run --rm --no-deps -T server node dist/base-image.js </dev/null)
+read -r base pi < <(docker run --rm pipod/server:local node dist/base-image.js </dev/null)
 target="127.0.0.1:5000/pipod/$base"
 context="$(mktemp -d)"
 trap 'rm -rf "$context"' EXIT
@@ -35,16 +66,44 @@ cp ../server/image/Dockerfile "$context/"
 docker build --build-arg "PI_VERSION=$pi" -t "$target" "$context"
 docker push "$target"
 
-docker compose up -d
+compose up -d
+
+# Zitadel's pipod project: created on the first run, then only checked. The server needs its id
+# as the token audience, and publishes the CLI app's client id to `pipod login`.
+wait_healthy zitadel
+mode=--check
+[ -n "$(env_get ZITADEL_API_AUDIENCE)" ] || mode=--apply
+if report="$(admin zitadel/scripts/reconcile-zitadel.mjs "$mode" 2>&1)"; then
+  audience="$(sed -n 's/^project id (API audience): //p' <<<"$report")"
+  client="$(sed -n 's/^client id pipod-cli: //p' <<<"$report")"
+  if [ -z "$audience" ] || [ -z "$client" ]; then
+    echo "$report" >&2
+    echo "upgrade: Zitadel did not report the pipod project's ids" >&2
+    exit 1
+  fi
+  if [ "$audience" != "$(env_get ZITADEL_API_AUDIENCE)" ] || [ "$client" != "$(env_get ZITADEL_CLI_CLIENT_ID)" ]; then
+    env_set ZITADEL_API_AUDIENCE "$audience"
+    env_set ZITADEL_CLI_CLIENT_ID "$client"
+    compose up -d server
+  fi
+elif [ "$mode" = --apply ]; then
+  echo "$report" >&2
+  echo "upgrade: could not create the pipod project in Zitadel; the error is above" >&2
+  exit 1
+else
+  echo "$report" >&2
+  echo "upgrade: warning: Zitadel's pipod project was not checked; the reason is above" >&2
+fi
 
 # The server migrates before it serves, so healthy means upgraded.
-for _ in $(seq 1 90); do
-  if [ "$(docker compose ps server --format '{{.Health}}')" = healthy ]; then
-    echo "upgrade: server healthy at $PIPOD_SOURCE_SHA"
-    exit 0
-  fi
-  sleep 2
-done
-docker compose logs --tail 20 server >&2
-echo "upgrade: the server did not become healthy; its log is above" >&2
-exit 1
+wait_healthy server
+echo "upgrade: server healthy at $PIPOD_SOURCE_SHA"
+if [ "$first_install" = true ]; then
+  cat <<'EOF'
+
+pi pod is running. Give yourself an account, then sign in from this machine:
+
+  selfhost/add-user you@example.com --owner
+  pipod login --server http://127.0.0.1:8080
+EOF
+fi

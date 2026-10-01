@@ -25,6 +25,7 @@ import {
   timingSafeEqualString,
   DEFAULT_CLIENT_ID,
   DEFAULT_ISSUER,
+  OIDC_NETWORK_TIMEOUT_MS,
 } from "./oidc.js";
 import {
   accountAuthPath,
@@ -50,19 +51,27 @@ export interface LoginFlags {
 }
 
 export async function runLogin(flags: LoginFlags): Promise<number> {
-  const previous = safeReadAuth(flags.home);
+  const stored = safeReadAuth(flags.home);
   const serverUrl = normalizeServerUrl(
-    flags.server ?? previous?.serverUrl ?? process.env["PI_POD_ACCOUNT_URL"] ?? DEFAULT_ACCOUNT_SERVER_URL,
+    flags.server ?? stored?.serverUrl ?? process.env["PI_POD_ACCOUNT_URL"] ?? DEFAULT_ACCOUNT_SERVER_URL,
   );
+  // A session with another server says nothing about this one's identity provider.
+  const previous = stored?.serverUrl === serverUrl ? stored : null;
+  const published = await fetchSignInConfig(serverUrl);
   const issuerInput =
-    flags.issuer ?? previous?.issuer ?? process.env["PI_POD_ISSUER"] ?? defaultIssuerForServer(serverUrl);
+    flags.issuer ??
+    process.env["PI_POD_ISSUER"] ??
+    published?.issuer ??
+    previous?.issuer ??
+    defaultIssuerForServer(serverUrl);
   if (!issuerInput) {
     throw new PiPodError(`no identity provider is known for ${serverUrl}`, {
-      hint: "pass --issuer <url> (the ZITADEL_ISSUER of that server); pi pod only infers it for api.pipod.dev and loopback servers",
+      hint: "pass --issuer <url> (the ZITADEL_ISSUER of that server); this server does not publish one",
     });
   }
   const issuer = normalizeIssuerInput(issuerInput);
-  const clientId = previous?.clientId ?? process.env["PI_POD_OIDC_CLIENT_ID"] ?? DEFAULT_CLIENT_ID;
+  const clientId =
+    process.env["PI_POD_OIDC_CLIENT_ID"] ?? published?.cliClientId ?? previous?.clientId ?? DEFAULT_CLIENT_ID;
 
   let accessToken: string;
   let refreshToken: string | undefined;
@@ -105,6 +114,8 @@ export async function runLogin(flags: LoginFlags): Promise<number> {
     throw e;
   }
 
+  // Zitadel's access tokens carry no email, so the server rarely knows it; the ID token does.
+  const email = me.user.email ?? emailFromIdToken(idToken) ?? "";
   const orgId = me.currentOrgId || tokenOrg?.id || "";
   const orgName = me.organization?.name ?? tokenOrg?.name ?? orgId;
   const pending = !orgId || (me.permissions ?? []).length === 0;
@@ -116,7 +127,7 @@ export async function runLogin(flags: LoginFlags): Promise<number> {
     ...(idToken ? { idToken } : {}),
     issuer,
     clientId,
-    user: { id: me.user.id, email: me.user.email ?? "" },
+    user: { id: me.user.id, email },
     orgId,
     ...(me.organization?.alias || tokenOrg?.alias
       ? { orgAlias: me.organization?.alias ?? tokenOrg?.alias }
@@ -125,12 +136,12 @@ export async function runLogin(flags: LoginFlags): Promise<number> {
   const file = writeAccountAuth(auth, flags.home);
 
   if (pending) {
-    info(`signed in to ${serverUrl} as ${me.user.email ?? me.user.id}`);
+    info(`signed in to ${serverUrl} as ${email || me.user.id}`);
     info("access is pending Zitadel organization membership or role grants");
     info(`manage account: ${me.accountConsoleUrl ?? accountConsoleUrl(issuer)}`);
     hint("an administrator invites you and grants `member` (or another bundle) in the Zitadel Console");
   } else {
-    info(`signed in to ${serverUrl} as ${me.user.email ?? me.user.id} (org: ${orgName})`);
+    info(`signed in to ${serverUrl} as ${email || me.user.id} (org: ${orgName})`);
   }
   info(`signed-in session stored in ${file}; pod operations now use this server`);
   return 0;
@@ -176,7 +187,7 @@ export async function runLogout(flags: { home?: string | undefined }): Promise<n
     }
   }
   clearAccountAuth(flags.home);
-  info(`signed out of ${auth.serverUrl} — pod operations are unavailable until the next login`);
+  info(`signed out of ${auth.serverUrl}; sign back in with \`pipod login --server ${auth.serverUrl}\``);
   return 0;
 }
 
@@ -191,7 +202,7 @@ export async function runWhoami(flags: { home?: string | undefined }): Promise<n
   const me = await client.me();
   info(`server  ${auth.serverUrl}`);
   if (auth.issuer) info(`issuer  ${auth.issuer}`);
-  info(`user    ${me.user.email ?? "(no email)"} (${me.user.id})`);
+  info(`user    ${me.user.email ?? (auth.user.email || "(no email)")} (${me.user.id})`);
   const perms = me.permissions ?? [];
   info(`perms   ${perms.length ? perms.join(", ") : "(none)"}`);
   if (me.organization) {
@@ -298,13 +309,13 @@ function waitForCallback(server: http.Server, expectedState: string): Promise<st
       const state = url.searchParams.get("state") ?? "";
       const code = url.searchParams.get("code");
       if (!timingSafeEqualString(state, expectedState) || !code) {
-        res.writeHead(400, { "content-type": "text/html" }).end("<h3>Sign-in failed — return to the terminal.</h3>");
+        res.writeHead(400, { "content-type": "text/html; charset=utf-8" }).end("<h3>Sign-in failed — return to the terminal.</h3>");
         clearTimeout(timer);
         reject(new PiPodError("the sign-in redirect did not match this login attempt"));
         return;
       }
       res
-        .writeHead(200, { "content-type": "text/html" })
+        .writeHead(200, { "content-type": "text/html; charset=utf-8" })
         .end("<h3>Signed in — you can close this tab and return to the terminal.</h3>");
       clearTimeout(timer);
       resolve(code);
@@ -322,6 +333,38 @@ function openBrowser(url: string): void {
   } catch {
     // The URL is printed either way.
   }
+}
+
+/**
+ * The sign-in settings a server publishes at GET /v1/auth/config; null from a server that
+ * predates it. Failing to reach the server at all stops the login here, before the browser.
+ */
+async function fetchSignInConfig(serverUrl: string): Promise<{ issuer?: string; cliClientId?: string } | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${serverUrl}/v1/auth/config`, {
+      redirect: "error",
+      signal: AbortSignal.timeout(OIDC_NETWORK_TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new PiPodError(`cannot reach the pi pod server at ${serverUrl}`, {
+      hint: e instanceof Error && e.cause instanceof Error ? e.cause.message : "check --server and that the server is running",
+    });
+  }
+  if (!res.ok) return null;
+  const body = (await res.json().catch(() => null)) as { issuer?: unknown; cliClientId?: unknown } | null;
+  const issuer = typeof body?.issuer === "string" ? body.issuer : undefined;
+  // A token from the hosted service's identity provider is good at api.pipod.dev: no other
+  // server gets to ask for one.
+  if (issuer && normalizeIssuerInput(issuer) === DEFAULT_ISSUER && new URL(serverUrl).hostname !== "api.pipod.dev") {
+    throw new PiPodError(`${serverUrl} asks you to sign in to pipod.dev, which is not its identity provider`, {
+      hint: "pass --issuer <url> if you really mean to sign in there",
+    });
+  }
+  return {
+    ...(issuer ? { issuer } : {}),
+    ...(typeof body?.cliClientId === "string" ? { cliClientId: body.cliClientId } : {}),
+  };
 }
 
 function normalizeServerUrl(raw: string | undefined): string {
@@ -377,6 +420,17 @@ function defaultIssuerForServer(serverUrl: string): string | null {
   if (url.hostname === "api.pipod.dev") return DEFAULT_ISSUER;
   if (isLoopbackHost(url.hostname)) return "http://127.0.0.1:8081";
   return null;
+}
+
+/** The `email` claim of an ID token this login already verified, if it has one. */
+function emailFromIdToken(idToken: string | undefined): string | undefined {
+  if (!idToken) return undefined;
+  try {
+    const claims = JSON.parse(Buffer.from(idToken.split(".")[1] ?? "", "base64url").toString("utf8")) as { email?: unknown };
+    return typeof claims.email === "string" && claims.email ? claims.email : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function safeReadAuth(home?: string | undefined): AccountAuth | null {

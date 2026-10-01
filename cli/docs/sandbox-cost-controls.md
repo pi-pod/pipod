@@ -27,16 +27,18 @@ Product policy (the server enforces; this client only presents it):
 
 | What you see | Meaning | Cost to wake |
 | --- | --- | --- |
-| `active` | Running sandbox | — |
-| `Stopped — local disk retained` | Active row, stopped sandbox; workspace files kept | `attach` restarts in seconds |
-| `Archived — restores on next use` | Archived sandbox under an active row | Restores in seconds-to-minutes depending on workspace size |
-| `Archived — hidden …` | Logically archived row (`list --archived` shows it); suffix names the sandbox layer when known (`disk retained` still consumes capacity, `cold storage` is uploaded and verified) | `restore`, then attach as above |
+| `running` | Running sandbox | — |
+| `stopped` | Active row, stopped sandbox; workspace files kept on local disk | `attach` restarts in seconds |
+| `stopped · cold storage` | Archived sandbox under an active row | Restores in seconds-to-minutes depending on workspace size |
+| `archived` / `archived · cold storage` | Archived row (`list --archived` shows it), its sandbox stopped | `restore`, then attach as above |
+| `failed` | A launch or start that ended with a reason | `pipod gc --delete` removes it |
 | `preparing` / `provisioning-sandbox` / `running-init` | Still starting | Wait; do not create a duplicate |
 
-Logical archive is hide, not delete. `stop` releases compute now and keeps the disk.
-`archive` hides now; cold archive follows the 60-minute policy. `restore` returns the row;
-attach starts the sandbox when needed. There is no universal 10-second restore promise:
-expect seconds for stopped disks and seconds-to-minutes for archived workspaces depending on size, longer near quota.
+Archive is hide, not delete: it stops the pod and hides it. `stop` releases compute now and
+keeps the disk without hiding the pod. Cold storage follows the server's archive policy.
+`restore` returns the row; attach starts the sandbox when needed. There is no universal
+10-second restore promise: expect seconds for stopped disks and seconds-to-minutes for
+archived workspaces depending on size, longer near quota.
 
 ## Capacity errors
 

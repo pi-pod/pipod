@@ -122,10 +122,11 @@ const Schema = z.object({
    * Hard ceiling on what every sandbox *together* may consume, enforced by the kernel on the
    * parent cgroup. Admission control only bounds guarantees, and a guarantee is not a cap, so
    * on a host shared with anything else this is what stops a bursting sandbox from reclaiming
-   * memory out of its neighbours. 0 leaves the fleet uncapped.
+   * memory out of its neighbours. 0 leaves the fleet uncapped; `auto` caps it at what admission
+   * can promise anyway — this host's total less the reserve — so the ceiling grows with the host.
    */
-  PI_POD_SANDBOX_FLEET_MEMORY_GB: z.coerce.number().nonnegative().default(0),
-  PI_POD_SANDBOX_FLEET_CPU: z.coerce.number().nonnegative().default(0),
+  PI_POD_SANDBOX_FLEET_MEMORY_GB: z.union([z.literal("auto"), z.coerce.number().nonnegative()]).default(0),
+  PI_POD_SANDBOX_FLEET_CPU: z.union([z.literal("auto"), z.coerce.number().nonnegative()]).default(0),
 
   PI_POD_SANDBOX_DEFAULT_DISK_GB: z.coerce.number().positive().default(10),
   /**
@@ -391,8 +392,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     reserveDiskBytes: Math.round(e.PI_POD_SANDBOX_RESERVE_DISK_GB * 1024 ** 3),
     pressureThreshold: e.PI_POD_SANDBOX_PRESSURE_THRESHOLD,
     fleet: {
-      memoryBytes: e.PI_POD_SANDBOX_FLEET_MEMORY_GB > 0 ? Math.round(e.PI_POD_SANDBOX_FLEET_MEMORY_GB * 1024 ** 3) : null,
-      cpu: e.PI_POD_SANDBOX_FLEET_CPU > 0 ? e.PI_POD_SANDBOX_FLEET_CPU : null,
+      memoryBytes: fleetLimit(e.PI_POD_SANDBOX_FLEET_MEMORY_GB, os.totalmem() / 1024 ** 3, e.PI_POD_SANDBOX_RESERVE_MEMORY_GB, 1024 ** 3),
+      cpu: fleetLimit(e.PI_POD_SANDBOX_FLEET_CPU, os.cpus().length, e.PI_POD_SANDBOX_RESERVE_CPU, 1),
     },
     admission: {
       memoryMode: e.PI_POD_SANDBOX_MEMORY_ADMISSION,
@@ -458,6 +459,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       images: path.join(stateDir, "images"),
     },
   };
+}
+
+/** A fleet ceiling in `unit`s, from its setting in GB or cores; null is uncapped. */
+function fleetLimit(setting: number | "auto", hostTotal: number, reserve: number, unit: number): number | null {
+  const value = setting === "auto" ? hostTotal - reserve : setting;
+  return value > 0 ? (unit === 1 ? value : Math.round(value * unit)) : null;
 }
 
 export function hostCapacity(): { cpus: number; memoryBytes: number } {

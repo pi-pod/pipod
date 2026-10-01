@@ -42,6 +42,12 @@ function requireHttpsUrl(value: unknown, what: string): string {
 
 export async function runBillingCommand(client: AccountClient, args: string[], deps: BillingCommandDeps = {}): Promise<number> {
   const [verb, ...rest] = args;
+  // Clients key every billing surface off the account summary's `workstation` block, which only
+  // the hosted service sends. A self-hosted server has nothing to pay for.
+  if (!(await client.me()).workstation) {
+    info(`${client.serverUrl} has no billing: plans and payment belong to the hosted service at pipod.dev`);
+    return EXIT.OK;
+  }
   if (!verb || verb === "help" || verb === "--help") {
     info(`Usage: pipod billing checkout [--plan standard|pro] [--trial]
        pipod billing portal

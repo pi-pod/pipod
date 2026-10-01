@@ -22,6 +22,7 @@ import {
   splitPiArgs,
   type AccountLaunchFlags,
 } from "./launch.js";
+import { podStatusLabel, podStorageKind } from "./pod-status.js";
 import { runAccountSession } from "./session.js";
 import { displayRef, isFullUuid, matchesRef } from "./ref.js";
 import { withWorkstationWait } from "./workstation.js";
@@ -65,17 +66,27 @@ async function listAllPods(
   }
 }
 
+/**
+ * The pods of the project this directory belongs to, or of the whole account with `all`.
+ * `widen` answers with the account's pods when the project has none — older pods recorded no
+ * project, and a list or a pick that comes up empty there helps nobody. `project` names the
+ * scope the answer actually came from.
+ */
 async function podsInScope(
   client: AccountClient,
-  flags: { all: boolean; templateId?: string | undefined; includeGone?: boolean | undefined },
+  flags: { all: boolean; templateId?: string | undefined; includeGone?: boolean | undefined; widen?: boolean },
   cwd?: string,
-): Promise<{ pods: ApiPod[] }> {
-  const project = flags.all ? null : currentProjectName(cwd);
-  return listAllPods(client, {
-    ...(project ? { project } : {}),
+): Promise<{ pods: ApiPod[]; project: string | null }> {
+  const query = {
     ...(flags.templateId ? { templateId: flags.templateId } : {}),
     ...(flags.includeGone ? { includeGone: true } : {}),
-  });
+  };
+  const project = flags.all ? null : currentProjectName(cwd);
+  if (project) {
+    const scoped = await listAllPods(client, { ...query, project });
+    if (scoped.pods.length > 0 || !flags.widen) return { pods: scoped.pods, project };
+  }
+  return { pods: (await listAllPods(client, query)).pods, project: null };
 }
 
 /** When the pod last did something; creation stands in until it has. */
@@ -163,6 +174,7 @@ export async function runAccountList(
     podsInScope(client, {
       all: flags.all || template !== null,
       ...(template ? { templateId: template.id } : {}),
+      widen: true,
     }),
     flags.quiet ? Promise.resolve(null) : client.accountBilling(),
   ]);
@@ -178,11 +190,17 @@ export async function runAccountList(
     return 0;
   }
   if (pods.length === 0) {
-    listOut(emptyListMessage(flags.all, template));
+    listOut(template ? `no pods from template ${template.name}` : "no pods");
     renderBillingLine(billing);
     return 0;
   }
-  listOut(template ? `pods from template ${template.name} on ${client.serverUrl}:` : `pods on ${client.serverUrl}:`);
+  listOut(
+    template
+      ? `pods from template ${template.name} on ${client.serverUrl}:`
+      : scoped.project
+        ? `pods for ${scoped.project} on ${client.serverUrl} (--all for every pod):`
+        : `pods on ${client.serverUrl}:`,
+  );
   renderPodLines(pods);
   renderBillingLine(billing);
   return 0;
@@ -224,92 +242,29 @@ async function runAccountGroupList(
 }
 
 function renderPodLines(pods: ApiPod[]): void {
-  for (const { pod, depth } of orderPodsAsTree(pods)) {
+  const rows = orderPodsAsTree(pods);
+  // Where a pod lives matters only for co-located pods (`on <host>`); every other pod has a
+  // machine of its own, and naming the provider there says nothing.
+  const located = rows.some(({ pod }) => pod.hostPodId);
+  const line = (ref: string, name: string, status: string, where: string, when: string) =>
+    `  ${pad(ref, 12)}  ${pad(name, 34)}  ${pad(status, 24)}  ${located ? `${pad(where, 16)}  ` : ""}${when}`;
+  listOut(color.dim(line("POD", "NAME", "STATUS", "ON", "ACTIVE")));
+  for (const { pod, depth } of rows) {
     const when = pod.lastActivityAt ?? pod.createdAt;
     const status = podStatusLabel(pod);
-    // The storage label already says Stopped/Archived for asleep sandboxes; repeating the
-    // `asleep` connection beside it adds noise, so it is shown only for other states.
-    const storageAsleep = podStorageKind(pod) === "stopped-retained" || podStorageKind(pod) === "provider-archived";
-    const connection = pod.connection && pod.connection !== "connected" && !(storageAsleep && pod.connection === "asleep")
-      ? ` ${pod.connection}`
-      : "";
+    // Only a running pod has a session to be connected to; for any other the status says it all.
+    const connection =
+      podStorageKind(pod) === "running" && pod.connection && pod.connection !== "connected" ? ` ${pod.connection}` : "";
     const indent = depth === 0 ? "" : `${"  ".repeat(depth - 1)}└ `;
     // The session name is the pod's mutable identity (rename and Pi's session naming update
     // it). Keep the immutable project visible when it adds context, but never substitute it
     // for the name: that made renamed pods look as though the rename had not happened.
     const label = pod.project && pod.project !== pod.name ? `${pod.name} (${pod.project})` : pod.name;
-    // Where the pod lives: the provider for machine-backed pods, `on <host>` for co-located
-    // ones — so the real-provider member of a group is visible as the machine's owner.
-    const location = pod.location ?? pod.provider;
-    listOut(`  ${color.bold(pad(displayRef(pod.id, "pod"), 12))}  ${pad(indent + label, 34)}  ${pad(status + connection, 38)}  ${pad(location, 14)}  ${ago(when)}`);
+    const where = pod.hostPodId ? (pod.location ?? "") : "";
+    listOut(line(color.bold(pad(displayRef(pod.id, "pod"), 12)), fit(indent + label, 34), status + connection, where, ago(when)));
   }
 }
 
-/**
- * Storage-aware status vocabulary (cost-control plan §3.4). The logical state keeps its
- * hide semantics — `state=archived` stays hidden from active listings — while the label
- * names the physical truth the server reports in `sandboxState`:
- *
- * - `Stopped …`: active row, stopped sandbox. `attach` restarts it in seconds.
- * - `Archived — restores on next use`: provider-archived sandbox under an active row.
- *   Restore downloads and unpacks it (seconds-to-minutes depending on workspace size).
- * - `Archived — hidden …`: a logically archived row (`list --archived` shows it). The
- *   suffix names the sandbox layer when the server reports it.
- *
- * Single-provider build: the `sandbox` fleet holds a documented full local-disk
- * reservation per stopped workspace, so stopped rows always say "local disk retained".
- * A cold-storage claim needs sandbox-confirmed archive (`sandboxState=archived`);
- * a bare logically-hidden row claims nothing about storage.
- *
- * `sandboxState` is optional: older servers omit it and fall back to the logical state.
- */
-export type PodStorageKind =
-  | "running"
-  | "starting"
-  | "failed"
-  | "stopped-retained"
-  | "provider-archived"
-  | "archived-hidden"
-  | "archived-hidden-retained"
-  | "archived-hidden-cold";
-
-export function podStorageKind(pod: ApiPod): PodStorageKind {
-  if (pod.preparationPhase === "failed") return "failed";
-  if (pod.initializing) return "starting";
-  const sandbox = pod.sandboxState ?? null;
-  if (pod.state === "archived") {
-    if (sandbox === "stopped") return "archived-hidden-retained";
-    if (sandbox === "archived") return "archived-hidden-cold";
-    return "archived-hidden";
-  }
-  if (sandbox === "stopped") return "stopped-retained";
-  if (sandbox === "archived") return "provider-archived";
-  return "running";
-}
-
-export function podStatusLabel(pod: ApiPod): string {
-  if (pod.preparationPhase === "failed") return "failed";
-  if (pod.preparationPhase === "waiting-for-capacity") return "waiting for capacity";
-  if (pod.initializing) return pod.preparationPhase ?? "preparing";
-  switch (podStorageKind(pod)) {
-    case "stopped-retained":
-      return "Stopped — local disk retained";
-    case "provider-archived":
-      return "Archived — restores on next use";
-    case "archived-hidden-retained":
-      return "Archived — hidden · disk retained";
-    case "archived-hidden-cold":
-      return "Archived — hidden · cold storage";
-    case "archived-hidden":
-      return "archived";
-    case "failed":
-      return "failed";
-    case "starting":
-      return pod.preparationPhase ?? "preparing";
-    case "running":
-      return pod.state;
-  }
-}
 
 /** Wake/restore cost hint for the pod's current storage state, or null when generic. */
 export function podRestoreHint(pod: ApiPod): string | null {
@@ -324,18 +279,6 @@ export function podRestoreHint(pod: ApiPod): string | null {
     default:
       return null;
   }
-}
-
-/**
- * An empty listing names the scope that came up empty, so the next move is obvious. A named
- * template is that scope on its own — offering "--all for every project" there would promise
- * pods that widening cannot find, since nothing was narrowed by project to begin with.
- */
-function emptyListMessage(all: boolean, template: ApiTemplate | null): string {
-  if (template) return `no pods from template ${template.name}`;
-  return !all && currentProjectName() !== null
-    ? "no pods for this project (use --all for every project)"
-    : "no pods";
 }
 
 /** Full id, short ref, legacy prefix, or name — or this scope's only pod when omitted. */
@@ -360,14 +303,18 @@ export async function selectAccountPod(
     if (matches.length > 1) throw ambiguousPodRef(podRef, matches);
     throw new PiPodError(`no pod matches "${podRef}"`, { hint: "see `pipod list --all`" });
   }
-  const pods = (await podsInScope(client, { all: false }, cwd)).pods;
+  const scoped = await podsInScope(client, { all: false, widen: true }, cwd);
+  const project = scoped.project;
+  // The pod meant is a live one — an archived one only for `restore`, or when there is no other.
+  const wanted = scoped.pods.filter((pod) => (pod.state === "archived") === (action === "restore"));
+  const pods = wanted.length > 0 ? wanted : scoped.pods;
   if (pods.length === 0) {
-    throw new PiPodError(`no pod ${currentProjectName(cwd) ? "for this project " : ""}to ${action}`, {
-      hint: "launch one with `pipod`, or name a pod ref from `pipod list --all`",
+    throw new PiPodError(`no pod to ${action}`, {
+      hint: "launch one with `pipod`",
     });
   }
   if (pods.length > 1) {
-    throw new PiPodError(`${currentProjectName(cwd) ? "this project" : "this account"} has ${pods.length} pods; name the one to ${action}`, {
+    throw new PiPodError(`${project ?? "this account"} has ${pods.length} pods; name the one to ${action}`, {
       hint: `choose a ref from:\n${podChoiceLines(pods)}`,
     });
   }
@@ -459,18 +406,11 @@ export async function runAccountPodAction(
       cascaded && cascaded.length > 0
         ? ` (and ${cascaded.length} co-located pod${cascaded.length === 1 ? "" : "s"})`
         : "";
+    const ref = displayRef(pod.id, "pod");
     if (action === "archive") {
-      info(
-        `pod ${displayRef(pod.id, "pod")}: logically archived${group} — hidden from active lists ` +
-          "(`pipod list --archived` shows it); files are retained and cold archive follows after " +
-          "60 stopped minutes; `pipod restore` returns it (stopped restarts in seconds on a running workstation; archived restores in seconds-to-minutes depending on size)",
-      );
+      info(`archived ${ref}${group}: hidden from \`pipod list\`, files kept; \`pipod restore ${ref}\` brings it back`);
     } else {
-      const restoreHint =
-        pod.sandboxState === "archived"
-          ? " — attach starts its sandbox when needed (archived restores in seconds-to-minutes depending on size)"
-          : " — attach starts its sandbox when needed (stopped restarts in seconds on a running workstation; a sleeping workstation takes several minutes to start)";
-      info(`pod ${displayRef(pod.id, "pod")}: ${state}${group}${restoreHint}`);
+      info(`restored ${ref}${group} (${state}); \`pipod attach ${ref}\` starts it`);
     }
   }
   return 0;
@@ -490,18 +430,19 @@ async function archiveSweep(
 ): Promise<{ pods: ApiPod[]; empty: () => void }> {
   const templateRef = flags.template ?? (flags.all ? null : currentProjectTemplateRef());
   const template = templateRef ? await resolveTemplate(client, templateRef) : null;
-  let pods = (await podsInScope(client, {
+  const { pods: scopedPods, project } = await podsInScope(client, {
     all: flags.all || template !== null,
     ...(template ? { templateId: template.id } : {}),
-  })).pods;
+  });
+  let pods = scopedPods;
   if (template) pods = pods.filter((pod) => pod.templateId === template.id);
   pods = pods.filter((pod) => pod.state !== "archived");
   const now = Date.now();
   if (idleMs !== null) pods = pods.filter((pod) => idleLongerThan(pod, idleMs, now));
   const scope = template
     ? ` from template ${template.name}`
-    : !flags.all && currentProjectName() !== null
-      ? " for this project"
+    : project
+      ? ` for ${project}`
       : "";
   const empty = (): void => {
     if (idleMs !== null) listOut(`no pods${scope} idle longer than ${flags.idle}`);
@@ -548,7 +489,8 @@ export async function runAccountStop(
     } catch (error) {
       throw withCapacityHint(error);
     }
-    info(`pod ${displayRef(pod.id, "pod")}: ${state} — Stopped, local disk retained; \`pipod attach ${displayRef(pod.id, "pod")}\` restarts it in seconds; cold archive follows after 60 stopped minutes`);
+    const ref = displayRef(pod.id, "pod");
+    info(`${state} ${ref}: files kept; \`pipod attach ${ref}\` restarts it`);
   }
   return 0;
 }
@@ -599,7 +541,6 @@ export async function runAccountGc(
   const unavailable = pods.filter(
     (p) => p.state === "active" && !p.ready && !p.initializing && p.stateReason !== null,
   );
-  info("the server applies automatic inactivity (15 min idle stop) and storage policy (60 min archive) on its own schedule");
   if (archived.length === 0 && unavailable.length === 0) {
     info("nothing archived or unavailable to clean up");
     return 0;
@@ -608,7 +549,7 @@ export async function runAccountGc(
     for (const pod of [...archived, ...unavailable]) {
       info(`  ${displayRef(pod.id, "pod")}  ${pad(pod.project ?? pod.name, 30)}  ${pod.state}`);
     }
-    info("pass --delete to remove them");
+    info("`pipod gc --delete` deletes them for good");
     return 0;
   }
   const targets = [...archived, ...unavailable];
@@ -733,6 +674,11 @@ export async function runAccountSend(
   }
   info("sent");
   return 0;
+}
+
+/** `s` cut to `width` characters, an ellipsis marking the cut, so columns stay aligned. */
+function fit(s: string, width: number): string {
+  return s.length > width ? `${s.slice(0, width - 1)}…` : s;
 }
 
 function pad(s: string, width: number): string {

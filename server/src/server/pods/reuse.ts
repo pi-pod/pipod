@@ -18,7 +18,7 @@ import { badRequest, conflict } from "../httperrors.js";
 import { assertLaunchAllowed, assertLaunchGateOpen } from "./launch-control.js";
 import { truncate } from "../push/copy.js";
 import { sanitizeFailureMessage } from "../safe-errors.js";
-import type { LocalPiSettingsLayers, PlannedPiSettings } from "../settings/pi-settings.js";
+import { piSettingsDigest, type LocalPiSettingsLayers, type PlannedPiSettings } from "../settings/pi-settings.js";
 import { runPodInitSteps } from "./initialization.js";
 import { resolvePodEnv, savePodLaunchEnv } from "./launchenv.js";
 import { START_TIMEOUT_MS, STOP_TIMEOUT_MS } from "./lifecycle.js";
@@ -37,14 +37,15 @@ import { assertLaunchContextSupported, type LaunchContext } from "./launch-conte
 
 /** A warm disk is reusable only when every setting that cannot be reconciled is unchanged. */
 export function assertReusableLaunchSettings(
-  frozen: Pick<ResolvedConfigReport, "config">,
+  frozen: Pick<ResolvedConfigReport, "config" | "piSettings">,
   planned: Pick<PodLaunchPlan, "config" | "piSettings">,
 ): void {
   if (!isDeepStrictEqual(planned.config.egress, frozen.config?.egress)) {
     throw conflict("this launch resolves to a different egress policy");
   }
-  if (planned.piSettings !== null) {
-    throw conflict("Pi settings cannot be reconciled with a warm pod");
+  // The pod wrote its Pi files when it launched and its disk kept them: only the same ones fit.
+  if (planned.piSettings !== null && frozen.piSettings?.digest !== piSettingsDigest(planned.piSettings)) {
+    throw conflict("your Pi settings changed since this pod was created");
   }
 }
 

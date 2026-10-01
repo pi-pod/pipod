@@ -27,6 +27,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/image ./image
 COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/package.json ./
+# Zitadel setup scripts, which selfhost/upgrade and selfhost/add-user run in this image.
+COPY zitadel ./zitadel
 USER 10001:10001
 EXPOSE 8080
 CMD ["node", "dist/main.js"]

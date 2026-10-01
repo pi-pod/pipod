@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ResourceSpec } from "../wire.js";
 import { isMounted } from "./overlay.js";
-import { runOk } from "./exec.js";
+import { run, runOk } from "./exec.js";
 
 const GB = 1024 ** 3;
 
@@ -107,9 +107,7 @@ export class SandboxDisks {
     const layout = this.layout(id);
     fs.mkdirSync(layout.mountpoint, { recursive: true });
     if (!fs.existsSync(layout.image)) await this.createImage(layout.image, diskGB);
-    if (!this.mounted(id)) {
-      await runOk("mount", ["-t", "ext4", "-o", "loop,nosuid,nodev", layout.image, layout.mountpoint]);
-    }
+    if (!this.mounted(id)) await mountLoop(layout.image, layout.mountpoint);
     fs.mkdirSync(layout.upper, { recursive: true });
     fs.mkdirSync(layout.work, { recursive: true });
     await this.migrateLegacyLayout(id, layout);
@@ -257,5 +255,34 @@ export class SandboxDisks {
       committedBytes,
       capacityBytes: stat.bavail * stat.bsize + allocated - this.reserveBytes,
     };
+  }
+}
+
+/**
+ * `mount -o loop`, on any host. A container's /dev is a copy of the host's taken when the
+ * container started, while the kernel creates loop devices on demand: mount can pick a free
+ * device that has no node here and fail with "failed to setup loop device". Create the node
+ * first. Another mount can claim that device in between, so a failure is retried a few times.
+ */
+async function mountLoop(image: string, mountpoint: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    await ensureFreeLoopNode();
+    const mounted = await run("mount", ["-t", "ext4", "-o", "loop,nosuid,nodev", image, mountpoint]);
+    if (mounted.code === 0) return;
+    if (attempt >= 3 || !mounted.stderr.includes("loop device")) {
+      throw new Error(`mount ${image} failed (${mounted.code}): ${mounted.stderr.trim()}`);
+    }
+  }
+}
+
+async function ensureFreeLoopNode(): Promise<void> {
+  const device = (await runOk("losetup", ["--find"])).trim();
+  const name = path.basename(device);
+  if (!/^loop\d+$/.test(name) || fs.existsSync(device)) return;
+  // The kernel registered the device when losetup asked for a free one; use its numbers.
+  const [major, minor] = fs.readFileSync(`/sys/block/${name}/dev`, "utf8").trim().split(":");
+  const made = await run("mknod", ["-m", "0660", device, "b", major!, minor!]);
+  if (made.code !== 0 && !fs.existsSync(device)) {
+    throw new Error(`could not create ${device}: ${made.stderr.trim()}`);
   }
 }

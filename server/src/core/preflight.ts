@@ -871,7 +871,8 @@ function checkEnvFileNames(opts: {
 /** §3.2 — every capability gap is stated, never silently absorbed. */
 export function capabilityFindings(
   provider: SandboxProvider,
-  configured: Pick<PiPodConfig, "archiveAfterMinutes" | "idleTimeoutMinutes" | "resources"> = {
+  configured: Pick<PiPodConfig, "archiveAfterMinutes" | "idleTimeoutMinutes" | "resources"> &
+    Partial<Pick<PiPodConfig, "egress">> = {
     archiveAfterMinutes: 0,
     idleTimeoutMinutes: 0,
     resources: { cpu: 0, memoryGB: 0, diskGB: 0 },
@@ -953,7 +954,8 @@ export function capabilityFindings(
       hint: "they are omitted from image tags and builds rather than being reported as applied",
     });
   }
-  if (c.egressEnforcement === "cidr") {
+  // Only an allowlist naming hosts has anything to resolve; open egress filters nothing.
+  if (c.egressEnforcement === "cidr" && configured.egress?.mode === "allowlist" && configured.egress.allow.length > 0) {
     findings.push({
       level: "warn",
       message: `${provider.name} enforces egress by CIDR — hostnames are resolved at creation time and enforcement is coarser than the hostname list implies`,

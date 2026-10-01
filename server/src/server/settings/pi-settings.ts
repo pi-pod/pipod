@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   POD_PI_AGENT_DIR,
@@ -112,6 +113,13 @@ export interface PlannedPiSettings {
   projectUploads: HostConfigPlan["uploads"];
   files: PiSettingsFiles;
   meta: PiSettingsMeta;
+}
+
+/** Identity of the Pi files and packages a launch writes into its pod — what a warm disk keeps. */
+export function piSettingsDigest(settings: PlannedPiSettings): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ files: settings.files, packages: settings.plan.packages }))
+    .digest("hex");
 }
 
 function canonical(value: Record<string, unknown>): Uint8Array {

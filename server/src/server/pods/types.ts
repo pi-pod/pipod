@@ -84,6 +84,8 @@ export interface ResolvedConfigReport {
   /** Non-secret progress for the selected Pi settings bundle materialized at launch. */
   piSettings?: {
     files: string[];
+    /** piSettingsDigest of what was written; absent on pods from before it was recorded. */
+    digest?: string;
     bytes: number;
     packageCount: number;
     droppedKeys: string[];
