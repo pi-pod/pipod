@@ -57,6 +57,10 @@ BEGIN
 END
 $f$;
 
+-- Bounded: never queue production writers for long behind a lock, and never run unbounded.
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '120s';
+
 DO $rename$
 DECLARE
   old_word constant text := '(?<![A-Za-z])(box|boxes|BOX|BOXES)(?![a-z])|(?<![A-Z])(Box|Boxes)(?![a-z])';
@@ -65,18 +69,29 @@ DECLARE
   cond text;
   def text;
   acl record;
+  found boolean;
 BEGIN
   -- 1. Recorded migration filenames (the files themselves were renamed in source).
   UPDATE schema_migrations SET name = pg_temp.boat_name(name) WHERE name ~ old_word;
 
   CREATE TEMP TABLE boat_restore (ord int, stmt text) ON COMMIT DROP;
 
-  -- 2. Foreign keys are dropped while referenced ids change, then re-added (validated).
+  -- 2. A foreign key is set aside only while the values it compares change: it references a
+  --    text column holding an old-name value (in practice pods.sandbox_host_id -> host ids).
+  --    Every other key keeps its validation, so large tables are never rescanned.
   FOR r IN
-    SELECT c.conrelid::regclass::text AS tbl, c.conname, pg_get_constraintdef(c.oid) AS def
+    SELECT c.conrelid::regclass::text AS tbl, c.confrelid::regclass::text AS ref, c.conname,
+           pg_get_constraintdef(c.oid) AS def,
+           (SELECT string_agg(format('%I::text ~ %L', a.attname, old_word), ' OR ')
+              FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
+             WHERE a.attrelid = c.confrelid AND a.attnum = ANY (c.confkey)
+               AND t.typname IN ('text', 'varchar', 'bpchar')) AS changes
     FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
     WHERE n.nspname = 'public' AND c.contype = 'f'
   LOOP
+    CONTINUE WHEN r.changes IS NULL;
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %s WHERE %s)', r.ref, r.changes) INTO found;
+    CONTINUE WHEN NOT found;
     EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.tbl, r.conname);
     INSERT INTO boat_restore VALUES (3, format('ALTER TABLE %I ADD CONSTRAINT %I %s',
       pg_temp.boat_name(r.tbl), pg_temp.boat_name(r.conname), pg_temp.boat_name(r.def)));
@@ -136,7 +151,9 @@ BEGIN
   END LOOP;
   FOR r IN
     SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname <> 'schema_migrations'
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+      -- Conversation transcripts are users' prose and by far the largest table: left as written.
+      AND c.relname NOT IN ('schema_migrations', 'session_events')
   LOOP
     SELECT string_agg(format('%1$I = %2$s', a.attname, CASE
              WHEN t.typname = 'jsonb' THEN format('pg_temp.boat_json(%I)', a.attname)
