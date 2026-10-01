@@ -5,6 +5,7 @@ import type { GatewayService } from "./gateway/service.js";
 import type { HostIdentity, PodHostIdentity } from "./pods/hostidentity.js";
 import type { SandboxHostBackend } from "./pods/hostbackend/index.js";
 import type { WorkerDeps } from "./workers/index.js";
+import { defaultMigrationsDir, type MigrationSet } from "./db/migrate.js";
 import { conflict, forbidden } from "./httperrors.js";
 import { hostForPod, requireHostAwake } from "./pods/hostidentity.js";
 
@@ -57,6 +58,8 @@ export interface Edition {
   accountSummary(env: ServerEnv, userId: string): Promise<Record<string, unknown>>;
 
   // --- Server. ------------------------------------------------------------------------
+  /** The migrations this deployment's database runs. */
+  migrations(): MigrationSet;
   /** Routes outside `/v1`, registered on the API role before the product routes. */
   registerRoutes(app: FastifyInstance, deps: { env: ServerEnv; kek: KekProvider; gateway: GatewayService | null }): Promise<void>;
   /** An HTTP response for an error type only this edition throws, or null. */
@@ -103,6 +106,7 @@ export const selfHosted: Edition = {
   admitPodWork: async () => {},
   perUserPodCap: async (env) => env.POD_MAX_CONCURRENT_PER_USER,
   accountSummary: async () => ({}),
+  migrations: () => ({ dirs: [defaultMigrationsDir()] }),
   registerRoutes: async () => {},
   renderError: () => null,
   startWorkers: () => [],

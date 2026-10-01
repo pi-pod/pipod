@@ -58,6 +58,19 @@ export async function migrate(
   return applied;
 }
 
+/** The migration names `set` ships, in the order they apply. */
+export function shippedMigrations(set: MigrationSet): string[] {
+  return [...migrationPaths(set.dirs, new Set(set.omit ?? [])).keys()].sort();
+}
+
+/**
+ * Whether a migration recorded in `schema_migrations` belongs to a release that ships
+ * `shipped`: it ships the file, or ships the baseline that folded the pre-split chain in.
+ */
+export function knownMigration(name: string, shipped: ReadonlySet<string>): boolean {
+  return shipped.has(name) || (shipped.has(BASELINE) && name <= LEGACY_LAST);
+}
+
 function migrationPaths(dirs: readonly string[], omit: ReadonlySet<string>): Map<string, string> {
   const paths = new Map<string, string>();
   for (const dir of dirs) {
