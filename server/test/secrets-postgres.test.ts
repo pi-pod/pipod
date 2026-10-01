@@ -180,7 +180,7 @@ describe("secure secrets phase 1 (postgres)", { skip: databaseUrl ? false : "set
     assert.equal(templateScoped.statusCode, 400, templateScoped.body);
 
     // Every retired adapter name stays reserved and org-scoped too, forever.
-    for (const name of ["E2B_API_KEY", "DAYTONA_API_KEY", "BOX_API_KEY"]) {
+    for (const name of ["E2B_API_KEY", "DAYTONA_API_KEY", "BOAT_API_KEY"]) {
       const retiredUser = await app.inject({
         method: "PUT",
         url: `/secrets/user/${userId}/${name}`,

@@ -53,7 +53,7 @@ import { staticHostForUrl, hostById, currentHostUrl, requireHostAwake, openHostA
 import { getSandboxHostBackend } from "./hostbackend/index.js";
 import { buildCreateOwner } from "./owner-identity.js";
 import { platformToken } from "./operations.js";
-import { assertSandboxShapeGate, isAdmissionDetailLike, OWNED_BOX_DISK_CEILING_GB, platformDiskDefault, resolveShape } from "./capacity.js";
+import { assertSandboxShapeGate, isAdmissionDetailLike, OWNED_BOAT_DISK_CEILING_GB, platformDiskDefault, resolveShape } from "./capacity.js";
 import { edition, ownedHosts } from "../edition.js";
 import { platformArchiveMaxMinutes, resolveEffectiveRetention } from "./retention-policy.js";
 import type { InitScope, PodServiceDeps, ResolvedConfigReport } from "./types.js";
@@ -525,19 +525,19 @@ export async function planPodLaunch(
   // provisional legacy choice stands in for preflight only; provisioning (which holds the
   // quota slot and the wait queue) re-places authoritatively. An unsupported shape fails
   // fast here: it is never queued and never retried.
-  // A dedicated Box is created only after the pod row exists. Planning must
+  // A dedicated Boat is created only after the pod row exists. Planning must
   // not wake or create the owner's shared workstation for a new pod.
-  const dedicatedBox = providerName === SANDBOX_PROVIDER_NAME
+  const dedicatedBoat = providerName === SANDBOX_PROVIDER_NAME
     && ownedHosts(deps.env)
     && !Object.hasOwn(configuredProvider, "url");
   let placedHost =
-    providerName === SANDBOX_PROVIDER_NAME && !Object.hasOwn(configuredProvider, "url") && !dedicatedBox
+    providerName === SANDBOX_PROVIDER_NAME && !Object.hasOwn(configuredProvider, "url") && !dedicatedBoat
       ? await hostBackend!.placeHost(undefined, { kek: deps.kek, platformToken: platformToken(deps.env) })
       : null;
   if (
     providerName === SANDBOX_PROVIDER_NAME &&
     !Object.hasOwn(configuredProvider, "url") &&
-    !dedicatedBox &&
+    !dedicatedBoat &&
     placedHost !== null
   ) {
     try {
@@ -581,15 +581,15 @@ export async function planPodLaunch(
       ? { ...configuredProvider, url: placedHost?.url ?? hostBackend!.fallbackUrl() }
       : configuredProvider;
   config.providers[providerName] = providerConfig;
-  // Whole-host disk retention replaces normal timed per-pod archival on Box.
-  if (identityHost?.owner_user_id != null || dedicatedBox) config.archiveAfterMinutes = 0;
+  // Whole-host disk retention replaces normal timed per-pod archival on Boat.
+  if (identityHost?.owner_user_id != null || dedicatedBoat) config.archiveAfterMinutes = 0;
   const imageProvider = identityHost && hostAuth
     ? providerForHost(identityHost,deps.kek,providerConfig,null).provider
     : await loadProvider(providerName, providerConfig);
 
   // Preflight credential custody before consulting dynamic provider limits. Providers may
   // publish those limits without auth, but a missing key still means no launch can use them.
-  const credential = hostAuth || dedicatedBox
+  const credential = hostAuth || dedicatedBoat
     ? { envVar:"PI_POD_SANDBOX_TOKEN",source:"platform" as const }
     : await checkProviderCredential({
     kek: deps.kek,
@@ -603,7 +603,7 @@ export async function planPodLaunch(
   // The deployment ceiling applies first so its warning names the real limit; the provider's
   // own (possibly lower) maximums then apply to what is left.
   const deploymentMaximums = deploymentResourceMaximums(deps.env);
-  if (ownedHosts(deps.env)) deploymentMaximums.diskGB = OWNED_BOX_DISK_CEILING_GB;
+  if (ownedHosts(deps.env)) deploymentMaximums.diskGB = OWNED_BOAT_DISK_CEILING_GB;
   const deploymentResolution = effectiveProviderResources(
     "this deployment",
     config.resources,
@@ -710,7 +710,7 @@ export async function planPodLaunch(
   // BYOK and non-sandbox providers keep their documented behavior. The clamp is bounded
   // and reported — a requested zero/unlimited never bypasses the finite SaaS maximum.
   const retentionResolution = resolveEffectiveRetention({
-    ownedBoxHost: identityHost?.owner_user_id != null,
+    ownedBoatHost: identityHost?.owner_user_id != null,
     requestedMinutes: config.archiveAfterMinutes,
     orgMaxMinutes: policy.maxArchiveAfterMinutes,
     deploymentMaxMinutes: platformArchiveMaxMinutes(deps.env),

@@ -295,7 +295,7 @@ export class SandboxServiceProvider implements SandboxProvider {
       env?.POD_ALLOW_8GIB_MEMORY === "true" ||
       (env === undefined && process.env["POD_ALLOW_8GIB_MEMORY"] === "true");
     // Disk has no provider-wide maximum: the deployment ceiling (POD_MAX_DISK_GB, or the
-    // owned-box ceiling) bounds the request, and each host refuses a disk above its own
+    // owned-boat ceiling) bounds the request, and each host refuses a disk above its own
     // PI_POD_SANDBOX_MAX_DISK_GB as unsupported_shape. A fixed 20 here silently undid an
     // operator's raised ceiling.
     if (allow8GiB) {

@@ -23,7 +23,7 @@
  *
  * Phase 3 operator CLI (src/secrets-maintenance.ts) is exercised in section 8 via
  * child processes pointed at the disposable DB with fixture keys. Section 11 performs
- * read-only `ssh pipod` verifies (WG, fleet, on-box health); it never mutates prod.
+ * read-only `ssh pipod` verifies (WG, fleet, on-boat health); it never mutates prod.
  *
  * Conventions follow scripts/host-pods-manual.ts: PASS/FAIL/BLOCKED per check,
  * `step()` dividers, non-zero exit on FAIL only (BLOCKED is reported, not hidden).
@@ -986,13 +986,13 @@ async function main(): Promise<void> {
       check("11c. fleet shows the local host (read-only ssh)",
         hasLocal ? "PASS" : "FAIL", counts.slice(0, 160));
     }
-    const box = await ssh("sudo docker exec pi-pod-server wget -qO- http://127.0.0.1:8080/healthz; echo; sudo docker logs pi-pod-server --since 60m 2>&1 | grep -c 'unable to authenticate' || true");
-    if (box.code !== 0) {
-      check("11d. on-box healthz + zero decrypt-failure logs (read-only ssh)", "BLOCKED",
-        `ssh unavailable: ${box.output.slice(0, 100)}`);
+    const boat = await ssh("sudo docker exec pi-pod-server wget -qO- http://127.0.0.1:8080/healthz; echo; sudo docker logs pi-pod-server --since 60m 2>&1 | grep -c 'unable to authenticate' || true");
+    if (boat.code !== 0) {
+      check("11d. on-boat healthz + zero decrypt-failure logs (read-only ssh)", "BLOCKED",
+        `ssh unavailable: ${boat.output.slice(0, 100)}`);
     } else {
-      check("11d. on-box healthz + zero decrypt-failure logs (read-only ssh)",
-        box.output.includes('"ok":true') && /\n0\s*$/.test(box.output) ? "PASS" : "FAIL");
+      check("11d. on-boat healthz + zero decrypt-failure logs (read-only ssh)",
+        boat.output.includes('"ok":true') && /\n0\s*$/.test(boat.output) ? "PASS" : "FAIL");
     }
   }
 

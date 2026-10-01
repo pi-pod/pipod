@@ -51,14 +51,14 @@ describe("reaper archive decisions", () => {
     assert.equal(store.get("sb-old")!.revision, before.revision + 1);
   });
 
-  it("Box wall-clock jumps grant full grace instead of merely skipping one overdue tick", async () => {
+  it("Boat wall-clock jumps grant full grace instead of merely skipping one overdue tick", async () => {
     const before = Date.now();
     insertStopped(store, "sb-resume", { stoppedAt: before - 2 * HOUR, archiveAfterMinutes: 60, netIndex: 1 });
     insertStopped(store, "sb-hot", { stoppedAt: before - 2 * HOUR, archiveAfterMinutes: 60, netIndex: 2 });
     store.setTier("sb-hot", "hot", { stoppedAt: null });
     const archived: string[] = [];
     const stopped: string[] = [];
-    const reaper = makeReaper(store, { archived, stopped, box: true });
+    const reaper = makeReaper(store, { archived, stopped, boat: true });
     const resumed = before + 24 * HOUR;
     await reaper.tick(resumed);
     await reaper.tick(resumed + 15_000);
@@ -161,7 +161,7 @@ function makeReaper(
     guards?: Array<{ id: string; expectedRevision?: number; expectedStoppedAt?: string }>;
     transitioning?: Set<string>;
     maxConcurrentArchives?: number;
-    box?: boolean;
+    boat?: boolean;
     block?: Promise<void>;
     stopped?: string[];
     pressure?: number;
@@ -201,7 +201,7 @@ function makeReaper(
   } as unknown as Manager;
 
   const cfg = {
-    hostBackend: opts.box ? "box" : "static",
+    hostBackend: opts.boat ? "boat" : "static",
     warmAfterMinutes: 10,
     cpuVetoMs: 200,
     pressureThreshold: 20,

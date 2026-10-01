@@ -9,7 +9,7 @@ import { AdmissionController } from "../src/core/admission.js";
 import { Reaper } from "../src/core/reaper.js";
 import type { Manager } from "../src/core/manager.js";
 import type { Config } from "../src/config.js";
-import { BOX_DEFAULT_TENANT_MEMORY_GB, loadConfig } from "../src/config.js";
+import { BOAT_DEFAULT_TENANT_MEMORY_GB, loadConfig } from "../src/config.js";
 import { Store, type SandboxRow } from "../src/db/index.js";
 import { createLogger } from "../src/log.js";
 import type { CgroupTree } from "../src/runtime/cgroup.js";
@@ -18,38 +18,38 @@ import type { ObjectStore } from "../src/archive/types.js";
 import type { SandboxInfoWire } from "../src/wire.js";
 
 const GB = 1024 ** 3;
-const TOKEN = "box-tenant-cap-test-token-long";
+const TOKEN = "boat-tenant-cap-test-token-long";
 const HOUR = 60 * 60 * 1000;
 
-function boxCfg(extra: Record<string, string> = {}): Config {
+function boatCfg(extra: Record<string, string> = {}): Config {
   return loadConfig({
     PI_POD_SANDBOX_TOKEN: TOKEN,
-    PI_POD_SANDBOX_HOST_BACKEND: "box",
-    PI_POD_SANDBOX_HOST_ID: "box-tenant1",
+    PI_POD_SANDBOX_HOST_BACKEND: "boat",
+    PI_POD_SANDBOX_HOST_ID: "boat-tenant1",
     ...extra,
   });
 }
 
-describe("box tenant aggregate config", () => {
-  it("box mode defaults to the conservative tenant memory cap and derived CPU", () => {
-    assert.equal(BOX_DEFAULT_TENANT_MEMORY_GB, 5.5);
-    const cfg = boxCfg();
+describe("boat tenant aggregate config", () => {
+  it("boat mode defaults to the conservative tenant memory cap and derived CPU", () => {
+    assert.equal(BOAT_DEFAULT_TENANT_MEMORY_GB, 5.5);
+    const cfg = boatCfg();
     assert.equal(cfg.tenancy.tenantMemoryMaxBytes, Math.round(5.5 * GB));
     assert.equal(cfg.tenancy.tenantCpuMaxCores, Math.max(0.5, os.cpus().length - 0.5));
   });
 
-  it("box mode honours an explicit larger tenant memory cap (measured large reserve)", () => {
-    const cfg = boxCfg({ PI_POD_SANDBOX_TENANT_MEMORY_GB: "12" });
+  it("boat mode honours an explicit larger tenant memory cap (measured large reserve)", () => {
+    const cfg = boatCfg({ PI_POD_SANDBOX_TENANT_MEMORY_GB: "12" });
     assert.equal(cfg.tenancy.tenantMemoryMaxBytes, 12 * GB);
   });
 
-  it("box mode fails closed on an explicit zero tenant memory cap (never silently unlimited)", () => {
-    assert.throws(() => boxCfg({ PI_POD_SANDBOX_TENANT_MEMORY_GB: "0" }), /TENANT_MEMORY_GB > 0/);
+  it("boat mode fails closed on an explicit zero tenant memory cap (never silently unlimited)", () => {
+    assert.throws(() => boatCfg({ PI_POD_SANDBOX_TENANT_MEMORY_GB: "0" }), /TENANT_MEMORY_GB > 0/);
   });
 
-  it("box mode honours explicit tenant CPU, with explicit 0 removing the cap loudly", () => {
-    assert.equal(boxCfg({ PI_POD_SANDBOX_TENANT_CPU: "6" }).tenancy.tenantCpuMaxCores, 6);
-    assert.equal(boxCfg({ PI_POD_SANDBOX_TENANT_CPU: "0" }).tenancy.tenantCpuMaxCores, null);
+  it("boat mode honours explicit tenant CPU, with explicit 0 removing the cap loudly", () => {
+    assert.equal(boatCfg({ PI_POD_SANDBOX_TENANT_CPU: "6" }).tenancy.tenantCpuMaxCores, 6);
+    assert.equal(boatCfg({ PI_POD_SANDBOX_TENANT_CPU: "0" }).tenancy.tenantCpuMaxCores, null);
   });
 
   it("static mode stays uncapped by default (contract unchanged) but allows opt-in", () => {
@@ -93,10 +93,10 @@ function ceilingRow(id: string): { id: string; resources: { cpu: number; memoryG
 }
 
 describe("admission folds the tenant cap into the host budget", () => {
-  it("box default budget is the tenant cap, not host-minus-reserve", () => {
+  it("boat default budget is the tenant cap, not host-minus-reserve", () => {
     const db = new Database(":memory:");
     try {
-      const ctrl = new AdmissionController(db, boxCfg(), fakeDisks(40 * GB), {
+      const ctrl = new AdmissionController(db, boatCfg(), fakeDisks(40 * GB), {
         bootId: "boot-1",
         host: fakeHost8GB(),
       });
@@ -127,7 +127,7 @@ describe("admission folds the tenant cap into the host budget", () => {
     try {
       const ctrl = new AdmissionController(
         db,
-        boxCfg({ PI_POD_SANDBOX_MEMORY_BUDGET_GB: "12" }),
+        boatCfg({ PI_POD_SANDBOX_MEMORY_BUDGET_GB: "12" }),
         fakeDisks(100 * GB),
         { bootId: "boot-1", host: fakeHost8GB() },
       );
@@ -137,10 +137,10 @@ describe("admission folds the tenant cap into the host budget", () => {
     }
   });
 
-  it("two individual 4 GiB ceiling reservations do not fit a 5.5 GiB box tenant (backpressure, not OOM)", () => {
+  it("two individual 4 GiB ceiling reservations do not fit a 5.5 GiB boat tenant (backpressure, not OOM)", () => {
     const db = new Database(":memory:");
     try {
-      const ctrl = new AdmissionController(db, boxCfg(), fakeDisks(40 * GB), {
+      const ctrl = new AdmissionController(db, boatCfg(), fakeDisks(40 * GB), {
         bootId: "boot-1",
         host: fakeHost8GB(),
       });
@@ -153,7 +153,7 @@ describe("admission folds the tenant cap into the host budget", () => {
           { operationId: "create:k2", sandboxId: "sb-second", kind: "create", desiredMemoryBytes: 4 * GB, desiredDiskBytes: 2 * GB, desiredCpuFloor: 0.25 },
           [{ ...ceilingRow("sb-first"), tier: "hot" } as never],
         );
-        assert.fail("second 4 GiB ceiling reservation should not fit a 5.5 GiB box tenant");
+        assert.fail("second 4 GiB ceiling reservation should not fit a 5.5 GiB boat tenant");
       } catch (err) {
         assert.ok(err instanceof Error);
         const details = (err as { details?: { reason?: string } }).details;
@@ -277,7 +277,7 @@ function makeTenantReaper(
     housekeeping: () => undefined,
   } as unknown as Manager;
   const cfg = {
-    hostBackend: "box",
+    hostBackend: "boat",
     warmAfterMinutes: 10,
     cpuVetoMs: 200,
     pressureThreshold: 20,
@@ -294,7 +294,7 @@ function makeTenantReaper(
   } as unknown as CgroupTree;
   const objects = { kind: "none" } as unknown as ObjectStore;
   const reaper = new Reaper(cfg, store, manager, cgroups, objects, createLogger("silent"));
-  // Tick with a fresh clock: the box resume guard rebases every timer when the tick wall
+  // Tick with a fresh clock: the boat resume guard rebases every timer when the tick wall
   // time jumps (or runs backward) past its threshold, which would flatten test fixtures.
   return { reaper, tickNow: () => Date.now() };
 }

@@ -1,9 +1,9 @@
 # Archive proxy origin pin (runtime GAP-1)
 
-Runtime-only egress fence: the box never sends the proxy bearer token to an
+Runtime-only egress fence: the boat never sends the proxy bearer token to an
 origin that is not durably pinned. This closes GAP-1 from
 `archive-factory-design-1235-rev2.md` §6 (per-request affinity refuses drifted
-PUTs/GETs but cannot stop the box first sending token bytes after env edit +
+PUTs/GETs but cannot stop the boat first sending token bytes after env edit +
 autostart). The pin is a ref-pin at the HTTP dispatch boundary: mismatch means
 no-send.
 
@@ -23,9 +23,9 @@ separately reviewed step that WRITES this file; this repo only READS it
   after updating, proxy activation throws `archive_proxy_origin_missing`
   until a binding is installed. Existing static+proxy operators MUST install a
   verified binding BEFORE updating (see "Operator install" below) — never
-  trust-on-first-use from the ambient, possibly drifted env. `box`+`local`
+  trust-on-first-use from the ambient, possibly drifted env. `boat`+`local`
   (the default) boots unchanged with no binding.
-- Old Box assets are never modified and archive enrollment is never enabled
+- Old Boat assets are never modified and archive enrollment is never enabled
   by this module.
 
 ## Binding
@@ -45,7 +45,7 @@ Schema (exact, versioned, no credentials, no table/manager):
 ```json
 {
   "version": 1,
-  "hostId": "box-abc123",
+  "hostId": "boat-abc123",
   "origin": "https://proxy.example.com"
 }
 ```
@@ -192,7 +192,7 @@ node scripts/write-proxy-origin-binding.mjs \
 
 The origin must be the verified proxy origin for that host (from reviewed
 deploy config — never copied from the possibly drifted ambient env on the
-box). The command prints only `{path,version,hostId,origin}` on success
+boat). The command prints only `{path,version,hostId,origin}` on success
 (exit 0); any failure exits nonzero with a safe message. It takes no
 credentials and logs none. The command is exercised by
 `test/archive-proxy-origin-pin-unit.test.ts` (success writes byte-exact
@@ -208,7 +208,7 @@ the binding matches host + configured origin.
   still needs the old service readable + a dual-service window.
 - No protection against malicious root — only accidental env drift +
   autostart. A compromised host writer can always change state.
-- No migration of old Box assets and no silent local→proxy switch.
+- No migration of old Boat assets and no silent local→proxy switch.
 
 ## Verification
 

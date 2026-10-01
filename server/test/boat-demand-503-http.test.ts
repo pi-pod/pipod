@@ -1,7 +1,7 @@
 /**
- * Typed 503 for Box host demand at the HTTP boundary.
+ * Typed 503 for Boat host demand at the HTTP boundary.
  *
- * Production 2026-09-09, `SANDBOX_HOST_BACKEND=box` with a personal host
+ * Production 2026-09-09, `SANDBOX_HOST_BACKEND=boat` with a personal host
  * asleep: `POST /v1/pods/:id/files` answered
  * `500 {"error":"internal server error","detail":null}` on every retry while
  * the log recorded the 503 behind it and the durable `resume` had already been
@@ -14,7 +14,7 @@
  * Everything unrecognized or malformed still fails closed to 500.
  *
  * Pure unit tests (no database): a bare Fastify instance with the real app
- * error boundary. `box-demand-503-postgres` drives the same boundary through
+ * error boundary. `boat-demand-503-postgres` drives the same boundary through
  * the real pod route against a sleeping host.
  */
 import assert from "node:assert/strict";
@@ -22,14 +22,14 @@ import { describe, it } from "node:test";
 import Fastify from "fastify";
 import { installErrorHandler } from "../src/server/app.js";
 import { HttpError, badRequest, serviceUnavailable } from "../src/server/httperrors.js";
-import { requireHostAwake, type BoxState } from "../src/server/pods/hostidentity.js";
+import { requireHostAwake, type BoatState } from "../src/server/pods/hostidentity.js";
 import { CAPACITY_WAIT_EXPIRED_CODE } from "../src/server/pods/provision-failure.js";
 import { fleetUnavailableError } from "../src/server/pods/sandboxfleet.js";
 import {
-  BOX_HOST_DEMAND_MESSAGE,
+  BOAT_HOST_DEMAND_MESSAGE,
   FLEET_UNAVAILABLE_MESSAGE,
-  boxHostDemandDetail,
-  renderBoxHostDemand,
+  boatHostDemandDetail,
+  renderBoatHostDemand,
 } from "../src/server/safe-errors.js";
 
 async function boundaryApp(throwable: unknown) {
@@ -52,10 +52,10 @@ async function answer(throwable: unknown) {
   }
 }
 
-const HOST_ID = "box-6f1d0a1e-4d6b-4a0e-9a9a-0f1c2d3e4f50";
+const HOST_ID = "boat-6f1d0a1e-4d6b-4a0e-9a9a-0f1c2d3e4f50";
 const OPERATION_ID = "0f8f9a10-1b2c-4d3e-8f90-a1b2c3d4e5f6";
 
-/** The `ensureOwnedHostReady` throw, field for field (box/demand.ts). */
+/** The `ensureOwnedHostReady` throw, field for field (boat/demand.ts). */
 function hostStartingThrow(overrides: Record<string, unknown> = {}) {
   return serviceUnavailable("Your workstation is starting. This may take several minutes", {
     kind: "admission", reason: "host_starting", resource: "transitions", unit: "count", retryable: true,
@@ -68,15 +68,15 @@ function hostStartingThrow(overrides: Record<string, unknown> = {}) {
   });
 }
 
-/** The `BoxControlError` conversion in the same function, field for field. */
-function boxControlThrow(code: string) {
+/** The `BoatControlError` conversion in the same function, field for field. */
+function boatControlThrow(code: string) {
   return serviceUnavailable("your workstation cannot start yet", {
     kind: "admission", reason: code, retryable: code !== "host_retired",
     resource: "transitions", unit: "count",
   });
 }
 
-describe("Box host-demand HTTP boundary", () => {
+describe("Boat host-demand HTTP boundary", () => {
   it("answers the sleeping-host demand throw as 503 with the documented detail", async () => {
     const { statusCode, body } = await answer(hostStartingThrow());
     assert.equal(statusCode, 503, JSON.stringify(body));
@@ -112,19 +112,19 @@ describe("Box host-demand HTTP boundary", () => {
       starting: { reason: "host_starting", retryable: true, error: "Your workstation is starting. This may take several minutes" },
       stopping: { reason: "host_starting", retryable: true, error: "Your workstation is starting. This may take several minutes" },
     };
-    for (const [boxState, want] of Object.entries(expected)) {
+    for (const [boatState, want] of Object.entries(expected)) {
       // The real hostidentity throw, not a copy of its shape.
       const thrown = (() => {
         try {
-          requireHostAwake({ box_state: boxState as BoxState });
+          requireHostAwake({ boat_state: boatState as BoatState });
           return null;
         } catch (error) {
           return error;
         }
       })();
-      assert.ok(thrown instanceof HttpError, boxState);
+      assert.ok(thrown instanceof HttpError, boatState);
       const { statusCode, body } = await answer(thrown);
-      assert.equal(statusCode, 503, `${boxState}: ${JSON.stringify(body)}`);
+      assert.equal(statusCode, 503, `${boatState}: ${JSON.stringify(body)}`);
       assert.equal(body.error, want.error);
       assert.deepEqual(body.detail, {
         kind: "admission",
@@ -136,14 +136,14 @@ describe("Box host-demand HTTP boundary", () => {
     }
   });
 
-  it("answers the allowlisted BoxControlError codes and keeps the rest generic", async () => {
+  it("answers the allowlisted BoatControlError codes and keeps the rest generic", async () => {
     const allowed: Record<string, boolean> = {
       host_retired: false,
       host_requires_reconciliation: true,
-      box_starts_disabled: true,
+      boat_starts_disabled: true,
     };
     for (const [code, retryable] of Object.entries(allowed)) {
-      const { statusCode, body } = await answer(boxControlThrow(code));
+      const { statusCode, body } = await answer(boatControlThrow(code));
       assert.equal(statusCode, 503, `${code}: ${JSON.stringify(body)}`);
       assert.deepEqual(body.detail, {
         kind: "admission", reason: code, resource: "transitions", unit: "count", retryable,
@@ -151,8 +151,8 @@ describe("Box host-demand HTTP boundary", () => {
       assert.notEqual(body.error, "internal server error");
     }
     // Control-plane faults: their codes name internal state, so they stay 500.
-    for (const code of ["invalid_box_pins", "user_missing", "host_org_mismatch", "host_auth_missing"]) {
-      const { statusCode, body } = await answer(boxControlThrow(code));
+    for (const code of ["invalid_boat_pins", "user_missing", "host_org_mismatch", "host_auth_missing"]) {
+      const { statusCode, body } = await answer(boatControlThrow(code));
       assert.equal(statusCode, 500, `${code}: ${JSON.stringify(body)}`);
       assert.deepEqual(body, { error: "internal server error", detail: null });
     }
@@ -161,12 +161,12 @@ describe("Box host-demand HTTP boundary", () => {
   it("returns only allowlisted fields and never the thrown object", async () => {
     const thrown = hostStartingThrow({
       // A forged/foreign field on the detail, and a hostile nested one.
-      hostUrl: "https://box-secret.internal/?token=shhh",
+      hostUrl: "https://boat-secret.internal/?token=shhh",
       operation: {
         id: OPERATION_ID, kind: "resume", state: "pending", phase: "requested",
         deadlineAt: new Date("2026-09-09T17:20:00.000Z"), retryAt: null, errorCode: null,
         phase_data: { runtimeSha256: "a".repeat(64), orgId: "team_secret" },
-        vendorRequestId: "vendor-123", leaseOwner: "box-worker-1",
+        vendorRequestId: "vendor-123", leaseOwner: "boat-worker-1",
       },
     });
     const { statusCode, body } = await answer(thrown);
@@ -179,12 +179,12 @@ describe("Box host-demand HTTP boundary", () => {
       "deadlineAt", "errorCode", "id", "kind", "phase", "retryAt", "state",
     ]);
     const serialized = JSON.stringify(body);
-    for (const secret of ["shhh", "team_secret", "vendor-123", "box-worker-1", "phase_data"]) {
+    for (const secret of ["shhh", "team_secret", "vendor-123", "boat-worker-1", "phase_data"]) {
       assert.equal(serialized.includes(secret), false, secret);
     }
     // The recognizer builds a new object; the thrown detail is never returned.
     const detailOf = (error: unknown) => (error as { detail?: unknown }).detail;
-    assert.notEqual(boxHostDemandDetail(thrown), detailOf(thrown));
+    assert.notEqual(boatHostDemandDetail(thrown), detailOf(thrown));
   });
 
   it("fails closed to 500 for forged or malformed host-demand shapes", async () => {
@@ -195,8 +195,8 @@ describe("Box host-demand HTTP boundary", () => {
       "foreign resource": { resource: "memory" },
       "foreign unit": { unit: "bytes" },
       "stringly retryable": { retryable: "true" },
-      "host id off the route rule": { hostId: "box-../../etc/passwd", statusHref: "/v1/workstations/box-..%2F..%2Fetc%2Fpasswd" },
-      "host id without the box- prefix": { hostId: "host-1", statusHref: "/v1/workstations/host-1" },
+      "host id off the route rule": { hostId: "boat-../../etc/passwd", statusHref: "/v1/workstations/boat-..%2F..%2Fetc%2Fpasswd" },
+      "host id without the boat- prefix": { hostId: "host-1", statusHref: "/v1/workstations/host-1" },
       "href the host id does not generate": { statusHref: "https://evil.invalid/v1/workstations/x" },
       "href without a host id": { hostId: undefined, statusHref: `/v1/workstations/${HOST_ID}` },
       "unknown host state": { state: "melting" },
@@ -208,8 +208,8 @@ describe("Box host-demand HTTP boundary", () => {
       "operation id that is not a uuid": { operation: { id: "../../etc", kind: "resume", state: "pending", phase: "requested", deadlineAt: new Date(), retryAt: null, errorCode: null } },
       "operation kind off the column": { operation: { id: OPERATION_ID, kind: "exfiltrate", state: "pending", phase: "requested", deadlineAt: new Date(), retryAt: null, errorCode: null } },
       "operation state off the column": { operation: { id: OPERATION_ID, kind: "resume", state: "melting", phase: "requested", deadlineAt: new Date(), retryAt: null, errorCode: null } },
-      "operation phase carrying prose": { operation: { id: OPERATION_ID, kind: "resume", state: "pending", phase: "failed: token sk-live-1234 rejected by https://box.invalid", deadlineAt: new Date(), retryAt: null, errorCode: null } },
-      "operation error code carrying prose": { operation: { id: OPERATION_ID, kind: "resume", state: "pending", phase: "requested", deadlineAt: new Date(), retryAt: null, errorCode: "vendor said: no (https://box.invalid)" } },
+      "operation phase carrying prose": { operation: { id: OPERATION_ID, kind: "resume", state: "pending", phase: "failed: token sk-live-1234 rejected by https://boat.invalid", deadlineAt: new Date(), retryAt: null, errorCode: null } },
+      "operation error code carrying prose": { operation: { id: OPERATION_ID, kind: "resume", state: "pending", phase: "requested", deadlineAt: new Date(), retryAt: null, errorCode: "vendor said: no (https://boat.invalid)" } },
       "operation deadline that is not an instant": { operation: { id: OPERATION_ID, kind: "resume", state: "pending", phase: "requested", deadlineAt: "soon", retryAt: null, errorCode: null } },
       "operation missing a status field": { operation: { id: OPERATION_ID, kind: "resume", state: "pending", phase: "requested", retryAt: null, errorCode: null } },
     };
@@ -259,7 +259,7 @@ describe("Box host-demand HTTP boundary", () => {
     // recognizer must not alter the thrown error it inspects.
     const thrown = hostStartingThrow();
     const before = JSON.stringify(thrown.detail);
-    assert.ok(boxHostDemandDetail(thrown));
+    assert.ok(boatHostDemandDetail(thrown));
     assert.equal(JSON.stringify(thrown.detail), before);
     assert.equal(thrown.statusCode, 503);
     assert.equal(thrown.message, "Your workstation is starting. This may take several minutes");
@@ -279,7 +279,7 @@ describe("Box host-demand HTTP boundary", () => {
         enumerable: true,
         get() {
           reads += 1;
-          return reads === 1 ? HOST_ID : "box-someone-elses-host";
+          return reads === 1 ? HOST_ID : "boat-someone-elses-host";
         },
       },
     }));
@@ -310,9 +310,9 @@ describe("Box host-demand HTTP boundary", () => {
     // `reason` is allowlisted before render, so this is unreachable today; a
     // plain object lookup would still answer "constructor" with a function.
     for (const reason of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
-      const copy = renderBoxHostDemand({ reason });
+      const copy = renderBoatHostDemand({ reason });
       assert.equal(typeof copy, "string", reason);
-      assert.equal(copy, BOX_HOST_DEMAND_MESSAGE, reason);
+      assert.equal(copy, BOAT_HOST_DEMAND_MESSAGE, reason);
     }
   });
 });

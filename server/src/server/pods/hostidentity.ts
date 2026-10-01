@@ -8,7 +8,7 @@ import { conflict, serviceUnavailable } from "../httperrors.js";
 import { decryptSecret, encryptSecret, type KekProvider } from "../secrets/crypto.js";
 import type { PodRow } from "./types.js";
 
-export type BoxState = "provisioning" | "starting" | "running" | "stopping" | "stopped" | "error" | "unknown" | "deleting" | "deleted" | "superseded";
+export type BoatState = "provisioning" | "starting" | "running" | "stopping" | "stopped" | "error" | "unknown" | "deleting" | "deleted" | "superseded";
 /** Live owner slot: not a vendor-delete tombstone and not a retained superseded source. */
 export function occupiesLiveOwnerSlot(state: string | null | undefined): boolean {
   return state != null && state !== "deleted" && state !== "superseded";
@@ -17,8 +17,8 @@ export interface HostIdentity {
   id: string;
   owner_user_id: string | null;
   isolated_pod_id?: string | null;
-  box_id: string | null;
-  box_state: BoxState | null;
+  boat_id: string | null;
+  boat_state: BoatState | null;
   url: string | null;
   hosted_url: string | null;
   generation: string | number;
@@ -28,29 +28,29 @@ export interface HostIdentity {
   auth_encryption_version: number | null;
 }
 export interface HostAuth { runtimeToken: string; hostedToken?: string }
-export function hostCanDial(host: Pick<HostIdentity, "box_state">): boolean {
-  return host.box_state == null || host.box_state === "running";
+export function hostCanDial(host: Pick<HostIdentity, "boat_state">): boolean {
+  return host.boat_state == null || host.boat_state === "running";
 }
-/** Personal Box sleep clients may be told about as 4420 host_stopped. Static, unknown, error, and deleted stay out. */
-export function personalBoxHostIsAsleep(
-  host: Pick<HostIdentity, "owner_user_id" | "box_id"> & { box_state: string | null },
+/** Personal Boat sleep clients may be told about as 4420 host_stopped. Static, unknown, error, and deleted stay out. */
+export function personalBoatHostIsAsleep(
+  host: Pick<HostIdentity, "owner_user_id" | "boat_id"> & { boat_state: string | null },
 ): boolean {
-  return host.owner_user_id != null && host.box_id != null && (host.box_state === "stopped" || host.box_state === "stopping");
+  return host.owner_user_id != null && host.boat_id != null && (host.boat_state === "stopped" || host.boat_state === "stopping");
 }
 /** A verified archive delivery may close sessions only after the current host row is actually asleep. Duplicates and delayed archive-after-resume (running) must not. */
-export function shouldNotifyGatewayOfBoxArchive(args: {
+export function shouldNotifyGatewayOfBoatArchive(args: {
   recordResult: "accepted" | "duplicate" | "digest_mismatch";
   eventType: string;
-  host: (Pick<HostIdentity, "owner_user_id" | "box_id"> & { box_state: string | null }) | null;
+  host: (Pick<HostIdentity, "owner_user_id" | "boat_id"> & { boat_state: string | null }) | null;
 }): boolean {
-  return args.recordResult === "accepted" && args.eventType === "box.archived" && args.host != null && personalBoxHostIsAsleep(args.host);
+  return args.recordResult === "accepted" && args.eventType === "sandbox.archived" && args.host != null && personalBoatHostIsAsleep(args.host);
 }
-export function requireHostAwake(host: Pick<HostIdentity, "box_state">): void {
+export function requireHostAwake(host: Pick<HostIdentity, "boat_state">): void {
   if (!hostCanDial(host)) {
     throw serviceUnavailable("the pod's host is asleep or starting", {
       kind: "admission", resource: "transitions", unit: "count",
-      reason: host.box_state === "stopped" ? "host_stopped" : host.box_state === "deleted" ? "host_deleted" : host.box_state === "superseded" ? "host_superseded" : "host_starting",
-      retryable: host.box_state !== "deleted" && host.box_state !== "superseded",
+      reason: host.boat_state === "stopped" ? "host_stopped" : host.boat_state === "deleted" ? "host_deleted" : host.boat_state === "superseded" ? "host_superseded" : "host_starting",
+      retryable: host.boat_state !== "deleted" && host.boat_state !== "superseded",
     });
   }
 }
@@ -90,7 +90,7 @@ export async function hostById(id: string): Promise<HostIdentity | null> {
  * never be selected by owner-only billing or placement; tombstones are excluded. */
 export async function hostByOwner(userId: string): Promise<HostIdentity | null> {
   return (await query<HostIdentity>(
-    "SELECT * FROM sandbox_hosts WHERE owner_user_id = $1 AND isolated_pod_id IS NULL AND box_state IS DISTINCT FROM 'deleted' AND box_state IS DISTINCT FROM 'superseded'",
+    "SELECT * FROM sandbox_hosts WHERE owner_user_id = $1 AND isolated_pod_id IS NULL AND boat_state IS DISTINCT FROM 'deleted' AND boat_state IS DISTINCT FROM 'superseded'",
     [userId])).rows[0] ?? null;
 }
 /** Explicit/legacy URL lookup can identify a static host, never personal custody. */

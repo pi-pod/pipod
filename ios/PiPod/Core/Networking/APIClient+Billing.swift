@@ -8,7 +8,7 @@ extension APIClient {
     /// open would never show up. This is the endpoint that can be re-read.
     ///
     /// **404 is an answer, not a failure.** `registerBillingRoutes` returns early
-    /// unless the server runs the box backend, so a self-hosted install has no
+    /// unless the server runs the boat backend, so a self-hosted install has no
     /// `/v1/billing` at all — exactly like the absent `workstation` key. Nil then
     /// means "there is no billing here", and `SessionStore.applyBilling` leaves
     /// whatever is on screen alone rather than erasing it.

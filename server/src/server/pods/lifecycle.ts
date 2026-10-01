@@ -202,7 +202,7 @@ export async function withPodSandbox<T>(
                 WHERE id=$1 AND provider_sandbox_id=$2 AND sandbox_host_id IS NOT DISTINCT FROM $3
                   AND provider_state=$4
                   AND ($5::text IS NULL OR EXISTS (SELECT 1 FROM sandbox_hosts h WHERE h.id=$5 AND h.generation=$6::bigint
-                    AND (h.box_state IS NULL OR h.box_state='running'))) RETURNING id`,
+                    AND (h.boat_state IS NULL OR h.boat_state='running'))) RETURNING id`,
               [target.id,target.provider_sandbox_id,target.sandbox_host_id ?? null,target.provider_state,observedHost?.id ?? null,observedHost?.generation ?? null]);
               if (gone.rows.length !== 1) throw conflict("pod assignment changed during provider work");
               throw notFound("the provider no longer knows this pod");
@@ -239,7 +239,7 @@ export async function withPodSandbox<T>(
        WHERE id = $1 AND provider_state = 'started' AND provider_sandbox_id=$4
          AND sandbox_host_id IS NOT DISTINCT FROM $5::text
          AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM sandbox_hosts h WHERE h.id=$6 AND h.generation=$7::bigint
-           AND (h.box_state IS NULL OR h.box_state='running'))) RETURNING id`,
+           AND (h.boat_state IS NULL OR h.boat_state='running'))) RETURNING id`,
       [failed.target.id, providerState, reason, failed.target.provider_sandbox_id,failed.target.sandbox_host_id ?? null,
         failed.host?.id ?? null,failed.host?.generation ?? null],
     );
@@ -905,7 +905,7 @@ export async function ensureProviderPodStartedWithResult(
   }
   if (fresh.provider_state === "started") return { pod: fresh, restarted: false };
   if (["preparing_image", "provisioning", "starting"].includes(fresh.provider_state)) {
-    // Owned Box: a sandbox still coming up after the machine is running is waitable
+    // Owned Boat: a sandbox still coming up after the machine is running is waitable
     // host admission (4420), not a 409/4409 "pod unavailable" that looks like a lost disk.
     const host = await hostForPod(fresh);
     if (host?.owner_user_id != null) {
@@ -918,7 +918,7 @@ export async function ensureProviderPodStartedWithResult(
         retryable: true,
         hostId: host.id,
         statusHref: `/v1/workstations/${encodeURIComponent(host.id)}`,
-        state: host.box_state,
+        state: host.boat_state,
         retryAfterMs: 10_000,
       });
     }
@@ -930,8 +930,8 @@ export async function ensureProviderPodStartedWithResult(
   if (!["stopped", "archived"].includes(fresh.provider_state)) {
     throw conflict("pod is unavailable");
   }
-  // A wake is new work on the box. A missing HTTP actor is not free compute:
-  // on a personal Box the owner is on the pod row. Gate the owner so an
+  // A wake is new work on the boat. A missing HTTP actor is not free compute:
+  // on a personal Boat the owner is on the pod row. Gate the owner so an
   // internal call with actorId=null cannot bypass trial/cap/storage. Already-
   // started pods returned above; stop/fetch never enter this claim. Retention
   // and cleanup do not call this function.

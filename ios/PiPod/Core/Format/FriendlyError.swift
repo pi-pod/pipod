@@ -579,7 +579,7 @@ public enum FriendlyText {
                     it in Settings, then try again.
                     """
             }
-            let displayName = provider.lowercased() == "box" ? "Box" : provider
+            let displayName = provider.lowercased() == "boat" ? "Boat" : provider
             return """
                 This organization doesn’t have a \(displayName) sandbox credential. Ask an \
                 owner to add it in Settings, then try again.

@@ -6,7 +6,7 @@ import { requirePermission, type AuthContext } from "../auth/plugin.js";
 import { audit } from "../audit.js";
 import { query, tx } from "../db/index.js";
 import { HttpError, badRequest, conflict, forbidden, gone, notFound } from "../httperrors.js";
-import { BOX_HOST_DEMAND_REASONS } from "../safe-errors.js";
+import { BOAT_HOST_DEMAND_REASONS } from "../safe-errors.js";
 import { LEASE_STALE_SECONDS, type GatewayService } from "../gateway/service.js";
 import {
   finishLaunchOperation,
@@ -241,7 +241,7 @@ function launchAdmissionRefusal(error: unknown): { retryable: boolean; code: str
       || typeof detail["retryable"] !== "boolean") return null;
   const rawCode = detail["reason"] ?? detail["code"];
   const code = typeof rawCode === "string"
-    && BOX_HOST_DEMAND_REASONS.includes(rawCode as typeof BOX_HOST_DEMAND_REASONS[number])
+    && BOAT_HOST_DEMAND_REASONS.includes(rawCode as typeof BOAT_HOST_DEMAND_REASONS[number])
     ? rawCode : "";
   if (!code) return null;
   return { retryable: detail["retryable"], code };

@@ -21,7 +21,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPinnedProxyStore, writeProxyBindingAtomic } from "../src/archive/proxy-origin-pin.js";
 
-const HOST = "box-proofhost";
+const HOST = "boat-proofhost";
 const TOKEN = "synthetic-proof-token-0123456789abcdef";
 
 const here = path.dirname(fileURLToPath(import.meta.url));

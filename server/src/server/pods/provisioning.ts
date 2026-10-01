@@ -58,7 +58,7 @@ import {
 import { DEFAULT_TEMPLATE_NAME } from "../templates/store.js";
 import { acquireQuotaLocks, orgConcurrencyCapTx, assertConcurrencyRoom, assertQuotaRoomTx, countQuota } from "./concurrency.js";
 import { edition, ownedHosts } from "../edition.js";
-import { OWNED_BOX_FRESH_DISK_RESERVATION_BYTES } from "./capacity.js";
+import { OWNED_BOAT_FRESH_DISK_RESERVATION_BYTES } from "./capacity.js";
 import { createRetentionRecord } from "./retention-policy.js";
 import { inheritForkLaunchIdentity, insertForkSeed, piArgsHaveSessionSteering, type ForkFrom } from "./fork-seed.js";
 import { ensureHostedImage } from "./images.js";
@@ -384,12 +384,12 @@ export async function launchPod(
   // often the slower one, so overlap the database round-trip with it. This preflight is a
   // fast fail only — the authoritative check runs atomically with the insert below (§7.1),
   // because two simultaneous launches would both pass a preflight count and overshoot 20.
-  const dedicatedBox = ownedHosts(deps.env)
+  const dedicatedBoat = ownedHosts(deps.env)
     && providerName === "sandbox"
     && plan.sandboxHostId == null;
   const preflightStartedAt = Date.now();
   const [imageSelection, preflightQuota] = await Promise.all([
-    dedicatedBox
+    dedicatedBoat
       ? Promise.resolve({ recipe: imageRecipe, present: false })
       : withProviderCredential({
           sandboxHostId: plan.sandboxHostId,
@@ -415,7 +415,7 @@ export async function launchPod(
   // sparse images: charge the qualified fresh-image reservation, not the filesystem ceiling,
   // or a 60 GiB workspace is refused while almost empty.
   const storageReservation = ownedHosts(deps.env)
-    ? OWNED_BOX_FRESH_DISK_RESERVATION_BYTES
+    ? OWNED_BOAT_FRESH_DISK_RESERVATION_BYTES
     : config.resources.diskGB * 1024 ** 3;
   await edition().admitPodWork(deps.env, args.userId, storageReservation);
   // Preflight uses the global user budget (all orgs) plus the org aggregate. A pass here
@@ -572,14 +572,14 @@ export async function launchPod(
   if (providerName === "sandbox" && !createAttempt) {
     throw new Error("sandbox launch has no durable create-attempt record");
   }
-  // The create-attempt lease starts at admission. Dedicated-box startup can wait
+  // The create-attempt lease starts at admission. Dedicated-boat startup can wait
   // minutes before provision() installs its own heartbeat. Renew the lease across
   // that gap so recovery does not abort a launch that still has an owner.
   const stopPreparingHeartbeat = createAttempt
     ? startProvisioningHeartbeat(podId, deps, createAttempt)
     : () => {};
   try {
-  if (dedicatedBox) await edition().ensureDedicatedPodHost(deps, args.userId, podId);
+  if (dedicatedBoat) await edition().ensureDedicatedPodHost(deps, args.userId, podId);
   if (shouldWarmDerivedImage) {
     warmDerivedImage(deps, {
       sandboxHostId: plan.sandboxHostId,
@@ -662,12 +662,12 @@ export async function launchPod(
     let recipeForProvision = effectiveRecipe;
     let presentForProvision = effectivePresent;
     let providerConfigForProvision = config.providers[providerName] ?? {};
-    if (dedicatedBox) {
+    if (dedicatedBoat) {
       const deadline = Date.now() + 30 * 60_000;
       let ready = await hostById((await query<{ sandbox_host_id: string | null }>(
         "SELECT sandbox_host_id FROM pods WHERE id=$1", [podId])).rows[0]?.sandbox_host_id ?? "");
-      while (!ready || ready.box_state !== "running") {
-        if (Date.now() > deadline) throw serviceUnavailable("this pod's box did not become ready", {
+      while (!ready || ready.boat_state !== "running") {
+        if (Date.now() > deadline) throw serviceUnavailable("this pod's boat did not become ready", {
           kind: "admission", reason: "host_starting", resource: "transitions", unit: "count", retryable: true,
         });
         await new Promise((resolve) => setTimeout(resolve, 10_000));

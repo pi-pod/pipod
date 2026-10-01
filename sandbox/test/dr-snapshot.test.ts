@@ -36,13 +36,13 @@ describe("forced DR snapshot", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("uploads even when drIntervalMinutes is 0 (Box config) and refuses kind=none", async () => {
+  it("uploads even when drIntervalMinutes is 0 (Boat config) and refuses kind=none", async () => {
     const cfg = loadConfig({
       PI_POD_SANDBOX_TOKEN: "dr-snapshot-token-long",
       PI_POD_SANDBOX_STATE_DIR: dir,
       PI_POD_SANDBOX_ARCHIVE_DRIVER: "local",
       PI_POD_SANDBOX_DR_INTERVAL_MINUTES: "0",
-      PI_POD_SANDBOX_HOST_ID: "box-drhost",
+      PI_POD_SANDBOX_HOST_ID: "boat-drhost",
     });
     fs.mkdirSync(cfg.paths.sandboxes, { recursive: true });
     const images: ImageStore = {
@@ -56,13 +56,13 @@ describe("forced DR snapshot", () => {
       { bootId: "boot-dr", secret: ephemeralHostSecret(), serviceVersion: "test" },
     );
     const shot = await manager.forceDisasterRecoverySnapshot();
-    assert.match(shot.key, /^_dr\/box-drhost\/sandbox-.+\.sqlite$/);
+    assert.match(shot.key, /^_dr\/boat-drhost\/sandbox-.+\.sqlite$/);
     assert.ok(shot.size > 0);
     const noneCfg = loadConfig({
       PI_POD_SANDBOX_TOKEN: "dr-snapshot-token-long",
       PI_POD_SANDBOX_STATE_DIR: dir,
       PI_POD_SANDBOX_ARCHIVE_DRIVER: "none",
-      PI_POD_SANDBOX_HOST_ID: "box-drhost",
+      PI_POD_SANDBOX_HOST_ID: "boat-drhost",
     });
     const none = new Manager(
       noneCfg, store, images, {} as Runtime, {} as Network,

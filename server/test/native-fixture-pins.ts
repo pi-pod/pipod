@@ -1,5 +1,5 @@
 /**
- * Public multi-architecture BusyBox workload used only by disposable native CI fixtures.
+ * Public multi-architecture BusyBoat workload used only by disposable native CI fixtures.
  * This digest-only OCI index reference was resolved from Docker Hub's `busybox:1.36.1`
  * manifest; omitting the tag keeps the sandbox registry parser's repository path canonical.
  */

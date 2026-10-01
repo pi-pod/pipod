@@ -9,7 +9,7 @@
 //
 // Usage:
 //   node scripts/write-proxy-origin-binding.mjs \
-//     --state-dir <dir> --host-id <box-id> --origin <bare-origin>
+//     --state-dir <dir> --host-id <boat-id> --origin <bare-origin>
 //
 // Existing static+proxy operators MUST run this (with the verified host and
 // origin) BEFORE updating to a pinned runtime, or proxy activation will fail

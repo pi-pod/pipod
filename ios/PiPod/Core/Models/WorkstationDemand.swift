@@ -146,7 +146,7 @@ public enum WorkstationReason: Sendable, Hashable {
     case hostStarting
     case hostStopped
     case hostRequiresReconciliation
-    case boxStartsDisabled
+    case boatStartsDisabled
     case hostDeleted
     case hostRetired
     case other(String)
@@ -156,7 +156,7 @@ public enum WorkstationReason: Sendable, Hashable {
         case "host_starting": self = .hostStarting
         case "host_stopped": self = .hostStopped
         case "host_requires_reconciliation": self = .hostRequiresReconciliation
-        case "box_starts_disabled": self = .boxStartsDisabled
+        case "boat_starts_disabled": self = .boatStartsDisabled
         case "host_deleted": self = .hostDeleted
         case "host_retired": self = .hostRetired
         default: self = .other(wire)
@@ -168,7 +168,7 @@ public enum WorkstationReason: Sendable, Hashable {
         case .hostStarting: return "host_starting"
         case .hostStopped: return "host_stopped"
         case .hostRequiresReconciliation: return "host_requires_reconciliation"
-        case .boxStartsDisabled: return "box_starts_disabled"
+        case .boatStartsDisabled: return "boat_starts_disabled"
         case .hostDeleted: return "host_deleted"
         case .hostRetired: return "host_retired"
         case .other(let value): return value
@@ -180,7 +180,7 @@ public enum WorkstationReason: Sendable, Hashable {
     /// missing, and an unknown reason is never assumed to clear.
     public var defaultRetryable: Bool {
         switch self {
-        case .hostStarting, .hostStopped, .hostRequiresReconciliation, .boxStartsDisabled:
+        case .hostStarting, .hostStopped, .hostRequiresReconciliation, .boatStartsDisabled:
             return true
         case .hostDeleted, .hostRetired, .other:
             return false
@@ -203,7 +203,7 @@ public enum WorkstationReason: Sendable, Hashable {
                 """
         case .hostRequiresReconciliation:
             return "Your workstation is being checked. Retrying shortly."
-        case .boxStartsDisabled:
+        case .boatStartsDisabled:
             return """
                 Workstation starts are paused right now. Your files are safe; try again shortly.
                 """
@@ -242,7 +242,7 @@ public struct WorkstationDemandDetail: Sendable, Hashable {
         "capacity_wait_orphaned",
     ]
 
-    /// The six wire reasons the server's `BOX_HOST_DEMAND_REASONS` allowlist
+    /// The six wire reasons the server's `BOAT_HOST_DEMAND_REASONS` allowlist
     /// admits (`safe-errors.ts`). A host-demand 503 carries one of these and
     /// nothing else, so they are the positive evidence this is a workstation.
     /// `host_archived` rides along because the gateway's own 4420 path
@@ -252,7 +252,7 @@ public struct WorkstationDemandDetail: Sendable, Hashable {
     static let waitReasons: Set<String> = Set(
         [
             WorkstationReason.hostStarting, .hostStopped, .hostRequiresReconciliation,
-            .boxStartsDisabled, .hostDeleted, .hostRetired,
+            .boatStartsDisabled, .hostDeleted, .hostRetired,
         ].map(\.wire)
     ).union(["host_archived"])
 
@@ -388,10 +388,10 @@ public struct WorkstationDemandDetail: Sendable, Hashable {
         return raw
     }
 
-    /// `^box-[A-Za-z0-9._-]{1,180}$`, the server's own grammar.
+    /// `^boat-[A-Za-z0-9._-]{1,180}$`, the server's own grammar.
     public static func isValidHostId(_ value: String) -> Bool {
-        guard value.count >= 5, value.count <= 184, value.hasPrefix("box-") else { return false }
-        let rest = value.dropFirst(4)
+        guard value.count >= 6, value.count <= 185, value.hasPrefix("boat-") else { return false }
+        let rest = value.dropFirst(5)
         guard !rest.isEmpty, rest.count <= 180 else { return false }
         return rest.allSatisfy { character in
             character.isASCII

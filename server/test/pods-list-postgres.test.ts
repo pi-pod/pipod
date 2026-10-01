@@ -111,7 +111,7 @@ describe("pod listing filters (postgres)", { skip: databaseUrl ? false : "set PI
       org: orgId,
       user: userId,
       name: "plain",
-      provider: "box",
+      provider: "boat",
       state: "archived",
       providerState: "gone",
     });
@@ -134,9 +134,9 @@ describe("pod listing filters (postgres)", { skip: databaseUrl ? false : "set PI
     assert.deepEqual(names(rows).sort(), ["data", "web", "web-archived", "web-theirs"]);
   });
 
-  it("preserves retired Box attribution on historical rows", async () => {
+  it("preserves retired Boat attribution on historical rows", async () => {
     const historical = await getPod(orgId, pods.plain);
-    assert.equal(historical.provider, "box");
+    assert.equal(historical.provider, "boat");
     assert.equal(historical.provider_state, "gone");
     assert.deepEqual(historical.resolved_config, {});
   });

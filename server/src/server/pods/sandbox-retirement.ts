@@ -458,7 +458,7 @@ export async function retireSourceRow(
       ($2::text IS NULL AND owner_user_id IS NULL AND url = $1)`, [frozenUrl, pod.sandbox_host_id ?? null]);
   const target = targetRows.rows[0];
   if (!target) return { retired: false, detail: "target URL names no registered host; refusing" };
-  if (args.source.owner_user_id != null || target.owner_user_id != null) return { retired: false, detail: "owned Box retirement requires proven owner/shared storage" };
+  if (args.source.owner_user_id != null || target.owner_user_id != null) return { retired: false, detail: "owned Boat retirement requires proven owner/shared storage" };
   if (target.id === args.source.id) {
     return { retired: false, detail: "target registry identity equals the source; refusing" };
   }
@@ -606,7 +606,7 @@ export async function retireSourceRowExact(
   deps: RetirementDeps,
   args: { source: SandboxHostRow; sandboxId: string; holder: string; adoptedArchive: { key: string; sha256: string }; expectedRevision?: number },
 ): Promise<{ retired: boolean; detail: string }> {
-  if (args.source.owner_user_id != null) return { retired: false, detail: "owned Box retirement requires proven owner/shared storage" };
+  if (args.source.owner_user_id != null) return { retired: false, detail: "owned Boat retirement requires proven owner/shared storage" };
   const client = await hostClient(args.source, deps);
   const finish = (retired: boolean, detail: string) => ({ retired, detail });
   let res: RetireResponse;
@@ -939,7 +939,7 @@ export async function guardedRehome(
   const minQuietSecs = args.minQuietSecs ?? 300;
   const host = await getSandboxHost(hostId);
   if (!host) throw notFound(`no sandbox host "${hostId}"`);
-  if (host.owner_user_id != null) throw new Error("owned Box rehome requires proven owner/shared storage; unsupported");
+  if (host.owner_user_id != null) throw new Error("owned Boat rehome requires proven owner/shared storage; unsupported");
   if (!host.url) throw new Error("source host endpoint is not ready");
   const source = await hostClient(host, deps);
   const result: GuardedRehomeResult = { moved: [], skipped: [] };

@@ -123,7 +123,7 @@ function declaredContentLength(response: Response): number | undefined {
 /**
  * Exact native GET /v1/images/:ref miss: `{ error: { code: "not_found", message } }` with
  * `message === "image ${expectedRef} has not been pulled"`. expectedRef is the provider
- * wire ref. Extra top-level/inner keys (including known Box vendor envelopes) are not native.
+ * wire ref. Extra top-level/inner keys (including known Boat vendor envelopes) are not native.
  */
 export function nativeImageNotFoundEnvelope(payload: unknown, expectedRef: string): boolean {
   if (typeof expectedRef !== "string" || expectedRef.length === 0) return false;

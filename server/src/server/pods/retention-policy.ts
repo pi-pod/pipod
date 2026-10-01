@@ -55,7 +55,7 @@ export interface EffectiveRetention {
 export function resolveEffectiveRetention(args: {
   requestedMinutes: number;
   /** Verified personal host identity, never an edition flag or request setting. */
-  ownedBoxHost?: boolean;
+  ownedBoatHost?: boolean;
   orgMaxMinutes?: number | undefined;
   deploymentMaxMinutes?: number | undefined;
   providerName: string;
@@ -63,9 +63,9 @@ export function resolveEffectiveRetention(args: {
 }): EffectiveRetention {
   const clamps: Clamp[] = [];
   const warnings: string[] = [];
-  if (args.ownedBoxHost) return {
+  if (args.ownedBoatHost) return {
     effectiveArchiveAfterMinutes: 0, scoped: false, clamps, warnings,
-    provenance: "owned-box-local-disk-retained",
+    provenance: "owned-boat-local-disk-retained",
   };
   const scoped = isPlatformFundedSandbox({
     providerName: args.providerName,

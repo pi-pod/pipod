@@ -39,11 +39,11 @@ stopping anything already running.
 
 Every tenant parent gets equal `cpu.weight` (100) regardless of how many sandboxes it
 holds, and every sandbox keeps its own 2 vCPU cap and memory ceiling. The parent is also
-a memory kill boundary wherever `PI_POD_SANDBOX_TENANT_MEMORY_GB` is set (required in box
+a memory kill boundary wherever `PI_POD_SANDBOX_TENANT_MEMORY_GB` is set (required in boat
 mode, default 5.5 GiB; unset/uncapped in static mode): per-sandbox ceilings partition the
 tenant, the parent's `memory.high`/`memory.max` bound the tenant, so a bursting tenant
 OOM-kills inside its own subtree instead of reclaiming memory out of neighbouring
-services. Both files are set to the cap with no headroom — a box host has no spare RAM
+services. Both files are set to the cap with no headroom — a boat host has no spare RAM
 for headroom, unlike the fleet scope's 10% `memory.max` margin. The cap is applied and
 read-back-verified on every launch (a rejected write refuses the launch), re-applied on
 restart adoption, and reported in `capabilities.tenantLimits`. When tenant usage passes

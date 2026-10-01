@@ -70,7 +70,7 @@ object WorkstationCopy {
         WorkstationDemandReason.HostStarting -> STARTING
         WorkstationDemandReason.HostStopped -> STOPPED
         WorkstationDemandReason.HostRequiresReconciliation -> RECONCILING
-        WorkstationDemandReason.BoxStartsDisabled -> STARTS_PAUSED
+        WorkstationDemandReason.BoatStartsDisabled -> STARTS_PAUSED
         WorkstationDemandReason.HostArchived -> ARCHIVED
         WorkstationDemandReason.HostDeleted -> DELETED
         WorkstationDemandReason.HostRetired -> RETIRED

@@ -20,7 +20,7 @@ indirectly through CI. Names and directories alone do not classify a check.
 ## Deliberately omitted coverage
 
 Policy/mock-focused files remain unchanged and unexecuted: admission-controller,
-admission, box-tenant-cap, cost-controls-manager, import, metrics-http,
+admission, boat-tenant-cap, cost-controls-manager, import, metrics-http,
 metrics-lifecycle, metrics-reaper, review-regressions, transition-state.
 
 Mixed files remain unchanged and unexecuted: archive-proxy, archive-proxy-origin-pin,

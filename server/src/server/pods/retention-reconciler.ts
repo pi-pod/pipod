@@ -209,7 +209,7 @@ export async function planRetention(
     }
     const credentialSource = custody === "unknown" ? null : custody;
     const resolved = resolveEffectiveRetention({
-      ownedBoxHost: pod.sandbox_host_id ? (await hostForPod(pod))?.owner_user_id != null : false,
+      ownedBoatHost: pod.sandbox_host_id ? (await hostForPod(pod))?.owner_user_id != null : false,
       requestedMinutes: requested,
       orgMaxMinutes: orgMax,
       deploymentMaxMinutes: deps.deploymentMaxMinutes,
@@ -339,11 +339,11 @@ async function resolveFresh(
     orgMax = undefined;
   }
   const requested = requestedOf(pod);
-  const ownedBox = pod.sandbox_host_id ? (await client.query(
+  const ownedBoat = pod.sandbox_host_id ? (await client.query(
     "SELECT 1 FROM sandbox_hosts WHERE id=$1 AND owner_user_id=$2", [pod.sandbox_host_id, pod.user_id],
   )).rowCount !== 0 : false;
   const resolved = resolveEffectiveRetention({
-    ownedBoxHost: ownedBox,
+    ownedBoatHost: ownedBoat,
     requestedMinutes: requested,
     orgMaxMinutes: orgMax,
     deploymentMaxMinutes,
@@ -494,7 +494,7 @@ export async function applyRetentionPlan(
       return;
     }
     const client = await retentionClient(pod, args);
-    if (!client) return; // Sleeping Boxes are not failures and must never be dialed.
+    if (!client) return; // Sleeping Boats are not failures and must never be dialed.
     const rev = await query<{ revision: number }>(
       `SELECT revision FROM pod_retention WHERE pod_id = $1`,
       [entry.podId],

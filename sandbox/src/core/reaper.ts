@@ -74,7 +74,7 @@ export class Reaper {
     this.running = true;
     const started = process.hrtime.bigint();
     try {
-      if (this.cfg.hostBackend === "box" && this.resumeClock.observe(now, performance.now())) {
+      if (this.cfg.hostBackend === "boat" && this.resumeClock.observe(now, performance.now())) {
         this.store.rebaseTimers(now);
         this.lastDrSnapshot = now;
         this.lastHousekeeping = now;

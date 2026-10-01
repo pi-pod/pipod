@@ -58,9 +58,9 @@ export function startJobScheduler(deps: JobSchedulerDeps): () => void {
 export async function runJobScheduler(deps: JobSchedulerDeps): Promise<void> {
   if (!(await launchGateIsOpen())) return;
   await failAbandonedLaunches();
-  const box = ownedHosts(deps.env);
-  const claims = await claimDueRuns(DUE_BATCH, box);
-  if (box) { await runPendingBoxJobs(deps); return; }
+  const boat = ownedHosts(deps.env);
+  const claims = await claimDueRuns(DUE_BATCH, boat);
+  if (boat) { await runPendingBoatJobs(deps); return; }
   // One immediate claim per gateway bounds outage/backlog cost and avoids queued claims.
   for (const claim of claims) {
     await executeJob(deps, claim).catch((e) => {
@@ -71,7 +71,7 @@ export async function runJobScheduler(deps: JobSchedulerDeps): Promise<void> {
   }
 }
 
-export async function claimDueRuns(limit: number, waitForBox = false): Promise<ClaimedRun[]> {
+export async function claimDueRuns(limit: number, waitForBoat = false): Promise<ClaimedRun[]> {
   return tx(async (client) => {
     const now = await client.query<{ now: string | Date }>("SELECT now() AS now");
     const databaseNow = new Date(now.rows[0]!.now);
@@ -95,7 +95,7 @@ export async function claimDueRuns(limit: number, waitForBox = false): Promise<C
         `INSERT INTO job_runs (id, job_id, org_id, scheduled_at,host_wait_state,host_wait_job,host_wait_deadline,host_wait_retry_at)
          VALUES ($1,$2,$3,$4,CASE WHEN $5 THEN 'waiting' END,$6,
            CASE WHEN $5 THEN now()+interval '30 minutes' END,CASE WHEN $5 THEN now() END)`,
-        [runId, job.id, job.org_id, scheduledAt, waitForBox, waitForBox ? JSON.stringify(job) : null],
+        [runId, job.id, job.org_id, scheduledAt, waitForBoat, waitForBoat ? JSON.stringify(job) : null],
       );
       await client.query(
         `UPDATE jobs
@@ -182,13 +182,13 @@ async function executeJob(deps: JobSchedulerDeps, claim: ClaimedRun): Promise<vo
 function hostStarting(error: unknown): boolean {
   if (!(error instanceof HttpError) || error.statusCode !== 503) return false;
   const detail = error.detail as { retryable?: boolean; reason?: string } | undefined;
-  return detail?.retryable === true && ["host_starting","box_starts_disabled","host_requires_reconciliation"].includes(detail.reason ?? "");
+  return detail?.retryable === true && ["host_starting","boat_starts_disabled","host_requires_reconciliation"].includes(detail.reason ?? "");
 }
 
 /** Reclaim only pre-pod waits. The immutable occurrence/snapshot and lease fence
  * survive restart without advancing its schedule again. Dispatch is committed
  * before launch and is NEVER replayed after a crash/ambiguous pod creation. */
-export async function runPendingBoxJobs(deps: JobSchedulerDeps): Promise<void> {
+export async function runPendingBoatJobs(deps: JobSchedulerDeps): Promise<void> {
   await query(`UPDATE job_runs SET status='failed',error='workstation did not become ready before the scheduled host-wait deadline',finished_at=now()
     WHERE status='running' AND host_wait_state='waiting' AND host_wait_deadline<=now()
       AND (host_wait_lease_until IS NULL OR host_wait_lease_until<=now())`);
@@ -233,7 +233,7 @@ export async function runPendingBoxJobs(deps: JobSchedulerDeps): Promise<void> {
     // executeJob has recorded a known terminal failure. A process crash instead
     // leaves dispatching for explicit reconciliation, never duplicate creation.
     await query(`UPDATE job_runs SET host_wait_state=NULL WHERE id=$1 AND host_wait_lease_owner=$2 AND host_wait_fence=$3 AND status='failed'`,pins);
-    deps.log.warn(`scheduled Box launch ${claimed.id} failed`);
+    deps.log.warn(`scheduled Boat launch ${claimed.id} failed`);
   } finally {clearInterval(heartbeat);}
 }
 

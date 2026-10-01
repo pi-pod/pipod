@@ -199,8 +199,8 @@ export interface CapacityCapabilities {
     diskShrink: boolean;
   };
   memoryAdmission: MemoryAdmissionMode;
-  /** Additive native Box profile attestations; absent on older static hosts. */
-  box?: boolean;
+  /** Additive native Boat profile attestations; absent on older static hosts. */
+  boat?: boolean;
   diskAdmission?: "sparse";
   storageQuotaBytes?: number;
   /** Fresh-create charge the host uses under sparse admission. Absent on older hosts. */

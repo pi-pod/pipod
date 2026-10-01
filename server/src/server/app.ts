@@ -31,11 +31,11 @@ import { query } from "./db/index.js";
 import {
   PINO_REDACT_PATHS,
   FLEET_UNAVAILABLE_MESSAGE,
-  boxHostDemandDetail,
+  boatHostDemandDetail,
   fleetUnavailableDetail,
   isProviderValidationFailure,
   launchAdmissionHeldDetail,
-  renderBoxHostDemand,
+  renderBoatHostDemand,
   sanitizeForLog,
   scrubValidationIssues,
 } from "./safe-errors.js";
@@ -159,14 +159,14 @@ export function installErrorHandler(app: ErrorHttpApp): void {
     if (waitTerminal) {
       return reply.code(503).send({ error: renderCapacityWaitTerminal(waitTerminal), detail: waitTerminal });
     }
-    // Typed Box host-demand 503s carry the allowlisted admission shape the
-    // demand contract documents (docs/box-placement.md): answer 503 with static
+    // Typed Boat host-demand 503s carry the allowlisted admission shape the
+    // demand contract documents (docs/boat-placement.md): answer 503 with static
     // per-reason copy plus the validated detail, so the client polls the owned
     // workstation status and retries the same pod instead of reading an opaque
     // 500. Anything unrecognized still fails closed to 500 below.
-    const hostDemand = boxHostDemandDetail(error);
+    const hostDemand = boatHostDemandDetail(error);
     if (hostDemand) {
-      return reply.code(503).send({ error: renderBoxHostDemand(hostDemand), detail: hostDemand });
+      return reply.code(503).send({ error: renderBoatHostDemand(hostDemand), detail: hostDemand });
     }
     const statusCode = (error as { statusCode?: unknown }).statusCode;
     if (!(error instanceof HttpError) && typeof statusCode === "number" && statusCode < 500) {

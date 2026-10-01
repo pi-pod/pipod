@@ -25,7 +25,7 @@ export async function claimNextIdlePod(candidateIds: readonly string[] | null = 
        WHERE ($1::uuid[] IS NULL OR id = ANY($1))
          AND provider_state = 'started'
          AND NOT EXISTS (SELECT 1 FROM sandbox_hosts sh WHERE sh.id = pods.sandbox_host_id
-           AND sh.box_state IS NOT NULL AND sh.box_state <> 'running')
+           AND sh.boat_state IS NOT NULL AND sh.boat_state <> 'running')
          AND (
            state = 'archived'
            OR (
@@ -125,7 +125,7 @@ export async function runArchiveSweep(deps: WorkerDeps): Promise<void> {
       const fresh = await getPod(pod.org_id, pod.id);
       if (fresh.provider_state !== "stopped") continue;
       const host = await hostForPod(fresh);
-      // Personal Box workspaces retain local disks across whole-host sleep.
+      // Personal Boat workspaces retain local disks across whole-host sleep.
       // Never apply normal timed archive, including legacy nonzero records.
       if (host?.owner_user_id != null || (host && !hostCanDial(host))) continue;
       const retention = fresh.resolved_config.retention;

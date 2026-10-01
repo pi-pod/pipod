@@ -33,13 +33,13 @@ export const SECRET_VALUE_MAX_BYTES = 64 * 1024;
  * a previously server-custodied org/user/template secret into ordinary pod environment on the
  * next launch or resume.
  */
-export const RETIRED_PROVIDER_CREDENTIAL_VARS = ["BOX_API_KEY", "E2B_API_KEY", "DAYTONA_API_KEY"] as const;
+export const RETIRED_PROVIDER_CREDENTIAL_VARS = ["BOAT_API_KEY", "E2B_API_KEY", "DAYTONA_API_KEY"] as const;
 
 const RESERVED_PROVIDER_CREDENTIAL_VARS = new Set<string>([
   ...Object.values(PROVIDER_CREDENTIAL_VARS),
   ...RETIRED_PROVIDER_CREDENTIAL_VARS,
   // Host backend credentials are control-plane-only, not tenant environment.
-  "BOX_WEBHOOK_SECRET", "BOX_HOSTED_TOKEN", "BOX_RUNTIME_TOKEN",
+  "BOAT_WEBHOOK_SECRET", "BOAT_HOSTED_TOKEN", "BOAT_RUNTIME_TOKEN",
 ]);
 
 /** Provider API keys are server credentials (spec §7): storable, never injected into pods. */

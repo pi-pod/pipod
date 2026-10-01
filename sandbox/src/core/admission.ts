@@ -257,7 +257,7 @@ export class AdmissionController {
   memoryBudgetBytes(): number {
     // An explicit budget is the validated safe threshold for the host class; otherwise the
     // host keeps its reserve and the fleet cap binds only when it is tighter. The kernel
-    // tenant aggregate cap binds tighter still: on a single-tenant box host the budget and
+    // tenant aggregate cap binds tighter still: on a single-tenant boat host the budget and
     // the tenant cap describe the same bytes, so admitting past the cap would only let the
     // kernel OOM-kill what admission just promised. (Multi-tenant static hosts should leave
     // the tenant cap unset and size with the fleet cap instead.)

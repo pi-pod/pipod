@@ -98,19 +98,19 @@ describe("fake provider workspace seed filesystem", () => {
       'import * as os from "node:os";',
       'import * as path from "node:path";',
       'import { createFakeSandboxForTests } from "./dev/fake-provider.mts";',
-      'const box = createFakeSandboxForTests("tmpdir-alias");',
+      'const boat = createFakeSandboxForTests("tmpdir-alias");',
       'const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-pod-fake-outside-"));',
       'try {',
-      '  assert.equal(box.hostRoot, fs.realpathSync(box.hostRoot));',
+      '  assert.equal(boat.hostRoot, fs.realpathSync(boat.hostRoot));',
       '  const destination = "/tmp/pi-pod-agentd.cjs";',
-      '  await box.uploadFile(destination, Buffer.from("contained"));',
-      '  assert.equal(Buffer.from(await box.downloadFile(destination)).toString(), "contained");',
-      '  fs.symlinkSync(outside, path.join(box.hostRoot, "escape"), "dir");',
-      '  await assert.rejects(box.uploadFile("/escape/leak", Buffer.from("no")), /private root/);',
-      '  await assert.rejects(box.downloadFile("/escape/leak"), /private root/);',
+      '  await boat.uploadFile(destination, Buffer.from("contained"));',
+      '  assert.equal(Buffer.from(await boat.downloadFile(destination)).toString(), "contained");',
+      '  fs.symlinkSync(outside, path.join(boat.hostRoot, "escape"), "dir");',
+      '  await assert.rejects(boat.uploadFile("/escape/leak", Buffer.from("no")), /private root/);',
+      '  await assert.rejects(boat.downloadFile("/escape/leak"), /private root/);',
       '  assert.equal(fs.existsSync(path.join(outside, "leak")), false);',
       '  console.log("contained");',
-      '} finally { await box.delete(); fs.rmSync(outside, {recursive:true, force:true}); }',
+      '} finally { await boat.delete(); fs.rmSync(outside, {recursive:true, force:true}); }',
     ].join("\n");
     try {
       const output = execFileSync(
@@ -130,22 +130,22 @@ describe("fake provider workspace seed filesystem", () => {
   });
 
   it("maps absolute uploads/downloads into the private root and rejects symlink escapes", async () => {
-    const box = sandbox();
+    const boat = sandbox();
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-pod-fake-outside-"));
     try {
       const destination = "/tmp/pi-pod-agentd.cjs";
-      const mapped = box.hostPath(destination);
-      assert.ok(mapped.startsWith(`${box.hostRoot}${path.sep}`));
-      await box.uploadFile(destination, Buffer.from("sandbox-only"));
+      const mapped = boat.hostPath(destination);
+      assert.ok(mapped.startsWith(`${boat.hostRoot}${path.sep}`));
+      await boat.uploadFile(destination, Buffer.from("sandbox-only"));
       assert.equal(fs.readFileSync(mapped, "utf8"), "sandbox-only");
-      assert.deepEqual(Buffer.from(await box.downloadFile(destination)), Buffer.from("sandbox-only"));
+      assert.deepEqual(Buffer.from(await boat.downloadFile(destination)), Buffer.from("sandbox-only"));
 
-      fs.symlinkSync(outside, path.join(box.hostRoot, "escape"));
+      fs.symlinkSync(outside, path.join(boat.hostRoot, "escape"));
       await assert.rejects(
-        box.uploadFile("/escape/outside.txt", Buffer.from("must not escape")),
+        boat.uploadFile("/escape/outside.txt", Buffer.from("must not escape")),
         /escapes its private root/
       );
-      await assert.rejects(box.downloadFile("/escape/missing.txt"), /escapes its private root/);
+      await assert.rejects(boat.downloadFile("/escape/missing.txt"), /escapes its private root/);
       assert.equal(fs.existsSync(path.join(outside, "outside.txt")), false);
     } finally {
       fs.rmSync(outside, { recursive: true, force: true });
@@ -153,19 +153,19 @@ describe("fake provider workspace seed filesystem", () => {
   });
 
   it("reports an empty mapped /workspace", async () => {
-    const box = sandbox();
-    const result = await box.exec(["python3", "-c", workspaceEmptyCheckSource(), "/workspace"]);
+    const boat = sandbox();
+    const result = await boat.exec(["python3", "-c", workspaceEmptyCheckSource(), "/workspace"]);
     assert.equal(result.exitCode, 0, result.output);
     assert.deepEqual(decodeWorkspaceEmptyCheck(result.output ?? ""), { empty: true, entries: [], missing: false });
   });
 
   it("clones an exact local commit into /workspace", async () => {
-    const box = sandbox();
+    const boat = sandbox();
     const repo = initRepo();
     const scratch = path.join(os.tmpdir(), `pi-pod-seed-clone-${Date.now()}`);
     fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
-    await box.uploadFile(`${scratch}/clone.py`, Buffer.from(workspaceCloneSource(), "utf8"), 0o700);
-    const cloned = await box.exec(
+    await boat.uploadFile(`${scratch}/clone.py`, Buffer.from(workspaceCloneSource(), "utf8"), 0o700);
+    const cloned = await boat.exec(
       [
         "python3", `${scratch}/clone.py`, "/workspace", `${scratch}/work`,
         pathToFileURL(repo.dir).href, "main", repo.commit,
@@ -176,41 +176,41 @@ describe("fake provider workspace seed filesystem", () => {
     const decoded = decodeWorkspaceCloneResult(cloned.output ?? "");
     assert.equal(decoded.commit, repo.commit);
     assert.ok(decoded.entries >= 1);
-    const readme = fs.readFileSync(path.join(box.hostRoot, "workspace", "README"), "utf8");
+    const readme = fs.readFileSync(path.join(boat.hostRoot, "workspace", "README"), "utf8");
     assert.equal(readme, "hello from fake seed\n");
-    const empty = await box.exec(["python3", "-c", workspaceEmptyCheckSource(), "/workspace"]);
+    const empty = await boat.exec(["python3", "-c", workspaceEmptyCheckSource(), "/workspace"]);
     assert.equal(decodeWorkspaceEmptyCheck(empty.output ?? "").empty, false);
   });
 
   it("extracts a safe archive and rejects path traversal", async () => {
-    const box = sandbox();
+    const boat = sandbox();
     const scratch = path.join(os.tmpdir(), `pi-pod-seed-extract-${Date.now()}`);
     fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
-    await box.uploadFile(`${scratch}/extract.py`, Buffer.from(workspaceArchiveExtractSource(), "utf8"), 0o700);
+    await boat.uploadFile(`${scratch}/extract.py`, Buffer.from(workspaceArchiveExtractSource(), "utf8"), 0o700);
 
     const safe = craftTar("safe");
-    await box.uploadLocalFile(safe, `${scratch}/archive.tgz`, { mode: 0o600 });
-    const extracted = await box.exec(
+    await boat.uploadLocalFile(safe, `${scratch}/archive.tgz`, { mode: 0o600 });
+    const extracted = await boat.exec(
       ["python3", `${scratch}/extract.py`, "/workspace", `${scratch}/archive.tgz`, `${scratch}/staging`, "1048576", "100", "1"],
       { timeoutMs: 30_000 },
     );
     assert.equal(extracted.exitCode, 0, extracted.output);
     const decoded = decodeWorkspaceArchiveResult(extracted.output ?? "");
     assert.equal(decoded.entries, 1);
-    assert.equal(fs.readFileSync(path.join(box.hostRoot, "workspace", "hello.txt"), "utf8"), "from archive\n");
+    assert.equal(fs.readFileSync(path.join(boat.hostRoot, "workspace", "hello.txt"), "utf8"), "from archive\n");
 
-    const box2 = sandbox();
+    const boat2 = sandbox();
     const scratch2 = path.join(os.tmpdir(), `pi-pod-seed-extract-bad-${Date.now()}`);
     fs.mkdirSync(scratch2, { recursive: true, mode: 0o700 });
-    await box2.uploadFile(`${scratch2}/extract.py`, Buffer.from(workspaceArchiveExtractSource(), "utf8"), 0o700);
+    await boat2.uploadFile(`${scratch2}/extract.py`, Buffer.from(workspaceArchiveExtractSource(), "utf8"), 0o700);
     const evil = craftTar("traverse");
-    await box2.uploadLocalFile(evil, `${scratch2}/archive.tgz`, { mode: 0o600 });
-    const rejected = await box2.exec(
+    await boat2.uploadLocalFile(evil, `${scratch2}/archive.tgz`, { mode: 0o600 });
+    const rejected = await boat2.exec(
       ["python3", `${scratch2}/extract.py`, "/workspace", `${scratch2}/archive.tgz`, `${scratch2}/staging`, "1048576", "100", "1"],
       { timeoutMs: 30_000 },
     );
     assert.notEqual(rejected.exitCode, 0);
     assert.match(rejected.output ?? "", /unsafe path|error/i);
-    assert.equal(fs.existsSync(path.join(box2.hostRoot, "workspace", "evil")), false);
+    assert.equal(fs.existsSync(path.join(boat2.hostRoot, "workspace", "evil")), false);
   });
 });

@@ -25,8 +25,8 @@ A workstation that is asleep or coming up refuses any call that needs it. That r
     "resource": "transitions",
     "unit": "count",
     "retryable": true,
-    "hostId": "box-…",
-    "statusHref": "/v1/workstations/box-…",
+    "hostId": "boat-…",
+    "statusHref": "/v1/workstations/boat-…",
     "state": "starting",
     "retryAfterMs": 10000,
     "operation": {
@@ -39,7 +39,7 @@ A workstation that is asleep or coming up refuses any call that needs it. That r
 
 `kind`/`resource`/`unit` are constants and are what identify the shape. `reason` is one of
 `host_starting`, `host_stopped`, `host_deleted`, `host_retired`,
-`host_requires_reconciliation`, `box_starts_disabled`; `retryable` on the wire is
+`host_requires_reconciliation`, `boat_starts_disabled`; `retryable` on the wire is
 authoritative. The WebSocket equivalent is close code **4420** with reason `host_starting`,
 `host_stopped` or `host_archived` — the same code an idle pod uses, so the reason is what tells
 them apart.

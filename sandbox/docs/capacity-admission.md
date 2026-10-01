@@ -27,7 +27,7 @@ grace window; a two-second archive must never look like a boot.
 The admission budget bounds guarantees (promises). The fleet and tenant caps bound actual
 use. A guarantee is not a cap, so on a host shared with anything else set the fleet cap;
 that is what stops a bursting sandbox from reclaiming memory out of its neighbours. On a
-per-user box host the tenant aggregate is the tighter boundary: per-sandbox ceilings
+per-user boat host the tenant aggregate is the tighter boundary: per-sandbox ceilings
 partition the tenant, the tenant cap bounds the tenant, and the kernel OOM-kills inside
 the tenant subtree instead of reclaiming memory out of vendor/system services. The memory
 budget folds the tenant cap in (`min(explicit ?? min(total − reserve, fleet cap), tenant
@@ -75,7 +75,7 @@ as `HealthResponse.capacity` (unauthenticated, host aggregates only, no tenant d
 | `transitions.inFlight/maxInFlight` | launch/restore slots held vs `PI_POD_SANDBOX_MAX_CONCURRENT_TRANSITIONS` (default 8) |
 | `transitions.archivesInFlight/maxConcurrentArchives` | archive packs/uploads running vs bound (default 2) |
 | `fairness.mode` | `local-weights`, `grants`, or `degraded` (see `docs/tenancy-cpu.md`) |
-| `capabilities.tenantLimits` | kernel aggregate caps on every tenant parent (`memoryMaxBytes`, `cpuMaxCores`; `null` = uncapped). A box host must report a finite memory cap |
+| `capabilities.tenantLimits` | kernel aggregate caps on every tenant parent (`memoryMaxBytes`, `cpuMaxCores`; `null` = uncapped). A boat host must report a finite memory cap |
 
 Example (abbreviated):
 
@@ -193,7 +193,7 @@ Quarantined operation rows stay until recovery or an operator resolves them.
 | --- | --- | --- |
 | `PI_POD_SANDBOX_MEMORY_ADMISSION` | `ceiling` | set `floor` for legacy overcommit behaviour during rollout |
 | `PI_POD_SANDBOX_MEMORY_BUDGET_GB` | unset (derives `min(total - reserve, fleet cap, tenant cap)`) | set to the validated safe threshold per host class; the tenant cap still binds tighter |
-| `PI_POD_SANDBOX_TENANT_MEMORY_GB` / `PI_POD_SANDBOX_TENANT_CPU` | uncapped static; `5.5` GiB + derived CPU in box mode | box refuses to start on an explicit memory `0`; multi-tenant static hosts should size with the fleet cap instead |
+| `PI_POD_SANDBOX_TENANT_MEMORY_GB` / `PI_POD_SANDBOX_TENANT_CPU` | uncapped static; `5.5` GiB + derived CPU in boat mode | boat refuses to start on an explicit memory `0`; multi-tenant static hosts should size with the fleet cap instead |
 | `PI_POD_SANDBOX_CLAMP_OVERSIZED_SHAPES` | `0` (off) | legacy silent clamp; an advertised 8 GiB request must be honoured or refused, never shrunk |
 | `PI_POD_SANDBOX_MAX_CPU` / `_MAX_MEMORY_GB` / `_MAX_DISK_GB` | 2 / 4 / 20 | advertised as `capabilities.maxShape` |
 

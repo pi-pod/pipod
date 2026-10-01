@@ -44,7 +44,7 @@ public enum StartBlockedReason: String, Sendable, Hashable, CaseIterable {
 /// The optional workstation block from `GET /v1/me` (and, when present, the
 /// `GET /v1/pods` envelope — one parser owns both shapes).
 ///
-/// **This is the edition boundary.** The box backend sends this flat object
+/// **This is the edition boundary.** The boat backend sends this flat object
 /// under the `workstation` key; the static backend omits the key entirely, and
 /// then the whole surface is hidden silently — no placeholder, no "unknown",
 /// no zeroes, no empty header. Every field is independently optional, so a

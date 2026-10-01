@@ -525,12 +525,12 @@ export function fleetUnavailableDetail(error: unknown): FleetUnavailableDetail |
 }
 
 /**
- * Typed Box host-demand 503s that may cross the HTTP boundary as 503.
+ * Typed Boat host-demand 503s that may cross the HTTP boundary as 503.
  *
- * On 2026-09-09, with `SANDBOX_HOST_BACKEND=box` live and a personal host
+ * On 2026-09-09, with `SANDBOX_HOST_BACKEND=boat` live and a personal host
  * asleep, `POST /v1/pods/:id/files` answered 500 `internal server error` on
  * every retry while the durable `resume` was already committed: the retryable
- * `host_starting` signal documented in docs/box-placement.md reached the
+ * `host_starting` signal documented in docs/boat-placement.md reached the
  * boundary as a 503 that matched neither existing allowlist and fell through
  * to the generic 500. The WS path special-cases these reasons in
  * gateway/routes.ts and pod launch converts them during planning, so the REST
@@ -541,13 +541,13 @@ export function fleetUnavailableDetail(error: unknown): FleetUnavailableDetail |
  * a server fault. Three sites throw this shape: `requireHostAwake`
  * (host_stopped/host_deleted/host_starting), `ensureOwnedHostReady`
  * (host_starting, with the status href and sanitized operation) and its
- * `BoxControlError` conversion. Reasons that name control-plane internals
- * instead of that workstation — `invalid_box_pins`, `user_missing`,
+ * `BoatControlError` conversion. Reasons that name control-plane internals
+ * instead of that workstation — `invalid_boat_pins`, `user_missing`,
  * `host_org_mismatch` — are deliberately absent from the allowlist: they are
  * genuine server faults and still fail closed to 500, as does every
  * unrecognized or malformed shape.
  */
-export const BOX_HOST_DEMAND_REASONS = [
+export const BOAT_HOST_DEMAND_REASONS = [
   // The workstation is coming up (or a durable resume was just committed).
   "host_starting",
   // It is asleep / was deleted: the owner's own lifecycle state, and the same
@@ -561,22 +561,22 @@ export const BOX_HOST_DEMAND_REASONS = [
   "host_requires_reconciliation",
   // Operator-initiated pause on starts; retryable, and likewise already a
   // host-wait reason in workers/jobs.ts.
-  "box_starts_disabled",
+  "boat_starts_disabled",
 ] as const;
-export type BoxHostDemandReason = (typeof BOX_HOST_DEMAND_REASONS)[number];
-const BOX_HOST_DEMAND_REASON_SET: ReadonlySet<string> = new Set(BOX_HOST_DEMAND_REASONS);
+export type BoatHostDemandReason = (typeof BOAT_HOST_DEMAND_REASONS)[number];
+const BOAT_HOST_DEMAND_REASON_SET: ReadonlySet<string> = new Set(BOAT_HOST_DEMAND_REASONS);
 
 /** Generic fallback copy; per-reason static copy lives in the table below. */
-export const BOX_HOST_DEMAND_MESSAGE = "your workstation is not ready; poll its status and retry";
+export const BOAT_HOST_DEMAND_MESSAGE = "your workstation is not ready; poll its status and retry";
 
 /** Static copy per validated reason — never interpolated from the throw. */
-const BOX_HOST_DEMAND_COPY: Record<BoxHostDemandReason, string> = {
+const BOAT_HOST_DEMAND_COPY: Record<BoatHostDemandReason, string> = {
   host_starting: "Your workstation is starting. This may take several minutes",
   host_stopped: "your workstation is asleep; start it, then retry",
   host_deleted: "your workstation has been deleted; create a new one",
   host_retired: "your workstation has been retired; create a new one",
   host_requires_reconciliation: "your workstation is being reconciled; retry shortly",
-  box_starts_disabled: "workstation starts are temporarily paused; retry shortly",
+  boat_starts_disabled: "workstation starts are temporarily paused; retry shortly",
 };
 
 /**
@@ -584,11 +584,11 @@ const BOX_HOST_DEMAND_COPY: Record<BoxHostDemandReason, string> = {
  * enum alone. Unknown reasons fall back to the generic sentence, so no caller
  * text can reach the body.
  */
-export function renderBoxHostDemand(detail: { reason: string }): string {
+export function renderBoatHostDemand(detail: { reason: string }): string {
   // `Object.hasOwn`, not a plain lookup: a reason of "constructor" or "toString"
   // would otherwise read the object prototype and return a function as copy.
-  if (!Object.hasOwn(BOX_HOST_DEMAND_COPY, detail.reason)) return BOX_HOST_DEMAND_MESSAGE;
-  return BOX_HOST_DEMAND_COPY[detail.reason as BoxHostDemandReason];
+  if (!Object.hasOwn(BOAT_HOST_DEMAND_COPY, detail.reason)) return BOAT_HOST_DEMAND_MESSAGE;
+  return BOAT_HOST_DEMAND_COPY[detail.reason as BoatHostDemandReason];
 }
 
 /**
@@ -612,24 +612,24 @@ function ownDataProperties(value: object): Record<string, unknown> {
 }
 
 /** The same host-id shape the workstation routes accept as a path parameter. */
-const BOX_HOST_ID_RULE = /^box-[A-Za-z0-9._-]{1,180}$/;
-/** `sandbox_hosts.box_state`. */
-const BOX_HOST_STATES: ReadonlySet<string> = new Set([
+const BOAT_HOST_ID_RULE = /^boat-[A-Za-z0-9._-]{1,180}$/;
+/** `sandbox_hosts.boat_state`. */
+const BOAT_HOST_STATES: ReadonlySet<string> = new Set([
   "provisioning", "starting", "running", "stopping", "stopped", "error", "unknown", "deleting", "deleted",
 ]);
-/** Mirrors the `box_operations.kind` CHECK constraint, including the legacy
+/** Mirrors the `boat_operations.kind` CHECK constraint, including the legacy
  * `publish` value: a row the column still permits must not reopen the 500. */
-const BOX_OPERATION_KINDS: ReadonlySet<string> = new Set([
+const BOAT_OPERATION_KINDS: ReadonlySet<string> = new Set([
   "create", "resume", "stop", "delete", "publish", "activate", "ttl",
 ]);
-/** Mirrors the `box_operations.state` CHECK constraint. */
-const BOX_OPERATION_STATES: ReadonlySet<string> = new Set([
+/** Mirrors the `boat_operations.state` CHECK constraint. */
+const BOAT_OPERATION_STATES: ReadonlySet<string> = new Set([
   "pending", "running", "uncertain", "succeeded", "failed", "cancelled",
 ]);
-const BOX_OPERATION_ID_RULE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const BOAT_OPERATION_ID_RULE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 /** Controller phase names and error codes: bounded slugs, never host text. */
-const BOX_PHASE_RULE = /^[A-Za-z0-9._:-]{1,64}$/;
-const BOX_ERROR_CODE_RULE = /^[A-Za-z0-9._-]{1,64}$/;
+const BOAT_PHASE_RULE = /^[A-Za-z0-9._:-]{1,64}$/;
+const BOAT_ERROR_CODE_RULE = /^[A-Za-z0-9._-]{1,64}$/;
 /** ISO-8601 instant with a 4-digit year; re-rendered, never echoed. */
 const ISO_INSTANT_RULE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:?\d{2})?$/;
 
@@ -649,7 +649,7 @@ function isoInstant(value: unknown): string | null {
   return new Date(parsed).toISOString();
 }
 
-export interface BoxHostDemandOperation {
+export interface BoatHostDemandOperation {
   id: string;
   kind: string;
   state: string;
@@ -659,9 +659,9 @@ export interface BoxHostDemandOperation {
   errorCode: string | null;
 }
 
-export interface BoxHostDemandDetail {
+export interface BoatHostDemandDetail {
   kind: "admission";
-  reason: BoxHostDemandReason;
+  reason: BoatHostDemandReason;
   resource: "transitions";
   unit: "count";
   retryable: boolean;
@@ -669,7 +669,7 @@ export interface BoxHostDemandDetail {
   statusHref?: string;
   state?: string;
   retryAfterMs?: number;
-  operation?: BoxHostDemandOperation | null;
+  operation?: BoatHostDemandOperation | null;
 }
 
 /**
@@ -678,13 +678,13 @@ export interface BoxHostDemandDetail {
  * (the status projection always writes all seven); anything else is dropped by
  * construction, because the result is built fresh rather than copied.
  */
-function boxHostDemandOperation(value: unknown): BoxHostDemandOperation | null {
+function boatHostDemandOperation(value: unknown): BoatHostDemandOperation | null {
   if (value === null || typeof value !== "object") return null;
   const record = ownDataProperties(value);
-  if (typeof record["id"] !== "string" || !BOX_OPERATION_ID_RULE.test(record["id"])) return null;
-  if (!BOX_OPERATION_KINDS.has(record["kind"] as string)) return null;
-  if (!BOX_OPERATION_STATES.has(record["state"] as string)) return null;
-  if (typeof record["phase"] !== "string" || !BOX_PHASE_RULE.test(record["phase"])) return null;
+  if (typeof record["id"] !== "string" || !BOAT_OPERATION_ID_RULE.test(record["id"])) return null;
+  if (!BOAT_OPERATION_KINDS.has(record["kind"] as string)) return null;
+  if (!BOAT_OPERATION_STATES.has(record["state"] as string)) return null;
+  if (typeof record["phase"] !== "string" || !BOAT_PHASE_RULE.test(record["phase"])) return null;
   const deadlineAt = isoInstant(record["deadlineAt"]);
   if (deadlineAt === null) return null;
   let retryAt: string | null = null;
@@ -694,7 +694,7 @@ function boxHostDemandOperation(value: unknown): BoxHostDemandOperation | null {
   }
   let errorCode: string | null = null;
   if (record["errorCode"] !== null) {
-    if (typeof record["errorCode"] !== "string" || !BOX_ERROR_CODE_RULE.test(record["errorCode"])) return null;
+    if (typeof record["errorCode"] !== "string" || !BOAT_ERROR_CODE_RULE.test(record["errorCode"])) return null;
     errorCode = record["errorCode"];
   }
   return {
@@ -709,7 +709,7 @@ function boxHostDemandOperation(value: unknown): BoxHostDemandOperation | null {
 }
 
 /**
- * Recognize a server-constructed Box host-demand throw at the HTTP 500
+ * Recognize a server-constructed Boat host-demand throw at the HTTP 500
  * boundary. Strict shape check (503 + `kind: "admission"` + an allowlisted
  * reason + the transition budget every demand site states + a literal boolean
  * `retryable`): returns a fresh object with exactly the allowlisted fields,
@@ -721,26 +721,26 @@ function boxHostDemandOperation(value: unknown): BoxHostDemandOperation | null {
  * malformed field fails the whole check, leaving the throw on the generic 500
  * path.
  */
-export function boxHostDemandDetail(error: unknown): BoxHostDemandDetail | null {
+export function boatHostDemandDetail(error: unknown): BoatHostDemandDetail | null {
   if (!(error instanceof HttpError) || error.statusCode !== 503) return null;
   const detail = (error as { detail?: unknown }).detail;
   if (detail === null || typeof detail !== "object") return null;
   const record = ownDataProperties(detail);
   if (record["kind"] !== "admission") return null;
-  if (typeof record["reason"] !== "string" || !BOX_HOST_DEMAND_REASON_SET.has(record["reason"])) return null;
+  if (typeof record["reason"] !== "string" || !BOAT_HOST_DEMAND_REASON_SET.has(record["reason"])) return null;
   // Every host-demand site names the transition budget it is waiting on; a
   // shape that does not is not one of ours.
   if (record["resource"] !== "transitions" || record["unit"] !== "count") return null;
   if (typeof record["retryable"] !== "boolean") return null;
-  const out: BoxHostDemandDetail = {
+  const out: BoatHostDemandDetail = {
     kind: "admission",
-    reason: record["reason"] as BoxHostDemandReason,
+    reason: record["reason"] as BoatHostDemandReason,
     resource: "transitions",
     unit: "count",
     retryable: record["retryable"],
   };
   if (record["hostId"] !== undefined) {
-    if (typeof record["hostId"] !== "string" || !BOX_HOST_ID_RULE.test(record["hostId"])) return null;
+    if (typeof record["hostId"] !== "string" || !BOAT_HOST_ID_RULE.test(record["hostId"])) return null;
     // Recompute the link from the validated id and compare: a caller-influenced
     // string must never be handed back as a URL.
     const statusHref = `/v1/workstations/${encodeURIComponent(record["hostId"])}`;
@@ -751,10 +751,10 @@ export function boxHostDemandDetail(error: unknown): BoxHostDemandDetail | null 
     // An href without the id that must generate it is a forged shape.
     return null;
   }
-  // `box_state` is nullable on a static row, so absent and null both mean
+  // `boat_state` is nullable on a static row, so absent and null both mean
   // "no state to report" rather than a malformed detail.
   if (record["state"] !== undefined && record["state"] !== null) {
-    if (!BOX_HOST_STATES.has(record["state"] as string)) return null;
+    if (!BOAT_HOST_STATES.has(record["state"] as string)) return null;
     out.state = record["state"] as string;
   }
   if (record["retryAfterMs"] !== undefined) {
@@ -772,7 +772,7 @@ export function boxHostDemandDetail(error: unknown): BoxHostDemandDetail | null 
       // that answer rather than an ambiguous missing key.
       out.operation = null;
     } else {
-      const operation = boxHostDemandOperation(record["operation"]);
+      const operation = boatHostDemandOperation(record["operation"]);
       if (operation === null) return null;
       out.operation = operation;
     }

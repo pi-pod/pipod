@@ -194,7 +194,7 @@ export class CgroupTree {
 /**
  * A tenant's parent cgroup. Children are its sandboxes; the parent's `cpu.weight` is equal
  * across tenants and its `cpu.max` carries the fleet allocator's grant (or the fallback,
- * or the box aggregate CPU cap when unmanaged). Its `memory.high`/`memory.max` carry the
+ * or the boat aggregate CPU cap when unmanaged). Its `memory.high`/`memory.max` carry the
  * tenant aggregate cap: per-sandbox ceilings partition the tenant, the parent bounds the
  * tenant, so a bursting tenant OOM-kills inside its own subtree instead of reclaiming
  * memory out of vendor/system services.
@@ -231,7 +231,7 @@ export class TenantCgroup {
 
   /**
    * Aggregate memory cap for the whole tenant subtree. Unlike the fleet scope (which keeps
-   * a 10% `memory.max` headroom above `memory.high`), both files are set to the cap: a box
+   * a 10% `memory.max` headroom above `memory.high`), both files are set to the cap: a boat
    * host has no spare RAM for headroom — the cap already accounts the vendor/desktop
    * reserve, so anything above it is global-OOM territory. Verified on read-back.
    */

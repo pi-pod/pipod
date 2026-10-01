@@ -10,7 +10,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 
 /**
- * The personal workstation ("box") a pod runs on, and the 503 the server
+ * The personal workstation ("boat") a pod runs on, and the 503 the server
  * answers with while it is not ready.
  *
  * A workstation is a whole VM per user, not a fleet slot: production spans from
@@ -19,13 +19,13 @@ import kotlinx.serialization.json.doubleOrNull
  * launch a duplicate — see `FriendlyError.workstationMessage`.
  *
  * Everything below mirrors the server's own validator
- * (`pi-pod-server` `src/server/safe-errors.ts` `boxHostDemandDetail`) field for
+ * (`pi-pod-server` `src/server/safe-errors.ts` `boatHostDemandDetail`) field for
  * field. A present-but-malformed field fails the whole parse, exactly as it
  * does there: a half-trusted detail is more dangerous than no detail, because
  * the client would then poll a path or print a number the server never sent.
  */
 
-/** `sandbox_hosts.box_state`. */
+/** `sandbox_hosts.boat_state`. */
 enum class WorkstationState(val wire: String) {
     Provisioning("provisioning"),
     Starting("starting"),
@@ -43,7 +43,7 @@ enum class WorkstationState(val wire: String) {
     }
 }
 
-/** Mirrors the `box_operations.kind` CHECK constraint, legacy `publish` included. */
+/** Mirrors the `boat_operations.kind` CHECK constraint, legacy `publish` included. */
 enum class WorkstationOperationKind(val wire: String) {
     Create("create"),
     Resume("resume"),
@@ -60,7 +60,7 @@ enum class WorkstationOperationKind(val wire: String) {
     }
 }
 
-/** Mirrors the `box_operations.state` CHECK constraint. */
+/** Mirrors the `boat_operations.state` CHECK constraint. */
 enum class WorkstationOperationState(val wire: String) {
     Pending("pending"),
     Running("running"),
@@ -169,7 +169,7 @@ enum class WorkstationDemandReason(val wire: String, val retryableByDefault: Boo
     HostStarting("host_starting", true),
     HostStopped("host_stopped", true),
     HostRequiresReconciliation("host_requires_reconciliation", true),
-    BoxStartsDisabled("box_starts_disabled", true),
+    BoatStartsDisabled("boat_starts_disabled", true),
     HostArchived("host_archived", true),
     HostDeleted("host_deleted", false),
     HostRetired("host_retired", false),
@@ -225,7 +225,7 @@ data class WorkstationDemand(
 
     companion object {
         /** The same host-id shape the workstation routes accept as a path parameter. */
-        internal val HOST_ID = Regex("^box-[A-Za-z0-9._-]{1,180}$")
+        internal val HOST_ID = Regex("^boat-[A-Za-z0-9._-]{1,180}$")
 
         /**
          * A reason slug, not prose. Bounds an unknown reason so a server can add
@@ -234,14 +234,14 @@ data class WorkstationDemand(
         private val REASON = Regex("^[a-z][a-z0-9_]{0,63}$")
 
         /**
-         * `BOX_HOST_DEMAND_REASONS` from `pi-pod-server`
+         * `BOAT_HOST_DEMAND_REASONS` from `pi-pod-server`
          * `src/server/safe-errors.ts`, byte for byte.
          *
          * The server validates the reason against exactly this set before a
          * host-demand detail is allowed across the HTTP boundary, so requiring
          * membership here loses nothing a real server can send — and it is what
          * keeps `{kind:"admission", resource:"transitions", unit:"count",
-         * reason:"transition_capacity"}`, the *fleet* refusal thrown by the box
+         * reason:"transition_capacity"}`, the *fleet* refusal thrown by the boat
          * backend, out of a personal-workstation wait. That envelope is
          * indistinguishable from a host demand on shape alone, and
          * `FriendlyError` consults [workstationMessage] before its capacity
@@ -254,7 +254,7 @@ data class WorkstationDemand(
             "host_deleted",
             "host_retired",
             "host_requires_reconciliation",
-            "box_starts_disabled",
+            "boat_starts_disabled",
         )
 
         /**

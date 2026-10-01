@@ -58,12 +58,12 @@ def pre_wake_requirement(
     return None
 
 
-# box/routes.ts: hostId is box-[A-Za-z0-9._-]{1,180}, never a pod UUID.
-BOX_HOST_ID = re.compile(r"^box-[A-Za-z0-9._-]{1,180}$")
+# boat/routes.ts: hostId is boat-[A-Za-z0-9._-]{1,180}, never a pod UUID.
+BOAT_HOST_ID = re.compile(r"^boat-[A-Za-z0-9._-]{1,180}$")
 
 
-def is_box_host_id(value: str | None) -> bool:
-    return bool(value) and BOX_HOST_ID.fullmatch(value or "") is not None
+def is_boat_host_id(value: str | None) -> bool:
+    return bool(value) and BOAT_HOST_ID.fullmatch(value or "") is not None
 
 
 def is_hostpod_substitution(candidate: str | None, pod: dict) -> bool:
@@ -74,9 +74,9 @@ def is_hostpod_substitution(candidate: str | None, pod: dict) -> bool:
 
 
 def require_workstation_input(raw: str, pod: dict) -> str | None:
-    """Protected explicit box-* input. Never guess from /v1/me or hostPodId."""
-    if not is_box_host_id(raw):
-        return "INCOMPLETE: PIPOD_ACCEPTANCE_WORKSTATION_ID must be box-*"
+    """Protected explicit boat-* input. Never guess from /v1/me or hostPodId."""
+    if not is_boat_host_id(raw):
+        return "INCOMPLETE: PIPOD_ACCEPTANCE_WORKSTATION_ID must be boat-*"
     if is_hostpod_substitution(raw, pod):
         return "workstation id must not be hostPodId or pod UUID"
     return None
@@ -99,7 +99,7 @@ def pod_is_asleep(
 
 
 def workstation_is_stopped(state: str | None) -> bool:
-    """Box workstation box_state. Only stopped; not sandbox asleep."""
+    """Boat workstation boat_state. Only stopped; not sandbox asleep."""
     return state == "stopped"
 
 

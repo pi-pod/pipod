@@ -13,11 +13,11 @@ async function responseJson<T>(response: Response): Promise<T> {
 }
 
 /**
- * Privileged end-to-end coverage of the box tenant aggregate cap on a disposable host:
+ * Privileged end-to-end coverage of the boat tenant aggregate cap on a disposable host:
  * the kernel bounds every tenant parent at the configured aggregate, admission refuses
  * past it with backpressure instead of OOM, and unowned flat sandboxes still launch.
  */
-test("root box tenant aggregate cap", async (t) => {
+test("root boat tenant aggregate cap", async (t) => {
   const skip = await rootTestSkipReason();
   if (skip) {
     t.skip(skip);
@@ -26,8 +26,8 @@ test("root box tenant aggregate cap", async (t) => {
 
   const harness = await RootHarness.create({
     env: {
-      PI_POD_SANDBOX_HOST_BACKEND: "box",
-      PI_POD_SANDBOX_HOST_ID: "box-roottester",
+      PI_POD_SANDBOX_HOST_BACKEND: "boat",
+      PI_POD_SANDBOX_HOST_ID: "boat-roottester",
       PI_POD_SANDBOX_TENANT_MEMORY_GB: "1",
     },
   });
@@ -48,7 +48,7 @@ test("root box tenant aggregate cap", async (t) => {
     const capacity = await responseJson<CapacityReportV1>(await harness.request("/v1/capacity"));
     assert.deepEqual(capacity.capabilities.tenantLimits, {
       memoryMaxBytes: 1 * GB,
-      // Harness reserve is 0, so the unmanaged box default derives to the full host CPU count.
+      // Harness reserve is 0, so the unmanaged boat default derives to the full host CPU count.
       cpuMaxCores: Math.max(0.5, os.cpus().length),
     });
     // The 1 GiB tenant cap binds tighter than the 64 GiB harness budget.
@@ -58,26 +58,26 @@ test("root box tenant aggregate cap", async (t) => {
   await t.test("owned launches land under a kernel-bounded tenant parent and execute", async () => {
     const expectedCpuMax = `${Math.max(0.5, os.cpus().length) * 100_000} 100000`;
     const first = await responseJson<SandboxInfoWire>(
-      await create({ owner: { userKey: "boxcap-tester" }, resources: { memoryGB: 0.5, diskGB: 0.01 } }),
+      await create({ owner: { userKey: "boatcap-tester" }, resources: { memoryGB: 0.5, diskGB: 0.01 } }),
     );
     const second = await responseJson<SandboxInfoWire>(
-      await create({ owner: { userKey: "boxcap-tester" }, resources: { memoryGB: 0.5, diskGB: 0.01 } }),
+      await create({ owner: { userKey: "boatcap-tester" }, resources: { memoryGB: 0.5, diskGB: 0.01 } }),
     );
     try {
-      const tenantRel = `${harness.cgroupScope}/tenant-boxcap-tester`;
-      // No headroom above the cap: anything past it is global-OOM territory on a box host.
+      const tenantRel = `${harness.cgroupScope}/tenant-boatcap-tester`;
+      // No headroom above the cap: anything past it is global-OOM territory on a boat host.
       assert.equal(cgroupValue(tenantRel, "memory.max"), String(1 * GB));
       assert.equal(cgroupValue(tenantRel, "memory.high"), String(1 * GB));
       assert.equal(cgroupValue(tenantRel, "cpu.max"), expectedCpuMax);
       for (const sb of [first, second]) {
         const row = harness.store.get(sb.id)!;
-        assert.ok(row.cgroupRel!.includes("tenant-boxcap-tester"), "owned pod nests under its tenant parent");
+        assert.ok(row.cgroupRel!.includes("tenant-boatcap-tester"), "owned pod nests under its tenant parent");
       }
       const exec = await harness.exec(first.id, { argv: ["echo", "tenant-cap-ok"] });
       assert.equal(exec.exitCode, 0);
 
       // Two 0.5 GiB ceilings exactly fill the 1 GiB tenant: a third is backpressure, not OOM.
-      const third = await create({ owner: { userKey: "boxcap-tester" }, resources: { memoryGB: 0.5, diskGB: 0.01 } });
+      const third = await create({ owner: { userKey: "boatcap-tester" }, resources: { memoryGB: 0.5, diskGB: 0.01 } });
       assert.equal(third.status, 507);
       const refusal = await responseJson<ErrorResponse>(third);
       assert.equal(refusal.error.details?.kind === "admission" && refusal.error.details.reason, "memory_capacity");

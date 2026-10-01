@@ -135,7 +135,7 @@ class ApiClient(
      * `GET /v1/billing/account` — the account body as sent.
      *
      * A 404 is the self-hosted edition answering: the whole `/v1/billing` group
-     * is registered only under the box backend, so its absence is the contract
+     * is registered only under the boat backend, so its absence is the contract
      * rather than an error, and an empty object is what "no account surface"
      * looks like to every caller.
      *
@@ -965,7 +965,7 @@ class ApiClient(
          */
         internal const val MAX_LIST_PAGES = 100
         /** The same host-id shape the workstation routes accept as a path parameter. */
-        private val WORKSTATION_HOST_ID = Regex("^box-[A-Za-z0-9._-]{1,180}$")
+        private val WORKSTATION_HOST_ID = Regex("^boat-[A-Za-z0-9._-]{1,180}$")
 
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
