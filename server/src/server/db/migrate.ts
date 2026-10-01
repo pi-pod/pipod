@@ -83,6 +83,12 @@ function migrationPaths(dirs: readonly string[], omit: ReadonlySet<string>): Map
 }
 
 /**
+ * The database cannot be migrated from where it stands by this release. The message names the way
+ * forward and holds no database content, so callers may log it as is.
+ */
+export class MigrationPathError extends Error {}
+
+/**
  * A database migrated by the pre-split chain already has the baseline schema: record the
  * baseline as applied instead of running it. A chain that stopped partway is refused,
  * because the baseline cannot finish it.
@@ -96,7 +102,7 @@ async function adoptLegacyLedger(): Promise<void> {
     const seen = new Set(rows.rows.map((row) => row.name));
     if (seen.has(BASELINE) || !seen.has(LEGACY_FIRST)) return;
     if (!seen.has(LEGACY_LAST)) {
-      throw new Error(`this database stopped partway through the pre-split migrations; ` +
+      throw new MigrationPathError(`this database stopped partway through the pre-split migrations; ` +
         `finish them with a release that still ships ${LEGACY_LAST}, then upgrade`);
     }
     await c.query("INSERT INTO schema_migrations (name) VALUES ($1)", [BASELINE]);

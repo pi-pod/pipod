@@ -6,7 +6,7 @@
  * the launch gate as separate, verified steps.
  */
 import { closePool, initPool, query } from "./index.js";
-import { knownMigration, migrate, shippedMigrations, type MigrationSet } from "./migrate.js";
+import { knownMigration, migrate, MigrationPathError, shippedMigrations, type MigrationSet } from "./migrate.js";
 import {
   LAUNCH_RECOVERY_PROTOCOL_VERSION,
   readLaunchControl,
@@ -84,7 +84,11 @@ export async function upgradeOnStart(
   }
 
   const applied = await migrate(databaseUrl, migrations).catch((error: unknown) => {
-    log.error("applying migrations failed; run `node dist/migrate.js` in this image for the database error");
+    log.error(
+      error instanceof MigrationPathError
+        ? error.message
+        : "applying migrations failed; run `node dist/migrate.js` in this image for the database error",
+    );
     throw error;
   });
   log.info(applied.length ? `migrations applied: ${applied.join(", ")}` : "database schema is current");

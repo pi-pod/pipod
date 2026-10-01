@@ -482,10 +482,25 @@ at its upstream issuer — re-encrypting does not un-share it.
 Earlier versions of this guide had you build and migrate everything by hand from
 `server/` (or from a separate `pi-pod-server` checkout), with a
 `docker-compose.override.yml` and a local registry for the base image. The bundle
-takes over that install's data in place:
+takes over that install's data in place.
+
+An install from the separate `pi-pod-server` checkout first finishes the migrations
+from before this repository existed: this release refuses a database that stopped
+partway through them, and its log names the file it is missing. The last release of
+that checkout ships them all, so run its migrations once, from that checkout, with its
+server stopped (some of them must never run under an older server):
 
 ```bash
-cd server && docker compose down && cd ..      # stops it; keeps every volume
+cd pi-pod-server && docker compose stop server
+git fetch origin && git checkout 2edaee122acd0f82c18df328dfd54a34b8c319e3
+docker compose build server && docker compose run --rm server node dist/migrate.js
+cd ..
+```
+
+Then move. Stop the old stack from its directory — `server/` here, or `pi-pod-server`:
+
+```bash
+cd server && docker compose down && cd ..      # keeps every volume
 cp selfhost/.env.example selfhost/.env && chmod 600 selfhost/.env
 ```
 
