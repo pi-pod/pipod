@@ -537,7 +537,9 @@ export async function runAccountGc(
   // includeGone: failed launches that never acquired compute converge to
   // archived+gone, which default listings omit — gc must still offer them.
   const pods = (await podsInScope(client, { all: true, includeGone: true })).pods;
-  const archived = pods.filter((p) => p.state === "archived");
+  // A deleted pod stays as history: archived, its sandbox gone, no failure to report. There is
+  // nothing left of it to reclaim, so it is not offered again.
+  const archived = pods.filter((p) => p.state === "archived" && !(p.sandboxState === "gone" && p.stateReason === null));
   const unavailable = pods.filter(
     (p) => p.state === "active" && !p.ready && !p.initializing && p.stateReason !== null,
   );
