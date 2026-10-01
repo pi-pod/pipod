@@ -1221,12 +1221,12 @@ BEGIN
 END
 $grants$;
 
--- Every new server starts with launch admission held (see launch-control.ts):
--- `fleet launch-gate open` releases it once the deployment is verified.
+-- A new server admits launches at once: an empty database has no in-flight launches to
+-- account for. An operator can still hold it with `fleet launch-gate hold`.
 INSERT INTO public.launch_recovery_control
   (singleton, mode, epoch, required_protocol, actor, reason_code)
 VALUES
-  (true, 'held', 1, 1, 'migration', 'recovery_cutover');
+  (true, 'open', 1, 1, 'migration', 'fresh_install');
 
 INSERT INTO public.launch_recovery_control_events
   (epoch, cutover_id, previous_mode, new_mode, protocol_version, actor, reason_code)
