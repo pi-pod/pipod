@@ -9,6 +9,7 @@ import { userSecretsDir } from "../userconfig.js";
 import type { ApiServerVersion } from "./api.js";
 import { accountClientOrNull } from "./client.js";
 import { formatSettingsChain, planAccountLaunch, readSecretResolverLayers } from "./launch.js";
+import { warnNoModelProvider } from "./launch-handoff.js";
 import { projectTemplateStaleness, userLayerStaleness } from "./bundle-bootstrap.js";
 import { describeWorkspaceSeed } from "./workspace-seed.js";
 
@@ -45,7 +46,7 @@ export async function runAccountDoctor(flags: AccountDoctorFlags, cwd = process.
     } else {
       const me = await client.me();
       const orgName = me.organization?.name ?? me.organization?.alias ?? client.orgId;
-      info(`auth: valid for ${me.user.email ?? me.user.id}`);
+      info(`auth: valid for ${me.user.email ?? (client.user.email || me.user.id)}`);
       if (!me.currentOrgId) {
         warn("org: none in this access token — membership is pending in Zitadel");
         failed = true;
@@ -92,6 +93,7 @@ export async function runAccountDoctor(flags: AccountDoctorFlags, cwd = process.
     for (const clamp of resolved.clamps) {
       warn(`org policy: ${clamp.path} → ${JSON.stringify(clamp.to)} (${clamp.reason})`);
     }
+    warnNoModelProvider(resolved);
     reportWorkspaceSeed(plan.workspaceSeed);
     const seen = new Set<string>();
     for (const warning of [...plan.warnings, ...resolved.warnings]) {

@@ -44,6 +44,11 @@ function runVisible(cmd: string, args: string[], cwd: string): boolean {
 export function detectInstall(root: string = packageRoot()): Install {
   // A submodule's .git is a file, so existence is the test, not isDirectory().
   if (fs.existsSync(path.join(root, ".git"))) return { kind: "git", root };
+  // The open-source repository keeps the CLI in its cli/ directory: a working tree that
+  // contains this package is a checkout too.
+  if (!root.split(path.sep).includes("node_modules") && run("git", ["rev-parse", "--is-inside-work-tree"], root).out === "true") {
+    return { kind: "git", root };
+  }
 
   if (root.split(path.sep).includes("node_modules")) {
     try {
@@ -212,6 +217,9 @@ function rebuild(root: string, before: string): void {
   const head = run("git", ["rev-parse", "--short", "HEAD"], root).out;
   plain("");
   info(after === before ? `now at ${color.bold(after)} (${head})` : `updated ${before} → ${color.bold(after)} (${head})`);
+  // The same checkout can also be the one a self-hosted server was deployed from.
+  const upgrade = path.join(run("git", ["rev-parse", "--show-toplevel"], root).out, "selfhost", "upgrade");
+  if (fs.existsSync(upgrade)) out(`if this checkout runs your server, upgrade it to match: ${upgrade}`);
   out("run `pipod doctor` to check the new version against this repo");
 }
 

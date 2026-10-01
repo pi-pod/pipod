@@ -146,6 +146,7 @@ export function localLabel(layer: Layer, flags: { home?: string | undefined; dir
 }
 
 export function printDiff(heading: string, lines: string[]): void {
+  if (lines.length === 0) return;
   info(`${heading}:`);
   for (const line of lines) out(`  ${line}`);
 }

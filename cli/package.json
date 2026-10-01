@@ -13,14 +13,12 @@
     "dist",
     "image",
     "docs",
-    "templates",
-    "scripts/ensure-user-config.mjs"
+    "templates"
   ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
-    "postinstall": "node scripts/ensure-user-config.mjs",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "lint": "node --import tsx scripts/check-runtime-surface.ts",

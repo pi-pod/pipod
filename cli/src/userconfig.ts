@@ -73,11 +73,9 @@ export function legacyUserEnvWarning(home?: string | undefined): string | null {
 /**
  * A packaged template's contents, or null when the file is missing.
  *
- * Static assets rather than strings built from {@link DEFAULT_CONFIG}, because the install hook
- * has to write them before `dist/` exists — `npm install` in a source checkout runs
- * `postinstall` before the build. Drift between template and defaults is caught by a unit test
- * that parses the config template and compares it against the built-in defaults, which is a
- * better place for that check than the install path anyway.
+ * Static assets rather than strings built from {@link DEFAULT_CONFIG}, so the file a user reads
+ * keeps its comments. Drift between template and defaults is caught by a unit test that parses
+ * the config template and compares it against the built-in defaults.
  */
 export function readTemplate(relative: readonly string[]): string | null {
   try {

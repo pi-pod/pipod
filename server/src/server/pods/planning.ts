@@ -28,6 +28,7 @@ import { checkProviderCredential, resolveSecrets } from "../secrets/store.js";
 import { assertProviderNotDenied, assertProviderPermitted, resolveSettings, type Clamp, type OrgPolicy } from "../settings/merge.js";
 import { HOST_PROVIDER_NAME } from "../../core/providers/host.js";
 import {
+  piSettingsDigest,
   planLocalPiSettings,
   type LocalPiSettingsLayers,
   type PlannedPiSettings,
@@ -428,14 +429,13 @@ export async function planPodLaunch(
   if (args.templateId) {
     template = await getTemplate(args.orgId, args.templateId, args.userId);
   }
-  // POST /pods callers may still send the former project object during a rolling CLI
-  // upgrade. Its identity can keep historical pod/reuse attribution, but none of its
-  // settings are launch layers. Only /pods/resolve supplies projectConfigRaw, for the
+  // A launch names its project: that identity scopes the project's pod listing and reuse,
+  // and names the pod until its session does. Older clients also sent settings with it;
+  // none of those are launch layers. Only /pods/resolve supplies projectConfigRaw, for the
   // template-bootstrap preview contract.
   const projectConfigRaw = args.projectConfigRaw ?? null;
   const retiredProjectInputsPresent =
     args.legacyLaunchInputsPresent === true ||
-    project !== null ||
     (args.projectEnv !== undefined && args.projectEnv !== null) ||
     (args.projectBakeScript !== undefined && args.projectBakeScript !== null) ||
     args.piSettingsRaw != null;
@@ -740,6 +740,7 @@ export async function planPodLaunch(
       ? {
           piSettings: {
             files: piSettings.meta.files,
+            digest: piSettingsDigest(piSettings),
             bytes: piSettings.meta.bytes,
             packageCount: piSettings.meta.packageCount,
             droppedKeys: piSettings.meta.droppedKeys,

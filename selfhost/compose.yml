@@ -7,8 +7,8 @@
 # `upgrade` builds the server and sandbox from the checked-out commit, publishes the pod base
 # image to the bundled registry, and runs `docker compose up -d`. On every `up`, `backup` dumps
 # the database before Zitadel or the server can start, and the server (UPGRADE_ON_START) applies
-# its own migrations. Site settings and secrets live in .env (see .env.example); local additions
-# go in compose.override.yml. Guide: ../docs/self-host.md.
+# its own migrations. The first `upgrade` writes .env with new secrets (see .env.example) and
+# sets Zitadel up; local additions go in compose.override.yml. Guide: ../docs/self-host.md.
 
 x-postgres-image: &postgres-image postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 
@@ -57,6 +57,15 @@ services:
         ls -1t /backups/pipod-*.sql.gz | tail -n +$$((PIPOD_BACKUP_KEEP + 1)) | xargs -r rm -f
         echo "backup: /backups/$$name"
 
+  # One-shot. Zitadel runs as uid 1000 and writes its admin token into a volume Docker creates
+  # owned by root.
+  zitadel-init:
+    image: *postgres-image
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c", "chown 1000:1000 /zitadel-admin && chmod 700 /zitadel-admin"]
+    volumes:
+      - zitadel_admin:/zitadel-admin
+
   zitadel:
     image: ghcr.io/zitadel/zitadel:v4.17.1@sha256:3ac6910685d48f32481f01f45e3e6215efe5a9df2c069591b481e9a101712db5
     restart: unless-stopped
@@ -64,6 +73,8 @@ services:
       db:
         condition: service_healthy
       backup:
+        condition: service_completed_successfully
+      zitadel-init:
         condition: service_completed_successfully
     # start-from-init also applies Zitadel's own migrations when its pin moves.
     command:
@@ -76,6 +87,9 @@ services:
       ZITADEL_EXTERNALDOMAIN: ${ZITADEL_EXTERNALDOMAIN:-127.0.0.1}
       ZITADEL_EXTERNALPORT: ${ZITADEL_EXTERNALPORT:-8081}
       ZITADEL_EXTERNALSECURE: ${ZITADEL_EXTERNALSECURE:-false}
+      # What --tlsMode disabled or external means for `zitadel ready` (the healthcheck), which
+      # takes no such flag and otherwise probes https.
+      ZITADEL_TLS_ENABLED: "false"
       ZITADEL_DATABASE_POSTGRES_HOST: db
       ZITADEL_DATABASE_POSTGRES_PORT: "5432"
       ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
@@ -88,15 +102,56 @@ services:
       ZITADEL_FIRSTINSTANCE_ORG_NAME: pipod
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: admin
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD:?set ZITADEL_ADMIN_PASSWORD in .env}
+      # First boot only: an instance-admin service user whose token selfhost/upgrade and
+      # selfhost/add-user use to configure Zitadel. It never leaves the zitadel_admin volume.
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: pipod-admin
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: pi pod admin
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-12-31T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel-admin/pat
       ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
       # First boot only; must match server/zitadel/oidc-settings.json.
       ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_ACCESSTOKENLIFETIME: 5m
       ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_IDTOKENLIFETIME: 5m
       ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENIDLEEXPIRATION: 720h
       ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENEXPIRATION: 2160h
+    volumes:
+      - zitadel_admin:/zitadel-admin
     # Loopback only: a browser reaches it through an SSH tunnel, later through a reverse proxy.
     ports:
       - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
+
+  # Operator tool, never started by `up`: runs the scripts in server/zitadel/scripts with the
+  # admin token Zitadel wrote at first boot (or ZITADEL_PAT from .env, for an instance set up
+  # by hand). On the host network so it reaches Zitadel at its issuer, as a browser does.
+  admin:
+    image: pipod/server:local
+    profiles: [tools]
+    restart: "no"
+    network_mode: host
+    user: "1000:1000"
+    environment:
+      ZITADEL_URL: ${ZITADEL_ISSUER:-http://127.0.0.1:8081}
+      ZITADEL_EXPECTED_ISSUER: ${ZITADEL_ISSUER:-http://127.0.0.1:8081}
+      ZITADEL_PAT: ${ZITADEL_PAT:-}
+    volumes:
+      - zitadel_admin:/zitadel-admin:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -z "$$ZITADEL_PAT" ] && ! ZITADEL_PAT="$$(cat /zitadel-admin/pat 2>/dev/null)"; then
+          echo "no Zitadel admin token: this instance was not set up by selfhost/upgrade; put an IAM_OWNER service user's personal access token in .env as ZITADEL_PAT" >&2
+          exit 3
+        fi
+        export ZITADEL_PAT
+        exec node "$$@"
+      - admin
 
   server:
     image: pipod/server:local
@@ -119,12 +174,14 @@ services:
       UPGRADE_ON_START: "true"
       ZITADEL_ISSUER: ${ZITADEL_ISSUER:-http://127.0.0.1:8081}
       ZITADEL_API_AUDIENCE: ${ZITADEL_API_AUDIENCE:-pipod-api}
+      ZITADEL_CLI_CLIENT_ID: ${ZITADEL_CLI_CLIENT_ID:-}
       ZITADEL_JWKS_URL: ${ZITADEL_JWKS_URL:-http://zitadel:8080/oauth/v2/keys}
       SECRETS_KEK: ${SECRETS_KEK:?set SECRETS_KEK in .env}
       SECRETS_KEK_ID: ${SECRETS_KEK_ID:-kek-1}
       SECRETS_KEK_PREVIOUS: ${SECRETS_KEK_PREVIOUS:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
-      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env to an address a pod can reach}
+      # Where pods dial the server: its fixed address on the `pods` network below.
+      PUBLIC_URL: ${PUBLIC_URL:-http://10.79.0.10:8080}
       WEB_ORIGINS: ${WEB_ORIGINS:-}
       PI_POD_SANDBOX_TOKEN: ${PI_POD_SANDBOX_TOKEN:?set PI_POD_SANDBOX_TOKEN in .env}
       PI_POD_SANDBOX_URL: http://sandbox:8433
@@ -135,9 +192,13 @@ services:
       POD_MAX_CPU: ${POD_MAX_CPU:-2}
       POD_MAX_MEMORY_GB: ${POD_MAX_MEMORY_GB:-4}
       POD_MAX_DISK_GB: ${POD_MAX_DISK_GB:-20}
-    # Every interface: pods dial PUBLIC_URL from inside the sandbox, through this host.
+    # Every interface, for clients on other machines. Pods do not need it: they use `pods`.
     ports:
       - "8080:8080"
+    networks:
+      default:
+      pods:
+        ipv4_address: 10.79.0.10
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
@@ -161,10 +222,11 @@ services:
       PI_POD_SANDBOX_HOST_ID: local
       # The bridge gateway the in-pod keepalive dials.
       PI_POD_SANDBOX_API_HOST: 10.77.0.1
-      # Kernel-enforced ceiling over all sandboxes, and what admission keeps back for the rest of
-      # this host. Defaults fit an 8 GB host; see "Sizing" in the guide.
-      PI_POD_SANDBOX_FLEET_MEMORY_GB: ${PI_POD_SANDBOX_FLEET_MEMORY_GB:-4}
-      PI_POD_SANDBOX_FLEET_CPU: ${PI_POD_SANDBOX_FLEET_CPU:-3}
+      # What admission keeps back for the rest of this host (Postgres, Zitadel, the server), and
+      # a kernel-enforced ceiling over all sandboxes: `auto` is the host's total less the reserve,
+      # so a bigger host runs more pods. See "Sizing" in the guide.
+      PI_POD_SANDBOX_FLEET_MEMORY_GB: ${PI_POD_SANDBOX_FLEET_MEMORY_GB:-auto}
+      PI_POD_SANDBOX_FLEET_CPU: ${PI_POD_SANDBOX_FLEET_CPU:-auto}
       PI_POD_SANDBOX_RESERVE_MEMORY_GB: ${PI_POD_SANDBOX_RESERVE_MEMORY_GB:-3}
       PI_POD_SANDBOX_RESERVE_CPU: ${PI_POD_SANDBOX_RESERVE_CPU:-0.5}
       # Kernel-enforced ceiling on each sandbox, from the same .env values as the server's.
@@ -174,6 +236,9 @@ services:
     volumes:
       - sandbox_state:/state
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    networks:
+      - default
+      - pods
     # The registry shares this network namespace: the host pushes the base image to
     # 127.0.0.1:5000 and the sandbox pulls it from 127.0.0.1:5000, the only plain-HTTP origin
     # the sandbox accepts.
@@ -187,7 +252,18 @@ services:
     volumes:
       - registry_data:/var/lib/registry
 
+networks:
+  default:
+  # Pods reach the server here, from inside the sandbox, at an address no change to this
+  # host's own addresses can move. If 10.79.0.0/24 is taken on this host, override the subnet
+  # and the server's ipv4_address in compose.override.yml, and PUBLIC_URL in .env.
+  pods:
+    ipam:
+      config:
+        - subnet: 10.79.0.0/24
+
 volumes:
   pgdata:
   sandbox_state:
   registry_data:
+  zitadel_admin:

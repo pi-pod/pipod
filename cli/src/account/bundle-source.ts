@@ -410,25 +410,25 @@ export function diffBundle(
     ["init script", source.initScript, destination.initScript ?? ""],
     ["bake script", source.bakeScript, destination.bakeScript ?? ""],
   ] as const) {
-    const same = local === remote;
-    lines.push(`${label}: ${same ? "unchanged" : "changed"}`);
-    changed ||= !same;
+    if (local === remote) continue;
+    lines.push(`${label}: changed`);
+    changed = true;
   }
   const currentPi = flatPiSettings(destination.piFiles ?? {});
   for (const key of ["settings", "models", "mcporter", "subagents"] as const) {
-    const same = stable(source.piFiles[key]) === stable(currentPi[key]);
-    lines.push(`Pi ${key}.json: ${same ? "unchanged" : "changed"}`);
-    changed ||= !same;
+    if (stable(source.piFiles[key]) === stable(currentPi[key])) continue;
+    lines.push(`Pi ${key}.json: changed`);
+    changed = true;
   }
   const localAgents = source.piFiles.agents ?? {};
   const remoteAgents = currentPi.agents ?? {};
   const agentPaths = [...new Set([...Object.keys(localAgents), ...Object.keys(remoteAgents)])].sort();
-  if (agentPaths.length === 0) lines.push("Pi agents/: unchanged");
   for (const agentPath of agentPaths) {
     const same = Object.hasOwn(localAgents, agentPath) && Object.hasOwn(remoteAgents, agentPath) &&
       localAgents[agentPath] === remoteAgents[agentPath];
-    lines.push(`Pi agents/${agentPath}: ${same ? "unchanged" : "changed"}`);
-    changed ||= !same;
+    if (same) continue;
+    lines.push(`Pi agents/${agentPath}: changed`);
+    changed = true;
   }
   const localNames = Object.keys(source.env).filter((name) => !isProviderCredentialVar(name)).sort();
   const remoteNames = [...destinationSecretNames].sort();

@@ -574,7 +574,7 @@ export async function startedHostChildIds(hostPodId: string): Promise<string[]> 
 
 export function podLifecycleActionMessage(action: PodLifecycleAction): string {
   return action === "archive"
-    ? "pod hidden from active lists; this does not release compute or create a provider archive — idle auto-stop releases compute, then retention archives the workspace"
+    ? "pod stopped and hidden from active lists; its files are kept"
     : "pod restored to active lists; attach starts its sandbox when needed";
 }
 

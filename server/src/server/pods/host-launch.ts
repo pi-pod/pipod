@@ -165,7 +165,7 @@ export async function launchHostChild(
   // Machine-shaped ambient bundle config cannot be honored on someone else's machine.
   // Legacy request project config is already ignored, like every other launch path.
   const inheritedWarnings: string[] = [];
-  if (project !== null || args.legacyLaunchInputsPresent) {
+  if (args.legacyLaunchInputsPresent) {
     inheritedWarnings.push(LEGACY_PROJECT_LAYERS_WARNING);
   }
   const templateConflicts = explicitInheritedKeys(template?.config ?? null);
@@ -244,8 +244,10 @@ export async function launchHostChild(
     secretScopes,
     initSteps: initSteps.map((s) => ({ scope: s.scope, status: "pending" })),
     ...(piAuth ? { piAuthProviders: piAuth.providers } : {}),
+    // The pod runs in its host's sandbox, behind that sandbox's network policy: record the
+    // policy itself, which attach reads back ("open" or "allowlist:…"), not a label for it.
     egress: {
-      description: `inherited from host ${host.name}`,
+      description: host.resolved_config.egress?.description ?? "open",
       mode: host.resolved_config.egress?.mode ?? "open",
     },
     workdir,

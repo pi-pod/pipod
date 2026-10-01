@@ -105,13 +105,13 @@ version are available.
 Pod commands:
   list [pod]             List pods; \`list <pod>\` shows one machine's group (ls)
   attach [pod]           Reconnect to a pod session (a)
-  stop [pod…]            Stop pods now (local disk retained; attach restarts in seconds on a running workstation)
+  stop [pod…]            Stop pods now (files kept; attach restarts them)
   fork <pod>             Launch a new pod forked from a pod's session
   rename <pod> <name>    Rename a pod
   send [pod] <path>      Copy host files into a pod
   receive [pod] <path>   Copy pod files into the current directory
-  archive [pod…]         Logically archive pods (hidden, not deleted; restores later)
-  restore [pod…]         Mark archived pods active again (attach restarts the sandbox)
+  archive [pod…]         Hide pods from the list (files kept; restore brings them back)
+  restore [pod…]         Bring archived pods back
   gc                     Report retention state; --delete removes reclaimable pods
 
 Account commands:
@@ -140,7 +140,7 @@ Maintenance commands:
 Launch options:
   --template <name|id>   Launch from an account template
   --on <pod|self>        Co-locate the new pod on an existing pod's machine
-  --reuse                Reuse this repo+branch's newest stopped pod instead of creating one
+  --reuse                Restart this project's newest stopped pod instead of creating one
   --no-seed              Start the pod with an empty workspace (skip workspace seeding)
   --dry-run              Resolve and print the launch plan; create nothing
 
@@ -181,11 +181,9 @@ in your browser). The session is stored in ~/.pi-pod/auth.json.
 Options:
   --server <url>   Server to sign in to (default: the previous session's server,
                    $PI_POD_ACCOUNT_URL, or the production server)
-  --issuer <url>   OIDC issuer — required for a self-hosted server (pass its
-                   ZITADEL_ISSUER; pi pod only infers the issuer for the
-                   production server and loopback), and remembered after the
-                   first successful login (default: the previous session's
-                   issuer or $PI_POD_ISSUER)
+  --issuer <url>   OIDC issuer (default: $PI_POD_ISSUER, else the one the
+                   server publishes); needed only for a server too old to
+                   publish its own
   --org <alias>    Only sign in to the organization with this primary domain;
                    omit it to sign in to your own organization
   --token <jwt>    Use an existing access token instead of the browser flow (dev/CI)
@@ -245,18 +243,17 @@ Options:
 
 Alias: ls
 
-List pods on the signed-in server with stable short refs (p-…). Inside a
-project the listing scopes to its configured template when present, otherwise
-to that project's pods. Co-located pods are grouped under the pod whose machine
-they share, with a LOCATION column naming it.
+List pods on the signed-in server with stable short refs (p-…). The project is
+the directory's git repository (or the directory, or its .pi-pod/ config): a
+listing shows that project's pods when it has any — its pinned template's when
+it pins one — and every pod otherwise. Co-located pods are grouped under the pod
+whose machine they share, with an ON column naming it.
 With a pod argument, show just that machine's group: the pod and everything
 co-located on it.
 
-Status names the storage truth, not just the logical row: ’Stopped — local disk retained’
-keeps your files and restarts in seconds on attach when its workstation is already running
-(a sleeping workstation takes several minutes to start); ’Archived — restores on next use’
-downloads on next use (seconds-to-minutes depending on workspace size). Logically archived
-pods stay hidden unless --archived is passed.
+Status says where a pod's files are: a stopped pod keeps them on disk and restarts on
+attach; an archived workspace is restored on next use, which takes longer the bigger it is.
+Pods you archive stay hidden unless --archived is passed.
 
 Options:
   -a, --all              Every pod; ignore the current project and its template pin
@@ -284,10 +281,8 @@ Options:
   stop: `Usage: pipod stop [pod…]
 
 Stop pods now by id, short ref (p-…), or name; omit the argument when this
-project has exactly one pod. Stopped pods keep their local disk and \`pipod attach\`
-restarts them in seconds; cold archive follows after 60 stopped minutes.
-Stopping a pod that hosts co-located pods stops those
-too.
+project has exactly one pod. Stopped pods keep their files and \`pipod attach\`
+restarts them. Stopping a pod that hosts co-located pods stops those too.
 `,
   fork: `Usage: pipod fork <pod> [--session <path>] [launch options] [-- <pi args…>]
 
@@ -329,10 +324,9 @@ Options:
 `,
   archive: `Usage: pipod archive [pod…] [--all] [--template <name|id>] [--idle <duration>] [--dry-run] [--yes]
 
-Mark pods logically archived by id, short ref (p-…), or name. Archiving hides pods
-from active listings (\`pipod list --archived\` shows them); it never deletes work.
-Files are retained and cold archive follows after 60 stopped minutes, after the
-15-minute idle stop. Archiving a pod that hosts co-located pods
+Archive pods by id, short ref (p-…), or name. Archiving hides pods from
+\`pipod list\` (\`pipod list --archived\` shows them); it never deletes work, and
+\`pipod restore\` brings them back. Archiving a pod that hosts co-located pods
 archives those too.
 
 Options:
@@ -344,11 +338,9 @@ Options:
 `,
   restore: `Usage: pipod restore [pod…] [--all] [--yes]
 
-Mark logically archived pods active again by id, short ref (p-…), or name.
-Restoring a host restores the co-located pods archived with it. Attach starts
-the sandbox when needed: stopped disks restart in seconds, archived
-workspaces restore in seconds-to-minutes depending on size; retry safely rather
-than creating a duplicate pod.
+Bring archived pods back by id, short ref (p-…), or name. Restoring a host
+restores the co-located pods archived with it. \`pipod attach\` then starts the
+pod; a workspace in cold storage takes longer the bigger it is.
 
 Options:
   -a, --all   Restore every archived pod (cannot be combined with pod refs)
@@ -356,10 +348,9 @@ Options:
 `,
   gc: `Usage: pipod gc [--delete] [--yes]
 
-Report retention state: the archived and unavailable pods the server can
-reclaim. The server applies inactivity (15 min idle stop) and storage policy
-(60 min archive) on its own schedule;
-this command shows what is reclaimable and offers the delete half.
+List the archived and failed pods that can be deleted for good; --delete deletes
+them. (The server stops idle pods and moves stopped workspaces to cold storage on
+its own schedule; that never deletes anything.)
 
 Options:
   --delete    Permanently delete the reclaimable pods
@@ -424,8 +415,8 @@ file, the highest-precedence layer for launches from the project.
 Actions:
   list                          Every secret a pod launched here would see,
                                 which layer wins, and who set it (default)
-  set <scope> <NAME>[=<value>]  Store a secret; without =<value> the value is
-                                read from a hidden prompt or stdin
+  set <scope> <NAME>            Store a secret, its value read from a hidden
+                                prompt or stdin (never the command line)
   rm <scope> <NAME>             Remove a secret (aliases: remove, unset)
   sync <scope>                  Upload a dotenv file to a server scope
 
@@ -522,7 +513,7 @@ name only. Exits 1 when they differ, 0 when they match.
 Options:
   --dir <path>   org only: read the org source from <path> instead
 `,
-  settings: `Usage: pipod settings <user|org> [show | edit | set <key> <json-value>]
+  settings: `Usage: pipod settings <user|org> [show | edit | set <key> <value> | unset <key>]
 
 Show or edit a persistent settings bundle on the server: your own user bundle,
 or the org-wide defaults (org scope needs the org:manage permission). Edits
@@ -534,8 +525,9 @@ cleanly instead of overwriting each other.
 Actions:
   show                    Print the settings bundle as JSON (default)
   edit                    Edit the config in $VISUAL/$EDITOR, then save
-  set <key> <json-value>  Set one dotted key to a JSON value, for example:
-                          pipod settings user set pi.model '"provider/model"'
+  set <key> <value>       Set one dotted key to a JSON value, or to the text as
+                          a string: pipod settings user set pi.model provider/model
+  unset <key>             Remove one dotted key, so the layers below decide it
 `,
   update: `Usage: pipod update [--dry-run]
 
@@ -878,10 +870,7 @@ function podFlagsOf(flags: GlobalFlags): AccountPodFlags {
 
 function announceUserConfig(): void {
   const result = ensureUserConfig();
-  for (const file of result.created) info(`created ${color.bold(displayPath(file))}`);
-  if (result.created.length > 0) {
-    printHint("machine client preferences; pod settings belong in project, template, or organization layers");
-  }
+  for (const file of result.created) info(`created ${color.bold(displayPath(file))}, this machine's pi pod preferences`);
 }
 
 function runInit(flags: GlobalFlags): number {
@@ -923,6 +912,13 @@ const invokedDirectly =
   ["cli.js", "cli.ts", "pipod", "pi-pod", "pp"].includes(path.basename(process.argv[1]));
 
 if (invokedDirectly) {
+  // `pipod list | head` closes the pipe early; the reader has what it wanted.
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on("error", (failure: NodeJS.ErrnoException) => {
+      if (failure.code === "EPIPE") process.exit(process.exitCode ?? 0);
+      throw failure;
+    });
+  }
   main(process.argv.slice(2))
     .then((code) => { process.exitCode = code; })
     .catch((failure) => { process.exitCode = reportError(failure); });

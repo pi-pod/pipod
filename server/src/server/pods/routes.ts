@@ -347,6 +347,25 @@ export const PiLaunchOverridesSchema = z
   })
   .strict();
 
+/**
+ * Whether a launch request carries inputs the server no longer applies. A bare project name is
+ * identity — what a project's pod listing and reuse go by — not one of the retired settings.
+ */
+function retiredLaunchInputs(body: {
+  project?: Record<string, unknown> | undefined;
+  piSettings?: unknown;
+  hostConfig?: unknown;
+  hostEnv?: unknown;
+}): boolean {
+  const { name: _name, ...projectSettings } = body.project ?? {};
+  return (
+    Object.keys(projectSettings).length > 0 ||
+    body.piSettings !== undefined ||
+    body.hostConfig !== undefined ||
+    body.hostEnv !== undefined
+  );
+}
+
 /** Account launches expose exactly the provider adapters vendored into the server. */
 export const PodProviderSchema = z.enum(supportedProviders() as [string, ...string[]]);
 
@@ -568,11 +587,7 @@ export function registerPodRoutes(
           project: req.body.project
             ? { name: req.body.project.name, config: {}, env: {}, initScript: "", bakeScript: "" }
             : null,
-          legacyLaunchInputsPresent:
-            req.body.project !== undefined ||
-            req.body.piSettings !== undefined ||
-            req.body.hostConfig !== undefined ||
-            req.body.hostEnv !== undefined,
+          legacyLaunchInputsPresent: retiredLaunchInputs(req.body),
           piOverrides: req.body.piOverrides ?? null,
         });
         return reply.code(201).send({ pod: toApi(pod, gateway), report: clientFacingReport(report) });
@@ -586,11 +601,7 @@ export function registerPodRoutes(
         project: req.body.project
           ? { name: req.body.project.name, config: {}, env: {}, initScript: "", bakeScript: "" }
           : null,
-        legacyLaunchInputsPresent:
-          req.body.project !== undefined ||
-          req.body.piSettings !== undefined ||
-          req.body.hostConfig !== undefined ||
-          req.body.hostEnv !== undefined,
+        legacyLaunchInputsPresent: retiredLaunchInputs(req.body),
         provider: req.body.provider ?? null,
         piOverrides: req.body.piOverrides ?? null,
         forkFrom: req.body.forkFrom ?? null,
@@ -757,11 +768,7 @@ export function registerPodRoutes(
         project: req.body.project
           ? { name: req.body.project.name, config: {}, env: {}, initScript: "", bakeScript: "" }
           : null,
-        legacyLaunchInputsPresent:
-          req.body.project !== undefined ||
-          req.body.piSettings !== undefined ||
-          req.body.hostConfig !== undefined ||
-          req.body.hostEnv !== undefined,
+        legacyLaunchInputsPresent: retiredLaunchInputs(req.body),
         provider: req.body.provider ?? null,
         piOverrides: req.body.piOverrides ?? null,
       });
@@ -1134,7 +1141,7 @@ export function registerPodRoutes(
   );
 
   // The explicit stop: releases compute now while preserving the active pod row and disk.
-  // Logical archive remains separate; client quit is never a stop.
+  // Archive stops a running pod too; client quit is never a stop.
   r.post(
     "/pods/:id/stop",
     {
@@ -1151,18 +1158,22 @@ export function registerPodRoutes(
         return { id: pod.id, state: pod.provider_state };
       }
       if (pod.provider_state !== "started") throw conflict("pod is temporarily unavailable; retry shortly");
-      await gateway?.closePod(pod.id, "explicit_stop");
-      if (gateway) {
-        // Stopping a host takes its machine down; co-located children's sessions end as
-        // asleep, not as a transport loss their clients would immediately retry.
-        for (const childId of await startedHostChildIds(pod.id).catch(() => [])) {
-          await gateway.closePod(childId, "host_stopped").catch(() => {});
-        }
-      }
-      const state = await runProviderPodCommand(deps, pod, "stop", req.auth.userId);
+      const state = await stopStartedPod(pod, req.auth.userId);
       return { id: pod.id, state };
     },
   );
+
+  async function stopStartedPod(pod: PodRow, actorId: string) {
+    await gateway?.closePod(pod.id, "explicit_stop");
+    if (gateway) {
+      // Stopping a host takes its machine down; co-located children's sessions end as
+      // asleep, not as a transport loss their clients would immediately retry.
+      for (const childId of await startedHostChildIds(pod.id).catch(() => [])) {
+        await gateway.closePod(childId, "host_stopped").catch(() => {});
+      }
+    }
+    return runProviderPodCommand(deps, pod, "stop", actorId);
+  }
 
   for (const action of ["archive", "restore"] as const) {
     r.post(
@@ -1173,7 +1184,7 @@ export function registerPodRoutes(
         schema: { params: z.object({ id: z.string().uuid() }) },
       },
       async (req) => {
-        const pod = await getPod(req.auth.orgId, req.params.id);
+        let pod = await getPod(req.auth.orgId, req.params.id);
         await assertPodAccess(pod, req.auth);
         await assertPodTokenScope(pod, req.auth, action);
         await assertPodLifecycleAction({
@@ -1182,6 +1193,12 @@ export function registerPodRoutes(
           providerSandboxId: pod.provider_sandbox_id,
           action,
         });
+        // A pod put away stops holding the host's memory and CPU. Hidden but still running, it
+        // kept launches from fitting with nothing in `list` to say why.
+        if (action === "archive" && pod.state === "active" && pod.provider_state === "started") {
+          await stopStartedPod(pod, req.auth.userId);
+          pod = await getPod(req.auth.orgId, pod.id);
+        }
         if (action === "archive") {
           // Archiving a launch stuck in a bounded capacity wait ends the
           // wait as `cancelled` now; the waiter loop would otherwise run it

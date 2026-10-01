@@ -310,14 +310,18 @@ function tarballOptions(
   };
 }
 
+/** A line at each quarter of an upload big enough to wait for; a small one is done before it helps. */
 function uploadProgress(total: number): (sent: number) => void {
   const marks = [0.25, 0.5, 0.75];
   let next = 0;
   return (sent) => {
-    while (next < marks.length && total > 0 && sent >= total * marks[next]!) {
-      info(color.dim(`upload ${Math.round(marks[next]! * 100)}% (${formatBytes(sent)} of ${formatBytes(total)})`));
+    if (total < 8 * 1024 * 1024) return;
+    let crossed = false;
+    while (next < marks.length && sent >= total * marks[next]!) {
       next += 1;
+      crossed = true;
     }
+    if (crossed) info(color.dim(`upload ${Math.round((sent / total) * 100)}% (${formatBytes(sent)} of ${formatBytes(total)})`));
   };
 }
 

@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import { jwksUrl, type ServerEnv } from "../env.js";
 import { unauthorized } from "../httperrors.js";
+import { PERMISSIONS } from "./rbac.js";
 
 export const JWT_CLOCK_TOLERANCE_SECONDS = 30;
 const JWKS_TIMEOUT_MS = 10_000;
@@ -113,7 +114,8 @@ const JWKS_TIMEOUT_MS = 10_000;
         if (Object.prototype.hasOwnProperty.call(grants, orgId)) roles.add(role);
       }
     }
-    return [...roles];
+    // Bundle roles (member, admin, owner) are how grants are made, not permissions themselves.
+    return [...roles].filter((role) => (PERMISSIONS as readonly string[]).includes(role));
   }
 
   /**

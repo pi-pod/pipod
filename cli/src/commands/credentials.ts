@@ -331,7 +331,9 @@ async function testCredential(args: string[], client: AccountClient): Promise<nu
   const providerId = args[0]!;
   const { status } = await client.testModelCredential(providerId);
   out(formatStatus(status));
-  return 0;
+  if (status.state === "ready") return 0;
+  info(`\`pipod credentials reconnect ${providerId}\` signs in again`);
+  return 1;
 }
 
 async function removeCredential(args: string[], flags: CredentialsFlags): Promise<number> {
@@ -360,8 +362,8 @@ async function removeCredential(args: string[], flags: CredentialsFlags): Promis
 }
 
 function formatStatus(status: CredentialStatus): string {
-  const expires = status.state === "ready" && status.expiresAt ? status.expiresAt : "-";
-  return `${status.providerId}  ${status.state}  ${expires}`;
+  const expires = status.state === "ready" && status.expiresAt ? `  (expires ${status.expiresAt})` : "";
+  return `${status.providerId}  ${status.state.replaceAll("_", " ")}${expires}`;
 }
 
 function rejectExtra(args: string[], usage: string): void {

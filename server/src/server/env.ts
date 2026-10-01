@@ -187,6 +187,14 @@ export const serverEnvShape = {
           "zitadel/scripts/reconcile-zitadel.mjs --apply",
       )
       .default("pipod-api"),
+    /**
+     * Client id of the `pipod-cli` app, published at GET /v1/auth/config so `pipod login
+     * --server <url>` needs nothing else. Unset, the CLI falls back to its built-in id.
+     */
+    ZITADEL_CLI_CLIENT_ID: z
+      .string()
+      .optional()
+      .transform((value) => value?.trim() || undefined),
     /** Override for tests / local signer; defaults to `<issuer>/oauth/v2/keys`. */
     ZITADEL_JWKS_URL: z.string().url().optional(),
     /** Optional self-service console URL; derived from the issuer when omitted. */

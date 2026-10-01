@@ -26,6 +26,10 @@ export async function runPush(args: string[], flags: PushFlags): Promise<number>
   const local = localLabel(parsed.layer, { home: flags.home, dir: parsed.dir });
   const diff = diffBundle(source, remote.bundle, remote.secretNames);
   printDiff(`${local} → ${remote.label}`, diff.lines);
+  if (!diff.changed && Object.keys(source.env).length === 0) {
+    info(`${remote.label} is already up to date`);
+    return 0;
+  }
   const assumeYes = parsed.yes || flags.yes === true;
   if (!(await confirm("apply this bundle replacement?", { nonInteractiveDefault: false, assumeYes }))) return 1;
 

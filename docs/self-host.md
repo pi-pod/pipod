@@ -1,194 +1,124 @@
 # Self-hosting pi pod
 
-The path from an empty Linux host to a working `pipod login`, and every upgrade after
-that. Four things run, all on one host: **Postgres**, **Zitadel** (OIDC), the
-**server** (control plane), and the **native sandbox** the server launches pods into.
-[`../selfhost/`](../selfhost/) holds the whole deployment, built from the commit you
-have checked out: installing is `selfhost/upgrade`, and upgrading is
+The path from an empty Linux host to a working `pipod`, and every upgrade after that. Four
+things run, all on one host: **Postgres**, **Zitadel** (OIDC), the **server** (control
+plane), and the **native sandbox** the server launches pods into.
+[`../selfhost/`](../selfhost/) holds the whole deployment, built from the commit you have
+checked out: installing is `selfhost/upgrade`, and upgrading is
 `git pull && selfhost/upgrade`.
 
-You need **8 GB of RAM**, Docker with the Compose plugin, `git`, `openssl`, and Node
-22+ (for the CLI and the Zitadel bootstrap scripts). 4 GB is not enough for a pod of
-the default shape: admission commits each sandbox's whole memory *ceiling*, so a standard
-2 vCPU / 4 GiB pod needs 4 GiB of admission budget, and that budget is
-`min(host total − reserve, fleet ceiling)`. On a 4 GB machine it is 2.83 GiB and every
-launch is refused before it starts. A 4 GB host is usable, but only with a smaller
-pod ceiling — see [Sizing](#sizing-the-host-and-the-pod-shape). On Debian
-stable, whose own `nodejs` is still 20:
+You need **8 GB of RAM**, Docker with the Compose plugin, `git`, `openssl`, and Node 22+ (for
+the CLI). Pods may use the host's memory and CPU less a reserve kept for everything else, and
+a standard pod (2 vCPU / 4 GiB) needs its whole 4 GiB of that, so 8 GB runs one standard pod
+at a time and 16 GB runs three. A 4 GB host works with smaller pods — see
+[Sizing](#sizing-the-host-and-the-pod-shape). On Debian stable, whose own `nodejs` is
+still 20:
 
 ```bash
 apt-get update && apt-get install -y ca-certificates curl git openssl
 curl -fsSL https://get.docker.com | sh
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
-# The sandbox mounts each workspace from a loopback file, and a container inherits
-# /dev as it was when it started: load this before step 1, or every launch fails
-# with "failed to setup loop device".
-modprobe loop && echo loop > /etc/modules-load.d/loop.conf
 ```
 
-> Loopback first. Steps 1–5 give you a working instance on `127.0.0.1` with no
-> DNS and no TLS. [Going public](#going-public) is a separate, later step. Do not
-> do both at once: almost every failure in this stack is an issuer or origin
-> mismatch, and they are much easier to read one change at a time.
-
-The repository is private while pi pod is pre-release, so clone it as an account
-that has access — `gh repo clone`, or the `git@github.com:` remote. An anonymous
-clone fails with `could not read Username for 'https://github.com'`, which is the
-first thing you will hit, not a network problem. Commands below run from the
-repository root unless they start with `cd`.
+The repository is private while pi pod is pre-release, so clone it as an account that has
+access — `gh repo clone`, or the `git@github.com:` remote. An anonymous clone fails with
+`could not read Username for 'https://github.com'`, which is the first thing you will hit,
+not a network problem. Commands below run from the repository root.
 
 ```bash
 git clone https://github.com/pi-pod/pipod.git
 cd pipod
 ```
 
-## 1. Configure and start
-
-```bash
-cp selfhost/.env.example selfhost/.env && chmod 600 selfhost/.env
-```
-
-`selfhost/.env` holds every secret of the deployment and nothing else needs editing.
-[`.env.example`](../selfhost/.env.example) says how to generate each value. Fill in
-`POSTGRES_PASSWORD`, `ZITADEL_MASTERKEY`, `ZITADEL_ADMIN_PASSWORD`, `SECRETS_KEK`,
-`PI_POD_SANDBOX_TOKEN`, and `PUBLIC_URL`; `ZITADEL_API_AUDIENCE` comes in step 3. Two
-of them have no second copy anywhere:
-
-- **`ZITADEL_MASTERKEY`** seals Zitadel's own keys in Postgres; a database restored
-  without it is unusable.
-- **`SECRETS_KEK`** encrypts stored secrets; lose it and every one is unreadable.
-
-Back both up offline now, separately from the database dumps (see
-[Back up and restore](#back-up-and-restore)).
-
-`PUBLIC_URL` is where pods dial the server back from inside a sandbox, so it is this
-host's own address — never `127.0.0.1`, which inside a pod is the pod itself.
+## 1. Install
 
 ```bash
 selfhost/upgrade
 ```
 
-[`upgrade`](../selfhost/upgrade) builds the server and sandbox images from this
-checkout, publishes the pod base image the server launches from to the registry
-inside the deployment, and runs `docker compose up -d`. Compose starts Postgres, then
-`backup` (a one-shot dump, empty on the first run), then Zitadel and the server. The
-server applies its own migrations before it serves; `upgrade` finishes when the server
-is healthy. Its log says what it did:
+The first run writes `selfhost/.env` with a fresh secret for everything that needs one, then
+builds the server and the sandbox from this checkout, publishes the pod base image to a
+registry inside the deployment, starts it all, and sets up Zitadel: the `pipod` project, its
+roles, and the apps the CLI and the phone apps sign in with. It ends by saying what to do next.
+
+`selfhost/.env` holds every secret of the deployment. Two of them have no second copy
+anywhere — **back both up offline now**, separately from the database dumps (see
+[Back up and restore](#back-up-and-restore)):
+
+- **`ZITADEL_MASTERKEY`** seals Zitadel's own keys in Postgres; a database restored
+  without it is unusable.
+- **`SECRETS_KEK`** encrypts stored secrets; lose it and every one is unreadable.
+
+Only two ports are published. 8080 (the server) listens on every interface for clients on
+other machines; firewall it from the internet until you [go public](#going-public).
+Zitadel's 8081 and the base-image registry's 5000 are bound to `127.0.0.1`, and Postgres is
+not published at all. Pods reach the server inside the deployment, so nothing about this
+host's own addresses needs configuring.
+
+Run every `docker compose` command in this guide from `selfhost/`.
+
+## 2. Give yourself an account
 
 ```bash
-cd selfhost && docker compose logs server | grep -E 'release:|migrations applied|launch admission'
+selfhost/add-user you@example.com --owner
 ```
 
-Run every other `docker compose` command in this guide from `selfhost/` too.
+That creates you inside the deployment's `default` organization and prints a one-time
+password, which Zitadel asks you to replace when you first sign in. `--owner` grants every
+permission and lets you manage the organization's members; leave it off for everyone else,
+who become members (they launch and manage their own pods). Running it again for an existing
+user only adds what is missing, and `--new-password` issues a fresh one-time password — the
+way back in for someone who forgot theirs, since a fresh instance cannot send email (see
+[Email](#email)).
 
-Only two ports are published. 8080 (the server) listens on every interface because
-pods reach it through this host; firewall it from the internet until you
-[go public](#going-public). Zitadel's 8081 and the base-image registry's 5000 are bound
-to `127.0.0.1`, and Postgres is not published at all.
-
-## 2. A Zitadel admin token
-
-Zitadel is up on `http://127.0.0.1:8081`. The bootstrap scripts authenticate with
-a personal access token belonging to a service user, not with your password.
-
-1. Open `http://127.0.0.1:8081/ui/console` and sign in as the first-boot admin.
-   The username is `admin` plus the domain Zitadel derived for the `pipod`
-   organization; the Console's Organization page shows the exact login name. The
-   password is your `ZITADEL_ADMIN_PASSWORD`, and Zitadel makes you change it now.
-   From your own machine, reach it through a tunnel:
-   `ssh -L 8081:127.0.0.1:8081 root@<this host>`.
-2. Create a **service user** (Users → Service Users), give it **IAM_OWNER**
-   under Instance → Administrators, and generate a **personal access token**.
-
-Export it for the rest of this section. It is the most powerful credential in
-the deployment — do not put it in a file that gets committed.
+## 3. Install the CLI and sign in
 
 ```bash
-export ZITADEL_PAT=<the token>
-export ZITADEL_URL=http://127.0.0.1:8081
+(cd cli && npm ci && npm run build) && npm install -g ./cli
+pipod login --server http://127.0.0.1:8080
 ```
 
-## 3. Create the project, then take the audience from it
+`pipod login` asks the server where to sign in, opens your browser, and waits for it. A
+server has no browser to open, so the CLI prints the URL instead — and whatever browser you
+use has to reach *both* Zitadel and the CLI's sign-in redirect as `127.0.0.1`. Forward them
+from the host you installed on and use your own browser:
 
 ```bash
-cd server
-ZITADEL_EXPECTED_ISSUER=$ZITADEL_URL node zitadel/scripts/reconcile-zitadel.mjs --apply
+ssh -L 8081:127.0.0.1:8081 -L 43117:127.0.0.1:43117 root@<this host>
 ```
 
-[`reconcile-zitadel.mjs`](../server/zitadel/scripts/reconcile-zitadel.mjs)
-creates the `pipod` project, its roles, and the four OIDC apps from
-[`zitadel/project/pipod-project.json`](../server/zitadel/project/pipod-project.json).
-It only ever creates and updates — there is no remove — so it is safe to re-run,
-and `--check` (the default) reports drift without touching anything. It requires
-`ZITADEL_EXPECTED_ISSUER` as an explicit confirmation of which instance you are
-about to change, and accepts `http://` only for `127.0.0.1`, `localhost`, or
-`::1`.
+(The CLI waits on the first free port from 43117 to 43126; forward the one it names.) Keep
+the tunnel up while `login` waits. Do not reach for a public address to avoid the tunnel:
+signing in from other machines is [going public](#going-public), not a shortcut. The server
+is remembered, so later commands need nothing but `pipod`.
 
-It prints what you need:
-
-```
-project id (API audience): 300000000000000001
-client id pipod-cli: 300000000000000002
-client id pipod-desktop: ...
-client id pipod-mobile: ...
-client id pipod-web: ...
-```
-
-Put the **project id** in `selfhost/.env` as `ZITADEL_API_AUDIENCE` and apply it.
-Keep the `pipod-cli` client id for step 5 — it is a different id from the
-project's, and re-running the reconciler will not change it.
+Then check the result, and launch your first pod from a project directory:
 
 ```bash
-cd ../selfhost && docker compose up -d
+pipod doctor
+pipod credentials connect      # the model providers your local pi is signed in to
+pipod
 ```
 
-Until `ZITADEL_API_AUDIENCE` is set, the server expects the dev-signer placeholder
-`pipod-api` and rejects every real Zitadel token as a bad audience.
+`doctor` names the server's release revision and fails when its database is missing
+migrations or launch admission is held.
 
-Optionally align the instance's token lifetimes with
-[`zitadel/oidc-settings.json`](../server/zitadel/oidc-settings.json):
+### Zitadel
 
-```bash
-ZITADEL_EXPECTED_ISSUER=$ZITADEL_URL node zitadel/scripts/apply-oidc-settings.mjs --apply
-```
-
-The bundle sets those lifetimes as first-boot defaults, so on a brand-new
-instance this is a no-op. It matters when you rebuild an instance later. Like
-the reconciler it defaults to `--check` and needs `ZITADEL_EXPECTED_ISSUER`.
-
-## 4. An organization, a user, and roles
-
-Pods belong to organizations. Signing in without one succeeds and then does
-nothing — the CLI says *"access is pending Zitadel organization membership or
-role grants"*. From `server/`:
-
-```bash
-zitadel/scripts/provision-org.sh "my-org"
-# now create the human user in the Console, inside my-org
-zitadel/scripts/grant-org-admin.sh you@example.com "my-org"
-```
-
-That order matters, because the organization has to exist before the user does.
-A user belongs to exactly one organization, and the server reads a caller's
-organization from their token and keeps only the roles *that* organization
-granted — so create the user **inside `my-org`**, not in the `pipod`
-organization you signed in to in step 2. Switch the Console to `my-org` first.
-Give them a password there: a fresh instance cannot mail an invite (see below).
-
-[`grant-org-admin.sh`](../server/zitadel/scripts/grant-org-admin.sh)
-then grants that user `ORG_OWNER` plus the project `owner` bundle, and refuses a
-user who lives in another organization rather than reporting a grant that
-conveys nothing. Both scripts read `ZITADEL_URL` and `ZITADEL_PAT` from the
-environment you exported in step 2. Never grant `IAM_OWNER` to a tenant org
-owner.
+Everything above configured Zitadel for you. Its Console is at
+`http://127.0.0.1:8081/ui/console` (through the tunnel), for the instance's own settings.
+Sign in as `admin@pipod.127.0.0.1` (`admin@pipod.<ZITADEL_EXTERNALDOMAIN>` once you have gone
+public) with the `ZITADEL_ADMIN_PASSWORD` from `selfhost/.env`; Zitadel makes you change it
+at first sign-in. People are easier to manage with
+`selfhost/add-user`; more organizations, with `server/zitadel/scripts/provision-org.sh`.
 
 ### Email
 
-Nothing so far sends mail. A fresh instance has no SMTP provider, so an invite
-or a password reset produces a code that never reaches anyone and no error
-anywhere. Add a provider in the Console under Instance → Settings → SMTP
-provider; any host works, and the hosted deployment uses Mailgun at
-`smtp.mailgun.org:587` with TLS on.
+Nothing sends mail yet. A fresh instance has no SMTP provider, so an invite or a password
+reset produces a code that never reaches anyone and no error anywhere — which is why
+`selfhost/add-user` hands out passwords itself. Add a provider in the Console under
+Instance → Settings → SMTP provider; any host works, and the hosted deployment uses Mailgun
+at `smtp.mailgun.org:587` with TLS on.
 
 You can seed it at first boot instead, and there is one trap if you do. The
 `ZITADEL_DEFAULTINSTANCE_SMTPCONFIGURATION_SMTP_USER` and `..._SMTP_PASSWORD`
@@ -212,44 +142,6 @@ Compose merges automatically and `git pull` never touches. Set the other SMTP
 variables without the credential and you get an *active* provider that cannot log
 in, which is harder to notice than having none.
 
-## 5. Log in
-
-```bash
-cd cli && npm ci && npm run build && cd ..
-export PI_POD_OIDC_CLIENT_ID=<the pipod-cli client id from step 3>
-node cli/dist/cli.js login --server http://127.0.0.1:8080 --issuer http://127.0.0.1:8081
-node cli/dist/cli.js doctor
-```
-
-`doctor` names the server's release revision and fails when its database is missing
-migrations or launch admission is held. Run it from your own project directory (not
-inside a checkout whose `.pi-pod/config.json` pins a removed `provider`). The
-deployment default is always `sandbox`; a stale project layer naming a removed
-provider is rejected with the supported list.
-
-Sign-in is a loopback PKCE flow in a browser: the CLI opens the authorization
-endpoint on the issuer and waits on `http://127.0.0.1:43117/callback` (it tries
-43117–43126; each is allowlisted on the `pipod-cli` app). A server has no browser
-to open, so the CLI prints the URL instead — and whatever browser you use has to
-reach *both* of those loopback addresses, as `127.0.0.1`. Forward them from the
-host you are installing on and use your own browser:
-
-```bash
-ssh -L 8081:127.0.0.1:8081 -L 43117:127.0.0.1:43117 root@<this host>
-```
-
-Keep the tunnel up while `login` waits. Do not reach for a public address to
-avoid the tunnel: the issuer is compared against the `iss` claim exactly, so
-changing it is [going public](#going-public), not a shortcut.
-
-Always pass `--issuer`. There is no discovery endpoint: the CLI infers the
-issuer only for `api.pipod.dev` and for a loopback server, and for every other
-hostname it falls back to the hosted `https://auth.pipod.dev` — so the moment
-your instance has a real domain, omitting `--issuer` sends your login to
-someone else's identity server. `--server` and `--issuer` are remembered, so
-later commands need neither; `PI_POD_OIDC_CLIENT_ID` has no flag and must stay
-exported until the first successful login writes it to the session file.
-
 ## Upgrading
 
 ```bash
@@ -271,24 +163,24 @@ migration it needs. In order, `upgrade`:
 5. recreates Zitadel when its pin moved — it applies its own migrations as it starts;
 6. stops the old server, then starts the new one, which applies its pending
    migrations and reopens launch admission if a migration held it before it serves,
-   and waits until it is healthy.
+   and waits until it is healthy;
+7. compares Zitadel's `pipod` project with the release's roles and apps, and warns
+   about any drift without changing anything.
 
-Then check the result:
+Then rebuild the CLI from the same checkout and check the result:
 
 ```bash
-cd selfhost && docker compose ps      # db, zitadel, server, sandbox, registry up; backup exited 0
-docker compose logs server | grep -E 'release:|migrations applied|schema is current|launch admission'
-cd .. && node cli/dist/cli.js doctor  # names the new revision
+pipod update    # rebuilds the CLI here; a CLI newer than the server is refused, so server first
+pipod doctor    # names the new revision
+cd selfhost && docker compose ps   # db, zitadel, server, sandbox, registry up; backup exited 0
 ```
 
-Two things `upgrade` does not do:
+If `upgrade` warned about drift in the Zitadel project, apply the release's version of it —
+it only ever creates and updates, never removes:
 
-- **Rebuild the CLI**: `cd cli && npm ci && npm run build`, or `pipod update`. A CLI
-  newer than the server is refused with a message saying so; upgrade the server
-  first.
-- **Change the Zitadel project**: run `reconcile-zitadel.mjs` from step 3 without
-  `--apply`. It reports drift between your instance and the release's roles and
-  apps; apply only what it lists.
+```bash
+cd selfhost && docker compose run --rm admin zitadel/scripts/reconcile-zitadel.mjs --apply
+```
 
 ### Rolling back
 
@@ -352,17 +244,17 @@ auth.example.com {
 }
 ```
 
-Then set these together in `.env` and `docker compose up -d` — they must agree, and
+Then set these together in `.env` and run `selfhost/upgrade` — they must agree, and
 a mismatch in any one of them is the usual cause of a login that returns a token the
 server rejects:
 
 | Where | Set to |
 | --- | --- |
 | `.env` | `ZITADEL_EXTERNALDOMAIN=auth.example.com`, `ZITADEL_EXTERNALPORT=443`, `ZITADEL_EXTERNALSECURE=true`, `ZITADEL_TLS_MODE=external` |
-| `.env` | `ZITADEL_ISSUER=https://auth.example.com`, `PUBLIC_URL=https://api.example.com` |
+| `.env` | `ZITADEL_ISSUER=https://auth.example.com` |
 | `.env`, only if you serve the web app | `WEB_ORIGINS=https://app.example.com` |
 | Zitadel Console | the `pipod-web` app's redirect URI, to `https://app.example.com/auth/callback` |
-| the CLI | `--issuer https://auth.example.com --server https://api.example.com` |
+| the CLI | `pipod login --server https://api.example.com` — the server tells it the new issuer |
 
 `ZITADEL_ISSUER` is compared exactly against the `iss` claim: no trailing slash,
 right scheme. The server still fetches signing keys over the Compose network
@@ -388,18 +280,20 @@ A Docker memory limit on the sandbox service would **not** bound sandboxes: crun
 places each sandbox's cgroup at the host cgroup root, outside the container's scope.
 Two settings in `.env` do the real work:
 
-- `PI_POD_SANDBOX_FLEET_MEMORY_GB` / `PI_POD_SANDBOX_FLEET_CPU` — kernel-enforced
-  ceiling on the whole sandbox subtree. This is what stops a bursting sandbox
-  from reclaiming memory out of Postgres, Zitadel, or the server on the machine that
-  also holds `SECRETS_KEK`.
-- `PI_POD_SANDBOX_RESERVE_MEMORY_GB` / `_CPU` — admission control refuses to commit
-  guarantees beyond `host total − reserve`.
+- `PI_POD_SANDBOX_RESERVE_MEMORY_GB` / `_CPU` (default 3 GB / 0.5) — what admission keeps
+  back for Postgres, Zitadel and the server: it refuses to commit guarantees beyond
+  `host total − reserve`.
+- `PI_POD_SANDBOX_FLEET_MEMORY_GB` / `_CPU` (default `auto`, the same `host total −
+  reserve`) — a kernel-enforced ceiling on the whole sandbox subtree. This is what stops a
+  bursting sandbox from reclaiming memory out of the services on the machine that also
+  holds `SECRETS_KEK`. Set a number instead to hold pods to less.
 
-Admission is a promise, not a measurement: it commits each live sandbox's whole
-memory ceiling against `min(host total − reserve, fleet ceiling)`, and refuses
-anything that does not fit. Exact fits are admitted. So the host has to be sized
-against the *pod shape you launch*, and the largest pod anyone may launch is yours
-to set in `.env`:
+Admission is a promise, not a measurement: it commits each live sandbox's whole memory
+ceiling against that budget and refuses anything that does not fit; exact fits are admitted.
+So a host runs as many pods as their *shapes* fit, whether or not they are busy — and a pod
+holds its share until it stops (on its own after 15 idle minutes; `pipod stop` or
+`pipod archive` at once). The budget is the host's total less the reserve, and the largest
+pod anyone may launch is yours to set in `.env`:
 
 - `POD_MAX_CPU` / `POD_MAX_MEMORY_GB` / `POD_MAX_DISK_GB` — the per-pod ceiling,
   default 2 vCPU / 4 GiB / 20 GiB. Compose hands the same values to the server, which
@@ -409,25 +303,22 @@ to set in `.env`:
   default shape still launches under a smaller ceiling; a request for more memory
   than the ceiling is refused, never shrunk.
 
-Two configurations, both verified end to end:
-
-| Host | `.env` | Admission budget | Pod shape |
+| Host | `.env` | Admission budget | Pods |
 | --- | --- | --- | --- |
-| 8 GB / 4 vCPU | the defaults: fleet 4 GB / 3 GB reserve, fleet CPU 3 / 0.5 reserve | 4 GiB, 3 cores | the standard 2 vCPU / 4 GiB — one at a time |
-| 4 GB / 2 vCPU | fleet 2 GB / 1.5 GB reserve, fleet CPU 1.5 / 0.5 reserve, `POD_MAX_CPU=1`, `POD_MAX_MEMORY_GB=2` | 2 GiB, 1.5 cores | 1 vCPU / 2 GiB |
+| 16 GB / 8 vCPU | the defaults | 12.1 GiB, 7.5 cores (measured on a 15.1 GiB host) | three at 2 vCPU / 4 GiB |
+| 8 GB / 4 vCPU | the defaults | about 4.7 GiB, 3.5 cores | one at 2 vCPU / 4 GiB |
+| 4 GB / 2 vCPU | `PI_POD_SANDBOX_RESERVE_MEMORY_GB=1.5`, `POD_MAX_CPU=1`, `POD_MAX_MEMORY_GB=2` | about 2.3 GiB, 1.5 cores | one at 1 vCPU / 2 GiB |
 
-A bigger machine takes bigger pods the same way: on a 32 GB / 8 vCPU host,
-for example, raise the fleet ceiling and then `POD_MAX_CPU=4` and
-`POD_MAX_MEMORY_GB=16`. Each launch then asks for the org or template shape,
-up to that ceiling. To make a smaller or larger shape the default instead of
-the ceiling, set it once in the org defaults — with the CLI from step 5, once
-you are signed in. They apply to every project; a project's own
-`.pi-pod/config.json` does not, because a project layer only reaches the server
-through a template, which the launcher offers to create:
+A bigger machine takes bigger pods the same way: on a 32 GB / 8 vCPU host, for example,
+`POD_MAX_CPU=4` and `POD_MAX_MEMORY_GB=16` (the fleet ceiling grows with the host on its
+own). Each launch then asks for the org or template shape, up to that ceiling. To run more,
+smaller pods — or to make a larger shape the default — set it once in the org defaults. They
+apply to every project; a project's own `.pi-pod/config.json` reaches the server only through
+a template, which the launcher offers to create:
 
 ```bash
-node cli/dist/cli.js settings org set resources.memoryGB 2
-node cli/dist/cli.js settings org set resources.cpu 1
+pipod settings org set resources.memoryGB 2
+pipod settings org set resources.cpu 1
 ```
 
 What the host currently believes is one request away, and it is the fastest way
@@ -517,13 +408,17 @@ cp selfhost/.env.example selfhost/.env && chmod 600 selfhost/.env
 
 In `selfhost/.env`, carry over `ZITADEL_MASTERKEY`, `ZITADEL_ADMIN_PASSWORD`,
 `SECRETS_KEK` (and `SECRETS_KEK_ID` / `SECRETS_KEK_PREVIOUS`), `PI_POD_SANDBOX_TOKEN`,
-`PUBLIC_URL`, `ZITADEL_API_AUDIENCE`, and any going-public values from the old
-`.env`, then add:
+`ZITADEL_API_AUDIENCE`, and any going-public values from the old `.env`, then add:
 
 ```sh
 COMPOSE_PROJECT_NAME=server   # the old directory's name: reuses its pgdata, sandbox_state and registry_data volumes
 POSTGRES_PASSWORD=pipod       # the password that layout's database was created with
+ZITADEL_PAT=<the token>       # your IAM_OWNER service user's personal access token
 ```
+
+That instance's Zitadel was set up by hand, so `selfhost/upgrade` and `selfhost/add-user`
+manage it with the token you made for it then (step 2 of the earlier guide). With it,
+`upgrade` also records the CLI's client id, which `pipod login` then reads from the server.
 
 For the former separate checkout the project name is `pi-pod-server`. Then
 `selfhost/upgrade` dumps the existing database, migrates it to this release, and
@@ -535,20 +430,22 @@ brings your existing pods' workspaces up under the new sandbox.
 | --- | --- |
 | `selfhost/upgrade` stops at `backup` and the server never starts | The dump failed — usually a full disk. `docker compose logs backup`. Nothing was upgraded. |
 | The server restarts in a loop; its log says *"upgraded by a newer pi pod release"* | You went back to an older release without restoring. Return to the newer one, or [restore](#restore) the dump taken before it. |
-| The server restarts in a loop; its log says *"applying migrations failed"* | `docker compose run --rm server node dist/migrate.js` prints the database error. Fix it, or restore the latest dump. |
+| The server restarts in a loop; its log says *"applying migrations failed"* | `docker compose stop server && docker compose run --rm server node dist/migrate.js` prints the database error. Fix it, or restore the latest dump. |
 | `invalid server environment: ... Required` at startup | A required `.env` value is empty. |
 | `invalid server environment` naming `SECRETS_KEK` with a value set | Placeholder (all-zero) or malformed base64 key — generate with `openssl rand -base64 32`. |
-| `zitadel` exits at first boot, `migration failed ... PasswordComplexityPolicy` | `ZITADEL_ADMIN_PASSWORD` does not satisfy the password policy — step 1. Fix it and `docker compose up -d`. |
+| `zitadel` exits at first boot, `migration failed ... PasswordComplexityPolicy` | A hand-edited `ZITADEL_ADMIN_PASSWORD` does not satisfy the password policy (upper and lower case, a number and a symbol). Fix it and run `selfhost/upgrade`. |
+| `selfhost/upgrade` says *"no Zitadel admin token"* | The instance's Zitadel was not set up by `selfhost/upgrade` — see [Moving from the hand-built layout](#moving-from-the-hand-built-layout). |
+| `selfhost/upgrade` says *"this host already has a pi pod database but no selfhost/.env"* | The secrets that database was created with are gone from this checkout. Restore `.env` from your backup; new secrets cannot open the old data. |
 | Launches fail with *"launch admission is held"* | The server log says why. An image built without `selfhost/upgrade` has no `SOURCE_SHA` to record and leaves it held; unresolved launches or host operations leave it for you: `docker compose exec server node dist/fleet.js launch-gate status`. |
 | Login succeeds, every API call is 401 | `ZITADEL_API_AUDIENCE` is still unset, or `ZITADEL_ISSUER` does not match `iss` exactly. |
-| Login succeeds, nothing is permitted | No org, no role grant, or a user created outside the organization that granted the roles — step 4. |
-| Invites and password resets never arrive | No SMTP provider, or one whose credential was dropped — step 4. |
+| Login succeeds, nothing is permitted | The user has no role grant, or lives outside the organization that granted the roles: `selfhost/add-user <email>` grants them. |
+| Invites and password resets never arrive | No SMTP provider, or one whose credential was dropped — [Email](#email). `selfhost/add-user <email> --new-password` lets someone in meanwhile. |
+| `pipod login` signs in to pipod.dev, or Zitadel says the client is unknown | The CLI is pointed at another server: `pipod login --server <this server>`. A server that predates sign-in discovery needs `--issuer` and `PI_POD_OIDC_CLIENT_ID`. |
 | `the image mirror is private` on launch | The base image was not published — the server was started without `selfhost/upgrade`. Run it. A failed pull is remembered for ten minutes. |
-| A launch fails naming capacity, or the server log says `provisioning failed: … (507)` | The host refused admission: the pod's memory or CPU ceiling does not fit `min(host total − reserve, fleet ceiling)`. Read the budget from the sandbox's `/v1/healthz` and either lower `POD_MAX_MEMORY_GB` / `POD_MAX_CPU` or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |
-| A launch fails with `memoryGB … exceeds this deployment's … per-sandbox limit` | The org, template or launch asked for more memory than `POD_MAX_MEMORY_GB`. Ask for less, or raise it in `.env` and `docker compose up -d` — [Sizing](#sizing-the-host-and-the-pod-shape). |
+| A launch fails with *"the server is full"*, or the server log says `provisioning failed: … (507)` | Running pods hold the whole budget. Stop one (`pipod stop`), lower the default shape, or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |
+| A launch fails with `memoryGB … exceeds this deployment's … per-sandbox limit` | The org, template or launch asked for more memory than `POD_MAX_MEMORY_GB`. Ask for less, or raise it in `.env` and run `selfhost/upgrade` — [Sizing](#sizing-the-host-and-the-pod-shape). |
 | A `.pi-pod/config.json` `resources` block changes nothing | A project layer only reaches the server through a template. Answer `y` to the launcher's *create template* prompt, or set the shape once in the org defaults: `pipod settings org set resources.memoryGB 2`. |
-| `failed to setup loop device` on launch | The host had no `/dev/loop*` when the sandbox container started: `modprobe loop`, then `docker compose up -d --force-recreate sandbox`. |
-| `pod transport supervisor stayed alive but did not connect` | `PUBLIC_URL` is not reachable from inside a pod. |
+| `pod transport supervisor stayed alive but did not connect` | A pod cannot reach the server: `PUBLIC_URL` (if you set one) is wrong, or `10.79.0.0/24` collides with a network of this host's — see the `pods` network in `compose.yml`. |
 | `doctor` reports a removed provider (`e2b`/`daytona`) | Stale project-layer `provider` pin — remove it; only `sandbox` is supported. |
 | Pods die after a few minutes idle | The sandbox's `PI_POD_SANDBOX_API_HOST` does not match its bridge gateway. |
 | Browser calls blocked by CORS | `WEB_ORIGINS` is empty, or lists a URL with a path or trailing slash instead of a bare origin. |

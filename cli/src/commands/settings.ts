@@ -15,7 +15,7 @@ export interface SettingsFlags {
 
 type SettingsScope = "user" | "org";
 
-const USAGE = "usage: pipod settings <user|org> [show | edit | set <key> <json-value>]";
+const USAGE = "usage: pipod settings <user|org> [show | edit | set <key> <value> | unset <key>]";
 
 function readBundle(client: AccountClient, scope: SettingsScope): Promise<ApiSettingsBundle> {
   return scope === "user" ? client.getUserSettings() : client.getOrgSettings();
@@ -61,7 +61,8 @@ export async function runSettings(args: string[], flags: SettingsFlags): Promise
   }
   if (action === "edit") return editSettings(scope, flags);
   if (action === "set") return setSetting(scope, rest, flags.client);
-  throw new PiPodError(`unknown settings action "${action}"`, { hint: "actions: show, edit, set" });
+  if (action === "unset") return unsetSetting(scope, rest, flags.client);
+  throw new PiPodError(`unknown settings action "${action}"`, { hint: "actions: show, edit, set, unset" });
 }
 
 async function editSettings(scope: SettingsScope, flags: SettingsFlags): Promise<number> {
@@ -92,24 +93,53 @@ async function editSettings(scope: SettingsScope, flags: SettingsFlags): Promise
 async function setSetting(scope: SettingsScope, args: string[], client: AccountClient): Promise<number> {
   const [dotPath, rawValue, ...extra] = args;
   if (!dotPath || rawValue === undefined || extra.length > 0) {
-    throw new PiPodError(`usage: pipod settings ${scope} set <key> <json-value>`);
+    throw new PiPodError(`usage: pipod settings ${scope} set <key> <value>`);
   }
+  // JSON when it parses (2, true, ["a"]), otherwise the text itself: `set pi.model a/b`.
   let value: unknown;
   try {
     value = JSON.parse(rawValue);
-  } catch (error) {
-    throw new PiPodError(`value is not valid JSON: ${error instanceof Error ? error.message : String(error)}`, {
-      hint: `quote strings as JSON, for example: pipod settings ${scope} set pi.model ` + "'\"provider/model\"'",
-    });
+  } catch {
+    value = rawValue;
   }
+  const version = await updateConfig(scope, client, (config) => setDotPath(config, dotPath, value));
+  info(`set ${scope} setting ${dotPath} (v${version})`);
+  return 0;
+}
+
+/** Remove one key, so the layers below decide it again. */
+async function unsetSetting(scope: SettingsScope, args: string[], client: AccountClient): Promise<number> {
+  const [dotPath, ...extra] = args;
+  if (!dotPath || extra.length > 0) throw new PiPodError(`usage: pipod settings ${scope} unset <key>`);
+  const version = await updateConfig(scope, client, (config) => unsetDotPath(config, dotPath));
+  info(`unset ${scope} setting ${dotPath} (v${version})`);
+  return 0;
+}
+
+/** Read the config, change it, check it, and write it back against the version read. */
+async function updateConfig(
+  scope: SettingsScope,
+  client: AccountClient,
+  change: (config: Record<string, unknown>) => void,
+): Promise<number> {
   const current = await readBundle(client, scope);
   const config = structuredClone(current.config);
-  setDotPath(config, dotPath, value);
+  change(config);
   assertBundleConfigSendable(config);
   assertBundleConfigValid(config, scope);
-  const result = await writeBundle(client, scope, { config, version: current.version });
-  info(`set ${scope} setting ${dotPath} (v${result.version})`);
-  return 0;
+  return (await writeBundle(client, scope, { config, version: current.version })).version;
+}
+
+/** Delete a dotted key, and any object it leaves empty. Absent already is fine. */
+function unsetDotPath(target: Record<string, unknown>, dotPath: string): void {
+  const [head, ...rest] = dotPath.split(".");
+  const child = target[head!];
+  if (rest.length === 0) {
+    delete target[head!];
+  } else if (child !== null && typeof child === "object" && !Array.isArray(child)) {
+    unsetDotPath(child as Record<string, unknown>, rest.join("."));
+    if (Object.keys(child).length === 0) delete target[head!];
+  }
 }
 
 function readObject(file: string): Record<string, unknown> {

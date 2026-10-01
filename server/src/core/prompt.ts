@@ -7,7 +7,7 @@
  */
 import * as readline from "node:readline/promises";
 import { Writable } from "node:stream";
-import { color } from "./log.js";
+import { color, warn } from "./log.js";
 
 export function isInteractive(): boolean {
   return process.stdin.isTTY === true && process.stderr.isTTY === true;
@@ -51,7 +51,13 @@ export interface ConfirmOptions {
 
 export async function confirm(question: string, opts: ConfirmOptions): Promise<boolean> {
   if (opts.assumeYes) return true;
-  if (!isInteractive()) return opts.nonInteractiveDefault;
+  if (!isInteractive()) {
+    // Declining unseen would make the command fail without a word about why.
+    if (!opts.nonInteractiveDefault) {
+      warn(`${question} — no: there is no terminal to answer${"assumeYes" in opts ? " (pass --yes to answer yes)" : ""}`);
+    }
+    return opts.nonInteractiveDefault;
+  }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   try {

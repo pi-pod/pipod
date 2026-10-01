@@ -21,6 +21,13 @@ export function isLoopbackRedirect(redirectUri: string): boolean {
 export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
+  // Public: where a signed-out client signs in. Nothing here is secret — the issuer and a
+  // public PKCE client id are both visible in every authorization URL.
+  r.get("/auth/config", async () => ({
+    issuer: env.ZITADEL_ISSUER,
+    ...(env.ZITADEL_CLI_CLIENT_ID ? { cliClientId: env.ZITADEL_CLI_CLIENT_ID } : {}),
+  }));
+
   r.get(
     "/me",
     { preHandler: [app.authenticate], config: { allowNoOrganization: true } },
