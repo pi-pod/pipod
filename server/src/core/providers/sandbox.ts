@@ -6,7 +6,6 @@ export {
   DEFAULT_ARCHIVE_MAX_DELAY_DAYS,
   DEFAULT_SANDBOX_IMAGE_MIRROR,
   SANDBOX_CAPABILITIES,
-  SANDBOX_RESOURCE_MAXIMUMS,
   SandboxServiceAdapter,
   SandboxServiceProvider,
   buildSandboxKeepaliveScript,

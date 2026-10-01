@@ -53,7 +53,7 @@ import { staticHostForUrl, hostById, currentHostUrl, requireHostAwake, openHostA
 import { getSandboxHostBackend } from "./hostbackend/index.js";
 import { buildCreateOwner } from "./owner-identity.js";
 import { platformToken } from "./operations.js";
-import { assertSandboxShapeGate, isAdmissionDetailLike, OWNED_BOAT_DISK_CEILING_GB, platformDiskDefault, resolveShape } from "./capacity.js";
+import { assertSandboxMemoryWithinDeployment, isAdmissionDetailLike, OWNED_BOAT_DISK_CEILING_GB, platformDiskDefault, resolveShape } from "./capacity.js";
 import { edition, ownedHosts } from "../edition.js";
 import { platformArchiveMaxMinutes, resolveEffectiveRetention } from "./retention-policy.js";
 import type { InitScope, PodServiceDeps, ResolvedConfigReport } from "./types.js";
@@ -497,11 +497,11 @@ export async function planPodLaunch(
   }
   const hostBackend = providerName === SANDBOX_PROVIDER_NAME ? getSandboxHostBackend(deps.env, { userId: args.userId, kek: deps.kek }) : null;
   // The requested shape is resolved BEFORE placement so the fleet choice sees actual
-  // fit (§6.4). The 8GiB gate refuses here — never clamped 8→4 downstream (§7.4).
+  // fit (§6.4). Memory above the deployment ceiling refuses here, never clamped (§7.4).
   // The platform disk default lands here too: 20 GiB for platform-funded native
   // launches with no explicit disk config (provenance-first, layers still win).
   if (providerName === SANDBOX_PROVIDER_NAME) {
-    assertSandboxShapeGate(config.resources, deps.env);
+    assertSandboxMemoryWithinDeployment(config.resources, deps.env);
     const provisionedDiskGB = ownedHosts(deps.env) ? await edition().ownedHostDiskGB(deps.env, args.userId) : undefined;
     const diskDefault = platformDiskDefault({
       providerName,
@@ -587,8 +587,6 @@ export async function planPodLaunch(
     ? providerForHost(identityHost,deps.kek,providerConfig,null).provider
     : await loadProvider(providerName, providerConfig);
 
-  // Preflight credential custody before consulting dynamic provider limits. Providers may
-  // publish those limits without auth, but a missing key still means no launch can use them.
   const credential = hostAuth || dedicatedBoat
     ? { envVar:"PI_POD_SANDBOX_TOKEN",source:"platform" as const }
     : await checkProviderCredential({
@@ -597,11 +595,8 @@ export async function planPodLaunch(
     provider: providerName,
     platformEnv: platformProviderEnv(deps.env),
   });
-  const maximums = credential && imageProvider.resourceMaximums
-    ? await imageProvider.resourceMaximums(deps.env)
-    : {};
-  // The deployment ceiling applies first so its warning names the real limit; the provider's
-  // own (possibly lower) maximums then apply to what is left.
+  // The deployment ceiling is the only server-side bound: each sandbox host still refuses a
+  // shape above its own PI_POD_SANDBOX_MAX_* as unsupported_shape.
   const deploymentMaximums = deploymentResourceMaximums(deps.env);
   if (ownedHosts(deps.env)) deploymentMaximums.diskGB = OWNED_BOAT_DISK_CEILING_GB;
   const deploymentResolution = effectiveProviderResources(
@@ -609,12 +604,7 @@ export async function planPodLaunch(
     config.resources,
     deploymentMaximums,
   );
-  const resourceResolution = effectiveProviderResources(
-    providerName,
-    deploymentResolution.resources,
-    maximums,
-  );
-  config.resources = resourceResolution.resources;
+  config.resources = deploymentResolution.resources;
 
   assertHostedProviderCompatibility(config, imageProvider);
   const imageBuildable = canPrepareManagedImage(imageProvider);
@@ -623,7 +613,6 @@ export async function planPodLaunch(
   if (providerError) throw badRequest(providerError.message, providerError.hint);
   const providerWarnings = [
     ...deploymentResolution.warnings,
-    ...resourceResolution.warnings,
     ...providerFindings
       .filter((finding) => finding.level === "warn")
       .map((finding) => finding.message),

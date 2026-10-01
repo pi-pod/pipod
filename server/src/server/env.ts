@@ -290,19 +290,14 @@ export const serverEnvShape = {
      * A requested zero/unlimited delay never bypasses this finite maximum.
      */
     POD_SANDBOX_MAX_ARCHIVE_AFTER_MINUTES: z.coerce.number().int().positive().default(60),
+    /**
+     * Largest pod this deployment launches (§7.4). Larger CPU and disk requests clamp with a
+     * warning; memory follows assertSandboxMemoryWithinDeployment. Each sandbox host also
+     * refuses a shape above its own PI_POD_SANDBOX_MAX_*, so raising a ceiling takes both sides.
+     */
     POD_MAX_CPU: z.coerce.number().positive().default(2),
     POD_MAX_MEMORY_GB: z.coerce.number().positive().default(4),
     POD_MAX_DISK_GB: z.coerce.number().positive().default(20),
-    /**
-     * Gated 8-GiB path (§7.4, default OFF). The standard stays 4 GiB: with the
-     * gate off, a request above 4 GiB is REFUSED (never silently clamped 8→4);
-     * with the gate on (and POD_MAX_MEMORY_GB raised), up to 8 GiB is admitted
-     * only on hosts whose capacity contract advertises a matching maxShape.
-     */
-    POD_ALLOW_8GIB_MEMORY: z
-      .enum(["true", "false"])
-      .default("false")
-      .transform((value) => value === "true"),
     /**
      * Bounded capacity wait (§6.6, default OFF until the wait contract is
      * published to clients). When on, otherwise-valid launches refused with

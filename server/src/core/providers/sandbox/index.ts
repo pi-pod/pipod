@@ -44,7 +44,6 @@ import {
 
 export const DEFAULT_ARCHIVE_MAX_DELAY_DAYS = 30;
 export const DEFAULT_SANDBOX_IMAGE_MIRROR = "ghcr.io/pi-pod";
-export const SANDBOX_RESOURCE_MAXIMUMS = Object.freeze({ cpu: 2, memoryGB: 4, diskGB: 20 });
 
 export const SANDBOX_CAPABILITIES: ProviderCapabilities = {
   serverSideArchive: true,
@@ -280,28 +279,6 @@ export class SandboxServiceProvider implements SandboxProvider {
     } catch (error) {
       mapApiError(error, "sandbox service authentication");
     }
-  }
-
-  async resourceMaximums(env?: { POD_ALLOW_8GIB_MEMORY?: unknown }): Promise<Partial<{ cpu: number; memoryGB: number; diskGB: number }>> {
-    // Gated 8-GiB path (§7.4): the static local maximum stays the 4-GiB standard.
-    // Only an explicit POD_ALLOW_8GIB_MEMORY=true deployment advertises 8 — and
-    // planning refuses >4 GiB outright while the gate is off, so no caller can
-    // silently clamp an advertised 8-GiB request down to 4. The flag rides the
-    // explicit env argument (boot snapshot on server paths); ambient is the
-    // CLI/test fallback. (Not a credential race: this flag is never overlaid
-    // by the provider credential chain — explicitness here is consistency.)
-    const allow8GiB =
-      env?.POD_ALLOW_8GIB_MEMORY === true ||
-      env?.POD_ALLOW_8GIB_MEMORY === "true" ||
-      (env === undefined && process.env["POD_ALLOW_8GIB_MEMORY"] === "true");
-    // Disk has no provider-wide maximum: the deployment ceiling (POD_MAX_DISK_GB, or the
-    // owned-boat ceiling) bounds the request, and each host refuses a disk above its own
-    // PI_POD_SANDBOX_MAX_DISK_GB as unsupported_shape. A fixed 20 here silently undid an
-    // operator's raised ceiling.
-    if (allow8GiB) {
-      return { cpu: 2, memoryGB: 8 };
-    }
-    return { cpu: SANDBOX_RESOURCE_MAXIMUMS.cpu, memoryGB: SANDBOX_RESOURCE_MAXIMUMS.memoryGB };
   }
 
   private imageRef(ref: string): string {

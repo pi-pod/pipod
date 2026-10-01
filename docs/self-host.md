@@ -13,7 +13,7 @@ the default shape: admission commits each sandbox's whole memory *ceiling*, so a
 2 vCPU / 4 GiB pod needs 4 GiB of admission budget, and that budget is
 `min(host total − reserve, fleet ceiling)`. On a 4 GB machine it is 2.83 GiB and every
 launch is refused before it starts. A 4 GB host is usable, but only with a smaller
-default pod shape — see [Sizing](#sizing-the-host-and-the-pod-shape). On Debian
+pod ceiling — see [Sizing](#sizing-the-host-and-the-pod-shape). On Debian
 stable, whose own `nodejs` is still 20:
 
 ```bash
@@ -398,17 +398,32 @@ Two settings in `.env` do the real work:
 Admission is a promise, not a measurement: it commits each live sandbox's whole
 memory ceiling against `min(host total − reserve, fleet ceiling)`, and refuses
 anything that does not fit. Exact fits are admitted. So the host has to be sized
-against the *pod shape you launch*. Two configurations, both verified end to end:
+against the *pod shape you launch*, and the largest pod anyone may launch is yours
+to set in `.env`:
 
-| Host | `.env` | Admission budget | Default pod shape |
+- `POD_MAX_CPU` / `POD_MAX_MEMORY_GB` / `POD_MAX_DISK_GB` — the per-pod ceiling,
+  default 2 vCPU / 4 GiB / 20 GiB. Compose hands the same values to the server, which
+  bounds each launch, and to the sandbox, which writes them into each sandbox's
+  cgroup and disk quota. A larger CPU or disk request is lowered to the ceiling
+  with a warning. Memory up to the standard 4 GiB is lowered the same way, so the
+  default shape still launches under a smaller ceiling; a request for more memory
+  than the ceiling is refused, never shrunk.
+
+Two configurations, both verified end to end:
+
+| Host | `.env` | Admission budget | Pod shape |
 | --- | --- | --- | --- |
 | 8 GB / 4 vCPU | the defaults: fleet 4 GB / 3 GB reserve, fleet CPU 3 / 0.5 reserve | 4 GiB, 3 cores | the standard 2 vCPU / 4 GiB — one at a time |
-| 4 GB / 2 vCPU | fleet 2 GB / 1.5 GB reserve, fleet CPU 1.5 / 0.5 reserve | 2 GiB, 1.5 cores | must be lowered to 1 vCPU / 2 GiB |
+| 4 GB / 2 vCPU | fleet 2 GB / 1.5 GB reserve, fleet CPU 1.5 / 0.5 reserve, `POD_MAX_CPU=1`, `POD_MAX_MEMORY_GB=2` | 2 GiB, 1.5 cores | 1 vCPU / 2 GiB |
 
-On a 4 GB host, lower the shape before the first launch — with the CLI from
-step 5, once you are signed in. The org defaults apply to every project; a
-project's own `.pi-pod/config.json` does not, because a project layer only
-reaches the server through a template, which the launcher offers to create:
+A bigger machine takes bigger pods the same way: on a 32 GB / 8 vCPU host,
+for example, raise the fleet ceiling and then `POD_MAX_CPU=4` and
+`POD_MAX_MEMORY_GB=16`. Each launch then asks for the org or template shape,
+up to that ceiling. To make a smaller or larger shape the default instead of
+the ceiling, set it once in the org defaults — with the CLI from step 5, once
+you are signed in. They apply to every project; a project's own
+`.pi-pod/config.json` does not, because a project layer only reaches the server
+through a template, which the launcher offers to create:
 
 ```bash
 node cli/dist/cli.js settings org set resources.memoryGB 2
@@ -429,17 +444,13 @@ or `DAYTONA_API_KEY`: those providers are removed and their names are retired.
 ### Settings `.env` does not cover
 
 Put them in `selfhost/compose.override.yml`, which Compose merges automatically and
-`git pull` never touches. A larger per-pod disk, for example, needs both sides: the
-server bounds the request, and the sandbox refuses a disk above its own maximum.
+`git pull` never touches. For example, a lower process limit per sandbox:
 
 ```yaml
 services:
-  server:
-    environment:
-      POD_MAX_DISK_GB: 40
   sandbox:
     environment:
-      PI_POD_SANDBOX_MAX_DISK_GB: 40
+      PI_POD_SANDBOX_MAX_PIDS: 1024
 ```
 
 The server's settings are listed in [`server/.env.example`](../server/.env.example);
@@ -533,7 +544,8 @@ brings your existing pods' workspaces up under the new sandbox.
 | Login succeeds, nothing is permitted | No org, no role grant, or a user created outside the organization that granted the roles — step 4. |
 | Invites and password resets never arrive | No SMTP provider, or one whose credential was dropped — step 4. |
 | `the image mirror is private` on launch | The base image was not published — the server was started without `selfhost/upgrade`. Run it. A failed pull is remembered for ten minutes. |
-| A launch fails naming capacity, or the server log says `provisioning failed: … (507)` | The host refused admission: the pod's memory or CPU ceiling does not fit `min(host total − reserve, fleet ceiling)`. Read the budget from the sandbox's `/v1/healthz` and either lower the default shape or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |
+| A launch fails naming capacity, or the server log says `provisioning failed: … (507)` | The host refused admission: the pod's memory or CPU ceiling does not fit `min(host total − reserve, fleet ceiling)`. Read the budget from the sandbox's `/v1/healthz` and either lower `POD_MAX_MEMORY_GB` / `POD_MAX_CPU` or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |
+| A launch fails with `memoryGB … exceeds this deployment's … per-sandbox limit` | The org, template or launch asked for more memory than `POD_MAX_MEMORY_GB`. Ask for less, or raise it in `.env` and `docker compose up -d` — [Sizing](#sizing-the-host-and-the-pod-shape). |
 | A `.pi-pod/config.json` `resources` block changes nothing | A project layer only reaches the server through a template. Answer `y` to the launcher's *create template* prompt, or set the shape once in the org defaults: `pipod settings org set resources.memoryGB 2`. |
 | `failed to setup loop device` on launch | The host had no `/dev/loop*` when the sandbox container started: `modprobe loop`, then `docker compose up -d --force-recreate sandbox`. |
 | `pod transport supervisor stayed alive but did not connect` | `PUBLIC_URL` is not reachable from inside a pod. |

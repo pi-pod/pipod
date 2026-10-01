@@ -47,7 +47,6 @@ describe("deployment launch limits (postgres)", { skip: databaseUrl ? false : "s
     name: "sandbox",
     capabilities: {},
     resolveImage: async () => null,
-    resourceMaximums: async () => ({ cpu: 2, memoryGB: 4, diskGB: 20 }),
   } as unknown as SandboxProvider;
   let app: FastifyInstance;
 
@@ -137,7 +136,6 @@ describe("deployment launch limits (postgres)", { skip: databaseUrl ? false : "s
     assert.equal(response.statusCode, 400, response.body);
     const body = response.json() as { error: string; detail?: unknown };
     assert.match(body.error ?? "", /exceeds this deployment's 4 GiB per-sandbox limit/);
-    assert.match(body.error ?? "", /8 GiB is gated/);
   });
 
   it("resolves a layer-less platform launch to the 2/4/20 standard with provenance", async () => {
