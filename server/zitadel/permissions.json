@@ -1,0 +1,49 @@
+{
+  "audience": "pipod-api",
+  "permissions": [
+    "pods:launch",
+    "pods:manage_any",
+    "templates:write",
+    "jobs:write",
+    "secrets:org:write",
+    "secrets:own:write",
+    "settings:own:write",
+    "policy:write",
+    "org:manage",
+    "audit:read"
+  ],
+  "composites": {
+    "member": [
+      "pods:launch",
+      "templates:write",
+      "jobs:write",
+      "secrets:own:write",
+      "settings:own:write",
+      "audit:read"
+    ],
+    "admin": [
+      "pods:launch",
+      "pods:manage_any",
+      "templates:write",
+      "jobs:write",
+      "secrets:org:write",
+      "secrets:own:write",
+      "settings:own:write",
+      "policy:write",
+      "org:manage",
+      "audit:read"
+    ],
+    "owner": [
+      "pods:launch",
+      "pods:manage_any",
+      "templates:write",
+      "jobs:write",
+      "secrets:org:write",
+      "secrets:own:write",
+      "settings:own:write",
+      "policy:write",
+      "org:manage",
+      "audit:read"
+    ]
+  }
+}

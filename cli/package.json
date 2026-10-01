@@ -1,0 +1,45 @@
+{
+  "name": "pi-pod",
+  "version": "0.1.2",
+  "description": "Run pi coding-agent sessions in server-managed pods",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "bin": {
+    "pipod": "dist/cli.js",
+    "pi-pod": "dist/cli.js",
+    "pp": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "image",
+    "docs",
+    "templates",
+    "scripts/ensure-user-config.mjs"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "postinstall": "node scripts/ensure-user-config.mjs",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "node --import tsx scripts/check-runtime-surface.ts",
+    "test:integration": "node --import tsx --test --test-concurrency=1 test/integration/account-cli.test.ts test/integration/account-login-me-http.test.ts test/integration/billing-cli.test.ts test/integration/capacity-wait-http.test.ts test/integration/cli-main.test.ts test/integration/local-extensions.test.ts test/integration/nested-pods.test.ts test/integration/oidc-security.test.ts test/integration/secrets-cli.test.ts test/integration/workspace-seeding.test.ts test/integration/workstation-wake-http.test.ts",
+    "check": "npm run lint && npm run typecheck",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-tui": "0.84.4",
+    "cron-parser": "^5.10.0",
+    "jose": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "ws": "^8.21.1"
+  }
+}

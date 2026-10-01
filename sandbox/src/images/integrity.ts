@@ -1,0 +1,75 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { lstat, readdir, readlink, readFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import * as path from "node:path";
+
+const exec = promisify(execFile);
+
+/** Never rewrite an OverlayFS lower still used by a live container on a service restart. */
+export async function assertLayerNotMounted(root: string): Promise<void> {
+  const mountinfo = await readFile("/proc/self/mountinfo", "utf8");
+  for (const line of mountinfo.split("\n")) {
+    const lowers = /(?:^|,)lowerdir=([^, ]+)/.exec(line)?.[1];
+    if (lowers?.split(":").some((entry) => entry.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8))) === root)) {
+      throw new Error(`cannot repair mounted OCI lower; stop its containers first: ${root}`);
+    }
+  }
+}
+
+/** Hash the real tree, never a sentinel or just the presence of a lower directory. */
+export async function layerTreeDigest(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  const hardlinks = new Map<string, string>();
+  async function visit(relative: string): Promise<void> {
+    const file = path.join(root, relative);
+    const s = await lstat(file);
+    hash.update(JSON.stringify([relative, s.mode, s.uid, s.gid, s.rdev]));
+    if (s.isSymbolicLink()) hash.update(JSON.stringify(await readlink(file)));
+    else if (s.isDirectory()) {
+      for (const name of (await readdir(file)).sort()) await visit(path.join(relative, name));
+    } else if (s.isFile()) {
+      const key = `${s.dev}:${s.ino}`;
+      hash.update(JSON.stringify([s.size, hardlinks.get(key) ?? relative]));
+      hardlinks.set(key, hardlinks.get(key) ?? relative);
+      for await (const chunk of createReadStream(file)) hash.update(chunk);
+    }
+  }
+  await visit("");
+  // Overlay opaque/whiteout and file capability xattrs are part of the image too.
+  // Do not follow image-controlled symlinks. Sort blocks: getfattr traversal order is not stable.
+  const { stdout } = await exec("getfattr", ["--absolute-names", "--physical", "-h", "-R", "-d", "-m", "-", "-e", "hex", root], {
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  hash.update(stdout.split("\n\n").filter(Boolean).map((block) => block.replace(`# file: ${root}`, "# file: .")).sort().join("\n\n"));
+  return hash.digest("hex");
+}
+
+export async function fileDigest(file: string, algorithm: string): Promise<string> {
+  const hash = createHash(algorithm);
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest("hex");
+}
+
+/** OCI diff_id is the digest of the uncompressed tar, not the compressed registry blob. */
+export async function verifyDiffDigest(blob: string, mediaType: string, digest: string): Promise<void> {
+  const [algorithm, expected] = digest.split(":");
+  const command = mediaType.includes("zstd") ? "zstd" : mediaType.includes("gzip") ? "gzip" : null;
+  if (!command) {
+    if (await fileDigest(blob, algorithm!) !== expected) throw new Error(`layer diff digest verification failed: ${digest}`);
+    return;
+  }
+  const hash = createHash(algorithm!);
+  const child = spawn(command, ["-dc", "--", blob], { stdio: ["ignore", "pipe", "pipe"] });
+  const done = new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`${command} decompression failed: ${code}`)));
+  });
+  child.stderr.resume();
+  // Attach a rejection handler immediately while stdout is being drained.
+  void done.catch(() => undefined);
+  for await (const chunk of child.stdout) hash.update(chunk);
+  await done;
+  if (hash.digest("hex") !== expected) throw new Error(`layer diff digest verification failed: ${digest}`);
+}

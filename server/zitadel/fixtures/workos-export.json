@@ -1,0 +1,29 @@
+{
+  "exportedAt": "2026-08-18T00:00:00Z",
+  "users": [
+    {
+      "id": "user_01DEV",
+      "email": "dev@example.com",
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "User",
+      "authMethod": "password"
+    },
+    {
+      "id": "user_01MIGRATE",
+      "email": "migrate@example.com",
+      "emailVerified": true,
+      "firstName": "Migrate",
+      "lastName": "User",
+      "authMethod": "password"
+    }
+  ],
+  "organizations": [
+    { "id": "org_01DEV", "name": "Dev Org", "personal": true },
+    { "id": "org_01ACME", "name": "Acme Imported", "personal": false }
+  ],
+  "memberships": [
+    { "userId": "user_01DEV", "organizationId": "org_01DEV", "role": "owner" },
+    { "userId": "user_01MIGRATE", "organizationId": "org_01ACME", "role": "member" }
+  ]
+}

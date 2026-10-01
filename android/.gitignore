@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+.kotlin/
+/local.properties
+/keystore.properties
+/.idea/
+.DS_Store
+
+# Gradle output, at the root and in every module.
+**/build/
+
+/captures
+.externalNativeBuild
+.cxx
+*.jks
+*.keystore
+
+# Screenshots and logs from a manual acceptance run on a device.
+/manual-evidence/
+__pycache__/

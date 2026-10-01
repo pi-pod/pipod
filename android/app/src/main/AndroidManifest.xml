@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Every screen talks to the pi pod server; without INTERNET in the *main*
+         manifest a release build installs fine and then fails every request. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".PiPodApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.PiPod">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.PiPod">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- The OIDC redirect, and nothing else.
+
+                 Narrow on purpose: a filter that took the whole `pipod` scheme
+                 let any installed app deliver something the sign-in would treat
+                 as its own authorization response. It is still only one half of
+                 the answer — a custom scheme cannot be claimed exclusively — so
+                 `ZitadelAuthService.completeCallback` refuses a redirect whose
+                 `state` is not this attempt's before it touches the proof. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pipod" android:host="auth" android:path="/callback" />
+            </intent-filter>
+
+            <!-- In-app deep links: pipod://pod/<id>, pipod://interaction/<id>,
+                 pipod://job/<id> — the three hosts `DeepLinkDestination` routes
+                 and the only ones the server and the approval banners emit. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pipod" android:host="pod" />
+                <data android:scheme="pipod" android:host="interaction" />
+                <data android:scheme="pipod" android:host="job" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

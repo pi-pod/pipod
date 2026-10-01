@@ -1,0 +1,21 @@
+title = "pi-pod"
+
+[extend]
+useDefault = true
+
+# Fixture allowlists match on content, not path: gitleaks' file walk skips an
+# entire file whose path an allowlist matches, which would blind the scan to a
+# real credential landing in that file later.
+
+[[allowlists]]
+description = "Generated bundles, not committed"
+paths = ['''^dist/''']
+
+[[allowlists]]
+description = "PEM armor for the ephemeral SSH keypair pi-pod builds at runtime — a string literal concatenated with the encoded body, not key material"
+regexTarget = "match"
+regexes = ['''-----BEGIN OPENSSH PRIVATE KEY-----\\n" \+''']
+
+[[allowlists]]
+description = "Redaction test fixtures — literals that exist to prove they get redacted"
+stopwords = ["sk-ant-supersecret", "sk-deep-secret"]

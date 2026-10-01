@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The pi glyph from pi-pod-flutter/branding/app_icon.svg, mapped from its 32x32
+     artboard onto the 72dp adaptive-icon safe zone inside a 108dp canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#EDE4D1"
+        android:pathData="M33.75,38.25h40.5v7.2h-40.5z" />
+    <path
+        android:fillColor="#EDE4D1"
+        android:pathData="M42.75,45.45h6.75v24.75h-6.75z" />
+    <path
+        android:fillColor="#EDE4D1"
+        android:pathData="M60.75,45.45h6.75v24.75h-6.75z" />
+</vector>

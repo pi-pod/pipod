@@ -1,0 +1,25 @@
+{
+  "$schema": "https://example.invalid/pi-pod/config.schema.json",
+
+  // ~/.pi-pod/config.json contains client preferences only. Pod settings belong in an
+  // organization default, a named template, or the project's .pi-pod/config.json.
+  // "template": "web-dev",
+
+  // Resolve op:// references in local project env files via the 1Password CLI.
+  // "secretResolver": { "type": "1password" },
+
+  "pi": {
+    "chords": {
+      "enabled": true,
+      "prefix": "ctrl+\\",
+      "bindings": {
+        "d": "detach",
+        "a": "archive",
+        "s": "status",
+        "l": "list",
+        "w": "switch"
+      }
+    },
+    "sessionNaming": "auto"
+  }
+}

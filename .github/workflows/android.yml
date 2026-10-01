@@ -1,0 +1,163 @@
+name: android
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require Gradle wrapper
+        run: |
+          if [ ! -x gradlew ]; then
+            echo "Expected a committed, executable Gradle wrapper (gradlew)."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Hosted SDK compile platform (live-parity, no secrets)
+        run: python3 scripts/acceptance/hosted_sdk.py assert-compile-platform
+
+      - name: Assemble debug
+        run: ./gradlew :app:assembleDebug
+
+      # Compile instrumentation (including live-acceptance tests) without an
+      # emulator or secrets. Live backend runs are workflow_dispatch only.
+      - name: Assemble instrumentation tests
+        run: ./gradlew :app:assembleInstrumentedReleaseAndroidTest
+
+      - name: Compile and shrink unsigned release
+        run: ./gradlew :app:assembleRelease
+
+      # Every screen talks to the pi-pod server. The release manifest must
+      # declare INTERNET or the app installs fine and every request fails.
+      # Source-level grep so this holds without signing or artifacts.
+      - name: Release manifest declares INTERNET
+        run: |
+          set -euo pipefail
+          if [ ! -f app/src/main/AndroidManifest.xml ]; then
+            echo "The release manifest is missing."
+            exit 1
+          fi
+          grep -Fq 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+
+      # Play identity is com.pipod; the Kotlin package stays com.pipod.app. The
+      # positive match alone is not enough because 'com.pipod' is a prefix of
+      # 'com.pipod.app', so both halves pin the exact value and refuse the old one.
+      # The release workflow that uploads to Play checks its own packageName.
+      - name: Play identity is com.pipod
+        run: |
+          set -euo pipefail
+          grep -Fq 'applicationId = "com.pipod"' app/build.gradle.kts
+          if grep -Fq 'applicationId = "com.pipod.app"' app/build.gradle.kts; then
+            echo "applicationId still points at the old com.pipod.app package."
+            exit 1
+          fi
+
+  # Production startup plus a test-qualified AuthGate/SessionStore integration smoke.
+  # No production secrets or live PKCE; not live acceptance.
+  emulator-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+      - name: Hosted SDK plus emulator image
+        run: python3 scripts/acceptance/hosted_sdk.py prepare-emulator
+      - name: Ephemeral CI signer (not production)
+        run: |
+          set -euo pipefail
+          EPH="$RUNNER_TEMP/ci-smoke.jks"
+          keytool -genkeypair -keystore "$EPH" -storetype JKS \
+            -storepass androidci -alias cismoke -keypass androidci \
+            -dname 'CN=pipod-ci-smoke' -keyalg RSA -keysize 2048 -validity 2 -noprompt
+          chmod 600 "$EPH"
+          echo "PIPOD_KEYSTORE_FILE=$EPH" >> "$GITHUB_ENV"
+          echo "PIPOD_KEYSTORE_PASSWORD=androidci" >> "$GITHUB_ENV"
+          echo "PIPOD_KEY_ALIAS=cismoke" >> "$GITHUB_ENV"
+          echo "PIPOD_KEY_PASSWORD=androidci" >> "$GITHUB_ENV"
+      - name: Assemble production Release + TEST-QUALIFIED instrumentedRelease pair
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleRelease :app:assembleInstrumentedRelease :app:assembleInstrumentedReleaseAndroidTest \
+            -PversionCode=1 -PversionName=0.1.0
+          APKSIGNER="$(python3 scripts/acceptance/hosted_sdk.py tool apksigner)"
+          QUAL_TEST=$(find app/build/outputs/apk/androidTest -name '*.apk' | head -1)
+          test -n "$QUAL_TEST"
+          "$APKSIGNER" sign \
+            --ks "$PIPOD_KEYSTORE_FILE" \
+            --ks-pass env:PIPOD_KEYSTORE_PASSWORD \
+            --ks-key-alias "$PIPOD_KEY_ALIAS" \
+            --key-pass env:PIPOD_KEY_PASSWORD \
+            "$QUAL_TEST"
+          echo "QUAL_TEST=$QUAL_TEST" >> "$GITHUB_ENV"
+      - name: Create, boot, production Release check, TEST-QUALIFIED assert, stop
+        run: |
+          set -euo pipefail
+          python3 scripts/acceptance/emulator_runtime.py create
+          cleanup() { python3 scripts/acceptance/emulator_runtime.py stop || true; }
+          trap cleanup EXIT
+          python3 scripts/acceptance/emulator_runtime.py boot
+          ADB="$(python3 scripts/acceptance/hosted_sdk.py tool adb)"
+          AAPT=$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/aapt | tail -1)
+          REL=app/build/outputs/apk/release/app-release.apk
+          test -f "$REL"
+          test -s app/build/outputs/mapping/release/mapping.txt
+          if "$AAPT" dump xmltree "$REL" AndroidManifest.xml | grep -Fq 'androidx.activity.ComponentActivity'; then
+            echo "production Release ships test ComponentActivity"
+            exit 1
+          fi
+          echo "production_release_minify ok"
+          echo "production_release_no_test_host ok"
+          "$ADB" -s emulator-5554 install -r "$REL"
+          "$ADB" -s emulator-5554 shell am start -n com.pipod/com.pipod.app.MainActivity
+          sleep 3
+          "$ADB" -s emulator-5554 shell pidof com.pipod | grep -q .
+          echo "production_release_started ok"
+          "$ADB" -s emulator-5554 uninstall com.pipod
+          QUAL=$(find app/build/outputs/apk -name '*.apk' ! -path '*androidTest*' ! -path '*release/app-release.apk' ! -path '*debug*' | head -1)
+          test -n "$QUAL"
+          echo "smoke_target TEST-QUALIFIED"
+          echo "not production Release"
+          "$ADB" -s emulator-5554 install -r "$QUAL"
+          "$ADB" -s emulator-5554 install -r "$QUAL_TEST"
+          python3 scripts/acceptance/run_instrument.py \
+            --class com.pipod.app.features.auth.AuthGateRestoreTest \
+            --test navigatingBetweenTabsDoesNotRestoreAgain

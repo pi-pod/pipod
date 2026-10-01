@@ -1,0 +1,492 @@
+# Manual testing
+
+Unit tests prove the ports are faithful. They do not prove the app works. Every feature
+gets exercised by *using* it before it counts as done.
+
+Screenshots are the evidence. A harness that reports PASS over a blank screen is still a
+failure: take a screenshot after every meaningful action and **look at it**.
+
+The final automated run passed **1000 tests (0 failures)** on the merged round-2 tree (874 before it, plus the round-2 regression tests from both slices, less one test deleted with the dead job-drafts badge; the count is updated whenever the suite grows). Root independently inspected
+[the pod list](screenshots/pods.png), [cold session replay with an image descriptor](screenshots/session-replay.png),
+[cold notification routing](screenshots/cold-notification-session.png), and
+[dark-mode message contrast](screenshots/session-dark.png) against the isolated fake-provider API.
+
+## The current Mac workflow
+
+Use **`tailscale ssh agent@mac-mini-m4`** as the standard macOS `agent` account.
+Maintainers read the native testing skill in their workspace
+first for auth-key-only Tailscale SSH enrollment, automatic host-key verification,
+exclusive use of shared devices and Device Hub input. No Mac password or SSH key
+is needed after the runner joins with the designated testing auth key.
+Historical feature coverage below is not re-verified by this host migration.
+
+```bash
+export PIPOD_REMOTE_DIR=work/pipod-ios-my-run  # unique directory for this pass
+# Default device: configured Agent iPhone; do not erase/delete it.
+# Set PIPOD_SIM_NAME only when intentionally creating a separate owned simulator.
+./tools/remote-build.sh sync
+./tools/remote-build.sh build
+./tools/remote-build.sh run  # pass approved Debug overrides only when needed
+UDID=$(./tools/remote-build.sh udid)
+tailscale ssh agent@mac-mini-m4 "xcrun simctl io '$UDID' screenshot '$PIPOD_REMOTE_DIR/shot.png'"
+tailscale ssh agent@mac-mini-m4 "cat '$PIPOD_REMOTE_DIR/shot.png'" > /tmp/pipod-ios.png
+```
+
+Inspect the PNG. Use the installed **`~/.local/bin/axe`** over SSH for real
+input: read `axe describe-ui --udid "$UDID"`, select an observed identifier or
+label with `axe tap`, use `axe type` / `axe swipe` / `axe button` as needed, and
+capture/inspect the result after every meaningful action. The root skill gives
+full examples and explains logical points versus screenshot pixels. AXe 1.8.0
+was input-verified as agent on this Xcode 27 host; no remote desktop login is
+needed for that workflow.
+
+The helper starts the registered Device Hub GUI launch service; an operator must
+log into agent after reboot. If using optional remote desktop input, ensure the
+displayed Mac session is agent first: remote screen authentication does not
+isolate the active admin desktop. Missing working UI input blocks acceptance;
+do not substitute build/install/log output for interaction.
+
+For a runner-local backend, hold loopback reverse forwards in a separate process:
+
+```bash
+tailscale ssh agent@mac-mini-m4 -N -o ExitOnForwardFailure=yes \
+  -R 127.0.0.1:18081:127.0.0.1:18081 \
+  -R 127.0.0.1:18093:127.0.0.1:18093
+```
+
+Choose unused per-run API/OIDC ports. Verify the API from the Mac. Keep test
+JWTs private and out of evidence; use normal app builds with ad-hoc simulator
+signing for Keychain. Do not run unit tests.
+
+Useful operations, executed in an agent shell with the selected UDID:
+
+```bash
+xcrun simctl openurl "$UDID" 'pipod://pod/<id>?fromSeq=12'
+xcrun simctl push "$UDID" com.pipod.app payload.json
+xcrun simctl spawn "$UDID" log stream --predicate 'processImagePath CONTAINS "PiPod"'
+xcrun simctl ui "$UDID" appearance dark
+```
+
+Never use `booted`, `shutdown all`, `erase all`, kill Device Hub, or delete the
+configured Agent iPhone. Delete only devices/artifacts created and owned by
+this pass. Record host/account, revision/build, UDID/runtime, backend/test user,
+actual input, expected/actual outcomes, inspected images and untested flows.
+
+## Signing in without a browser
+
+A Debug build launched with `-PIPOD_DEV_TOKEN <jwt>` signs itself in and lands on the pod
+list. That is the only way to get past sign-in unattended — `ASWebAuthenticationSession`
+needs a real browser and a real identity provider.
+
+Release builds ignore both launch arguments. Verify that too: a shipped app that could be
+re-pointed at another server, or signed into with a token, would be a security bug.
+
+Pass the token through a shell variable. Never write it into the repository, a filename, or
+a screenshot caption.
+
+## Coverage
+
+`[unit]` marks a behaviour that was covered by `PiPodTests` before the unit
+suites were removed, `[sim]` one exercised by hand on the simulator against a
+live server, and `[ui-fake]` a headless UI test against a loopback fixture.
+Unmarked items are **not yet verified** — that is the point of the list.
+
+### Auth
+- [unit] discovery rejects an issuer mismatch, plaintext, userinfo, or fragment
+- [unit] the authorization request carries PKCE S256, state and nonce; the verifier never
+      leaves the device
+- [unit] ID tokens are refused on bad issuer, audience, `azp`, subject, expiry,
+      not-before, issued-at or nonce
+- [unit] form bodies percent-encode `+`, so a token containing one is not corrupted
+- [unit] a single-use authorization proof; an incomplete one reads as absent
+- [unit] `invalid_grant` expires the session; a provider outage is transient and keeps the
+      refresh token
+- [unit] a 401 refreshes once, in single flight, and replays the request
+- [sim] a dev token signs in and lands on the pod list; relaunching with only
+      `-PIPOD_SERVER_URL` restores the session from the Keychain (needs an ad-hoc-signed
+      build — see the README)
+- [sim] full browser authorization-code + PKCE sign-in through
+      `ASWebAuthenticationSession` against a **test-only** OIDC provider: consent sheet,
+      provider page, `pipod://auth/callback` redirect, code exchange, RS256 ID-token
+      verification, signed-in pod list
+- [sim] relaunch performs the `refresh_token` grant against that provider, whose opaque
+      refresh token contains a literal `+` — the regression the form encoder exists for
+- [sim] cancelling in the browser returns to sign-in reading "Sign-in was cancelled.",
+      never the raw `access_denied`
+- [sim] a **Release** build ignores `-PIPOD_DEV_TOKEN` and stays signed out
+- [sim] a cold-start `pipod://auth/callback` is handled safely in every shape: a forged
+      `code`+`state` with no stored proof is refused ("PKCE verifier missing"), a forged
+      `state` **while a real sign-in is in flight** is refused ("the sign-in redirect did
+      not match this login attempt"), `error=access_denied` reads as cancelled, and a bare
+      callback is ignored. No crash, no partial session, no exchange on forged material.
+- [ ] sign-in against the real Zitadel instance, and RP-initiated sign-out clearing the
+      provider cookie — the fixture is not Zitadel
+- [ ] a cold-start callback that **succeeds** after the app was killed mid-browser-flow —
+      `ASWebAuthenticationSession` owns its own callback, so only the failure shapes above
+      reach the deep-link path in practice
+- [ ] switching organization by alias — needs a second organization and a browser session
+- [sim] sign-out from a signed-in session, then browser sign-in through the OIDC fixture in the same process: the app returns to the Pods tab at the root (no stale stack), composer drafts and approval receipts are gone, and the APNs device is unregistered before the tokens are cleared
+- [unit] sign-out clears the app-icon badge through the badge callback (a direct
+      write left the previous person's count on the springboard), and push forgets
+      what it had already announced so the next session's first count is silent
+- [sim] the same thing on the springboard: with notifications enabled and two
+      approvals waiting, the icon carried a red 2; signing out cleared it to no
+      badge at all. Sign-out has to be driven from a build launched *without*
+      `-PIPOD_DEV_TOKEN` (the dev build refuses it, by design), which the
+      Keychain-restored session allows.
+- [sim] an approval raised inside a live session moves the tab badge, the
+      pod-list notice row and the app-icon badge (1 → 2) without the inbox ever
+      being opened, and without a banner over the card already on screen
+- [unit] `push.unregister()` uses the device token persisted at registration, so a
+      sign-out before APNs answered still deletes the `devices` row; the stored
+      token is dropped only once the server accepted the delete
+- [sim] the DELETE is now really attempted at sign-out (CFNetwork task observed)
+      — and the server refuses it: `DELETE /v1/devices/:token` answers **414
+      `FST_ERR_MAX_PARAM_LENGTH`** for any token over 100 characters, and a
+      simulator APNs token is 160 hex characters. Reproduced with curl outside
+      the app: a 64-character token deletes (204), a 101-character one is 414.
+      Production device tokens are 64 hex, so this bites the simulator today and
+      any future longer token in the field; the fix for it is `maxParamLength` on
+      the server route, not in this app. The client keeps the stored token when
+      the delete is refused, so the next sign-out retries it.
+- [unit] switching organization clears billing, the approvals count, drafts and
+      receipts *before* `/v1/me` is read, so an org that sends no workstation
+      block cannot keep showing the previous org's plan
+- [unit] a provider `auth_url` event with no `instructions` still renders the
+      sign-in link (the server omits the key when the provider sent none), and an
+      `info` link with no label still opens; an `instructions` value that is
+      present but not a string is malformed and still drops the frame
+- [sim] Settings → Model providers → Connect → Anthropic (Claude Pro/Max) opens
+      the credential login sheet and renders the provider's `auth_url` event: the
+      sentence, the authorize URL, an Open button and the paste-the-redirect
+      prompt under it. Cancel closes it and tells the server. The fake provider
+      always sends `instructions` with that event, so the no-instructions variant
+      the fix is about was covered by a removed unit test only.
+
+### Pods
+- [sim] the list renders every state the server writes: running, asleep, starting, failed,
+      archived, teammate-owned
+- [sim] co-located children sit under their host and name it on the detail screen
+- [sim] search and filter narrow the list
+- [sim] a failed pod shows a human sentence, not raw server text
+- [unit] the server enum `active` never reaches a screen
+- [unit] a pod row the client cannot decode is counted, not silently dropped
+- [unit] `connection` (the server's own `connected`/`reconnecting`/`detached`/
+      `asleep` verdict) and `stateReasonCode` are decoded; a typed launch failure
+      reads as a sentence instead of `launch_failed:capacity_wait_expired: …`
+- [unit] the pod list, environments, jobs, a pod's sessions and job runs all ask
+      for the server's maximum page; the walk follows `before` (and `beforeId` on
+      `/jobs`, which has a real keyset cursor) and steps the cursor over rows that
+      share a boundary timestamp instead of skipping them
+- [unit] cancelling a capacity wait that has already finished (`cancelRequested:
+      true`, no `cancelled` key) reads as "nothing to cancel", not as a failure
+- [sim] pod detail shows resolved config, and archive/restore/delete confirm first
+- [unit] a missing launch-operation row offers an explicit same-ID Continue without
+      polling or automatically POSTing; uncertain transport outcomes hide Continue
+- [ui-fake] `LaunchRecoveryFakeUITests` on an owned iPhone 17 simulator: a fresh
+      Start POST receives fake 503, GET reports `not_found`, no second POST is
+      observed during a three-second pre-tap window, and tapping Continue sends
+      the same `operationId` in POST #2 and opens the fake pod conversation.
+      Exported recovery/session screenshots were inspected. The fixture has no
+      session WebSocket or model backend: the conversation shows a disconnect,
+      and model selection and first-prompt delivery are **not** validated here.
+      Opt in explicitly from the generated project on the Mac:
+      ```bash
+      TEST_RUNNER_PIPOD_UI_FAKE_LAUNCH=1 xcodebuild -project PiPod.xcodeproj \
+        -scheme PiPod-UITests -configuration Debug \
+        -destination "platform=iOS Simulator,id=$UDID" -parallel-testing-enabled NO \
+        -only-testing:PiPodUITests/LaunchRecoveryFakeUITests \
+        -resultBundlePath "$RESULT_BUNDLE" \
+        CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES test
+      ```
+      Xcode forwards the `TEST_RUNNER_` variable as `PIPOD_UI_FAKE_LAUNCH` in
+      the runner. Without the opt-in the test **skips**; only a result reporting
+      **1 passed, 0 failed, 0 skipped** counts. Use a new result-bundle path
+      per run and never run against a real API origin.
+- [ ] launching a pod and watching it come up — needs real provider credentials
+- [ ] a capacity wait and its cancel — needs a fleet under pressure
+
+### Workstation wait and billing (M5)
+- [unit] the host-demand 503 parses whole (reason allowlist, host-id grammar,
+      recomputed `statusHref`, `state` enum, clamped `retryAfterMs`, seven
+      operation fields); forged `statusHref`, bad host ids, out-of-range
+      `retryAfterMs`, malformed operations and unknown reasons read as absent
+- [unit] the wait state machine retries the original request, honours terminal
+      reasons, exhausts a clamped `deadlineAt` budget, cancels client-side only,
+      and clamps the poll interval to [5 s, 60 s] — all with an injected
+      clock/sleeper
+- [unit] a 4420 close with a host reason enters the workstation wait (ticket,
+      queued-send and socket paths); a 4420 without one stays the byte-identical
+      idle-pod path
+- [unit] the flat `workstation` block parses present (SaaS) and absent
+      (self-hosted, hidden); every field is independently optional; bad
+      numbers drop; unknown enums keep their numbers; no price or projection
+      is ever computed; the never-served nested `billing` shape parses to nil
+- [unit] `/v1/me` reads the block under either key (`workstation` or the older
+      `billing`), the way the pods envelope already did
+- [unit] all five 402 `StartBlockedReason` refusals name only allowlisted
+      fields that were sent, never poll, and never invent policy; the billing copy
+      is gated on 402 + `kind: "billing"`, so prose that merely reads like a
+      reason cannot print plan and dollar copy
+- [unit] the shared fleet's own refusals — the byte-exact `sandboxfleet.ts`
+      capacity 503 (`transition_capacity` wearing the same admission markers),
+      its non-retryable deployment variants, `host_unregistered` and the
+      `kind: "fleet"` unavailable shape — are never read as a personal
+      workstation wait; a host-demand refusal needs one of the server's six
+      allowlisted reasons or a validated host id
+- [unit] a host-demand refusal raised while the sandbox is still being prepared
+      enters the wait instead of painting a red "couldn't refresh" banner
+- [unit] a host-demand `error` frame that is not followed by its 4420 close is
+      dropped on the next frame, so a later ordinary sleep still reads as sleep
+- [sim] the pods list shows the workstation wait: anchor sentence, live
+      elapsed, `state`/`phase` detail, Check now / Stop waiting — against
+      `tools/m5-stub.py pods503`, which answers the production 503 shape.
+      Evidence: [workstation wait](screenshots/m5-workstation-wait.png).
+      The wait's re-issued request is the only proof of readiness: flipping the
+      stub to `billing` mid-wait admitted the list without a duplicate launch.
+- [sim] the same screen shows one billing row when the server sends the block
+      (`/v1/me` and the pods envelope share one parser), and nothing at all —
+      no placeholder, no zeroes, no empty header, no reserved space — when it
+      does not. Fixture evidence (old nested shape, still labelled fixtures):
+      [billing present](screenshots/m5-billing-present.png) vs
+      [billing absent](screenshots/m5-billing-absent.png), same screen.
+      Real-envelope evidence (stub `real` scenario serving the exact
+      production `GET /v1/me` workstation values captured 2026-09-10 read-only:
+      Standard · 6.2 of 200 hours · $40 cap):
+      [workstation row, real values](screenshots/m5-workstation-present-real-values.png)
+      vs [absent key, no row](screenshots/m5-workstation-absent.png).
+      Production itself was verified read-only (`GET /v1/me` 200 in 0.3 s with
+      the 17-key flat block; `GET /v1/billing/account` 200 in 0.2 s); the app
+      was not pointed at production (its launch registers a device, a write).
+- [sim] an exhausted budget says the workstation is still starting, keeps
+      files, and offers Keep waiting — never a tombstone or a duplicate-launch
+      prompt. Evidence: [budget notice](screenshots/m5-budget-notice.png).
+      (The stub's `deadlineAt` is long past, so the wait honestly clamped to its
+      one-minute floor and exhausted on schedule.)
+- [unit] the wait owns the task that drives it: `abandon()` (screen gone, or the
+      answer arrived another way) issues no further attempt and reports to
+      nobody, while `cancel()` (Stop waiting) still reports `.cancelled` so the
+      screen can say so. Starting one twice runs one loop.
+- [unit] a transport failure is ridden out for a read and ends an ambiguous
+      create wait without automatically re-issuing it. The native empty/template
+      launch carries a durable `operationId`: it checks scoped GET status first,
+      and only an explicit Continue resends that **same** ID. Legacy unkeyed
+      `POST /v1/pods` callers do not gain this contract. This does not prove
+      exactly-once provider execution.
+- [unit] `startsBlocked` / `startBlockedReason` reach the screen: each of the
+      five contract reasons chips in a danger tone and carries the server's own
+      sentence; an unknown reason still reads as blocked without inventing why
+- [unit] `GET /v1/billing/account` is read on refresh and on foreground; a 404
+      (the self-hosted case, where `/v1/billing` is never registered) is nil and
+      not an error, and a response carrying no block never erases what `/v1/me`
+      sent
+- [sim] a blocked account: `tools/m5-stub.py blocked <port>` serves
+      `startsBlocked: true` with `startBlockedReason` on `/v1/me`, the pods
+      envelope and `/v1/billing/account`. The plan line moves to the top of the
+      pod list with a danger chip and the sentence, and "New pod" is disabled.
+- [unit] plan-change quotes parse whole (id, plans, timing, required cent
+      amounts, recurring base, currency, optional state/dates/items); a quote
+      without usable amounts or identity is refused rather than reviewed as
+      zero; fractional and negative amounts are dropped
+- [unit] the review is truthful per timing: an immediate upgrade shows due-now
+      plus immediacy and the recurring monthly price (e.g. $50 — never "next
+      month free"); a period-end downgrade shows nothing-due-now, the dated
+      landing, and next period's price; a zero ongoing figure shows no line
+- [unit] preview posts `{"plan"}` and confirm posts `{"quoteId"}` — no
+      caller-selected plan, no caller amount; the confirm response parses the
+      quote beside the `applied` flag and the account snapshot
+- [unit] the surface is gated on `canChangePlan` (and omitted on billing 404),
+      except while an `applying` open quote is present: then the screen resumes
+      that same quote id; pending-plan, unreadable-schedule and
+      cancel-at-period-end truth parse from the account
+- [unit] refusals classify by status and code (402 `card_declined` /
+      `authentication_required` fails the quote; 409 `quote_stale` /
+      `quote_expired`, `cap_below_new_base`, `trial_plan_change_unavailable`;
+      404 unavailable) with unknown codes falling through to generic copy;
+      failed, stale and unavailable quotes demand a new preview and are never
+      replayed, while unknown outcomes (network loss, 5xx, unapplied 200)
+      retry the same id even past expiry
+- [unit] a 200 without `applied` beside an unchanged account grants nothing
+      (`plan_change_not_applied`) while the quote stays for a same-id retry;
+      success needs the explicit flag plus the account showing the target
+      (active plan, or pending plan for a period-end change); no payment URL
+      is parsed, surfaced, or logged — there is none on this API
+- [unit] a stale or 402-failed quote is dropped and a second confirm sends
+      nothing — a new price is never auto-confirmed and a failed id is never
+      replayed; a network loss, 5xx, or unapplied 200 retries the same quote
+      id even past expiry; a 402 names the portal and a new preview
+- [unit] every confirm (success or APIError) re-reads the account for
+      authoritative pending/cancel truth
+- [sim] Settings shows Change plan when `canChangePlan` is true (or an
+      `applying` open quote needs resuming), with the pending note beneath it;
+      the review screen shows the priced quote and an explicit Confirm;
+      `quote_stale` returns to the picker with the price-changed message and
+      confirms nothing until a new quote is reviewed
+- [ ] a real minutes-long resume against production, and the 4420 socket path
+      against the live gateway
+
+### Session
+- [sim] the transcript streams and markdown renders
+- [sim] a fenced code block has a visible 44pt copy action; inline code renders
+- [unit/sim] agent-authored links: only `http`, `https` and `mailto` are
+      tappable, and everything else (`pipod://`, `file://`, `javascript:`,
+      `data:`, `tel:`) keeps its words and loses the tap. A tap shows the
+      destination host and the whole address before anything opens, because the
+      label is arbitrary text the model chose
+- [unit] the composer holds the gateway's 64 KiB prompt cap: a remaining-count
+      appears within 1,000 characters of it, Send is refused past it, and the
+      refusal names the overage and the limit. Counted in UTF-16 units, which is
+      what the server counts
+- [unit/sim] attached images are downsampled once, off the main thread, to 144px
+      (`CGImageSourceCreateThumbnailAtIndex`) and drawn from that cache in both
+      the composer strip and the transcript — never a full-resolution
+      `UIImage(data:)` inside a `body`
+- [unit] a sandbox queued behind other people's (`preparationPhase:
+      "waiting-for-capacity"`) reads as starting and its preparation stage says
+      "Waiting for room on a machine", never "Ready"
+- [sim] tool cards render and expand (`TOOL`)
+- [sim] interrupt stops a long turn (`SLOW`)
+- [sim] the model and thinking level are on the toolbar without opening the picker, and
+      switching takes effect
+- [sim] approvals appear inline and resolve (`CONFIRM`, `SELECT`, `INPUT`, `EDITOR`), from
+      the conversation **and** from the Approvals tab; the turn resumes within a second,
+      one card clears, one receipt is left, and "pi is working" does not linger
+- [sim] every extension UI role reaches the screen — header, footer, both widget
+      placements, editor and overlay (`REMOTEUI` / `REMOTEUICLOSE`), repainting live
+      without stealing composer focus
+- [sim] reattaching restores the live surfaces from the gateway snapshot
+- [sim] ANSI styling stays legible in light and dark
+- [sim] stopping the pod **mid-turn** (`POST /v1/pods/:id/stop` during a `SLOW` turn) keeps
+      the whole transcript, marks the pod Unavailable with a Retry action, and explains the
+      interrupted turn inline; a **cold app restart** replays all of it from durable
+      history, and the composer changes to "Message pi (wakes the pod)…"
+- [sim] image attachments end to end: two PNGs staged as thumbnails, one removed, the other
+      sent with text — the server recorded `images: [{mimeType, bytes}]` matching the file
+      that survived removal, the turn completed, and a replay renders the size placeholder
+      the descriptor allows
+- [unit] a prompt that was in flight when the socket dropped is adopted by its
+      replayed echo on reconnect — one bubble, delivered — while a replayed turn
+      that merely reads the same never swallows a message typed after the attach
+- [sim] and on the device, in both shapes: (a) send, background the app in the
+      same gesture, let the whole turn complete server-side, foreground it >70 s
+      later (same pid — a warm reattach, not a cold start) → exactly one "You"
+      bubble, delivered, with its reply; (b) `POST /v1/pods/:id/stop` under a live
+      session, then send into the dead socket → the turn parks, wakes the pod,
+      flushes on the replacement session ("Pod woke up.") and appears exactly
+      once. An explicit stop is dispositioned `unavailable` by the server itself
+      (`session_ended {kind: "unavailable", reason: "explicit_stop"}`), and the
+      client renders the server's kind verbatim.
+- [unit] a gateway `error` frame ends the turn as failed (with Retry) instead of
+      leaving it on "Sending…" forever, and a prompt over the gateway's 64 KiB
+      limit is refused before it goes on the wire
+- [unit] `bash_execution_update`: the snapshot replayed after an attach replaces
+      the accumulated output even when it is only the server's last-64-KiB tail,
+      secrets stay redacted, and the accumulator is bounded and cleared on detach
+- [unit] `host_stopped` / `host_archived` / `persist_failed` are dispositioned the
+      way `gateway/session-state.ts` does, so a detached pod reads as asleep
+      rather than "unavailable"
+- [sim] attaching a photo asks for no photo-library permission at all: the
+      composer uses the out-of-process `PhotosPicker` (no `photoLibrary:`
+      argument) and reads only the picked item's `Data`, so there is no
+      authorization prompt, no denied state and no "Limited" library to handle.
+      `NSPhotoLibraryUsageDescription` is deliberately absent from the bundle
+- [ ] hardware-keyboard input into a non-editor remote-UI surface
+- [ ] a *real* agent runtime — every session behaviour above was driven by the scripted
+      fake provider, which is deterministic and does not reason, plan, or read images
+
+### Jobs, environments, settings
+- [unit] schedules read as sentences; an unrenderable trigger is refused, not guessed
+- [unit] a secret name is normalized to ASCII `[A-Z0-9_]` and bounded at 128
+      characters, the two rules the server's `ENV_NAME_RE` and
+      `SECRET_NAME_MAX_LENGTH` enforce
+- [unit] a job's `scope` decodes (`"user"` / `"org"`, absent = personal, unknown
+      never guessed as shared); a shared job is labelled "Shared with
+      organization" on the list and the detail, and pausing or deleting one says
+      it acts on everyone's schedule
+- [unit] a job whose environment can no longer be read says "Deleted
+      environment" rather than printing a raw template UUID
+- [sim] run history shows a distinct icon per status
+- [sim] environments expose their bake script and config, and editing one preserves the other
+- [sim] secrets round-trip write-only
+- [unit] a config-bundle save sends the version it read; a conflicting save is reported
+- [ ] Settings → Admin console appears only when `/auth/me` returns `adminConsoleUrl`
+- [ ] switching organization by alias re-authorizes
+
+### Platform
+- [unit] `pipod://pod/<id>?fromSeq=N`, `pipod://job/<id>`, `pipod://interaction/<id>` and
+      the web-path spellings all route
+- [sim] `simctl openurl` with a pod deep link opens that conversation directly, replaying
+      its history
+- [sim] light and dark both render the whole app legibly
+- [sim] the universal build runs on iPad: tabs, pod list, and Settings against the live
+      server
+- [unit] the built bundle declares both device families, all four iPad orientations, and
+      no `UIRequiresFullScreen`
+- [sim] the device registers with APNs on every authorized launch and the server stores it
+      as `ios | apns | sandbox`
+- [sim] `simctl push` delivers a **simulated** notification: banner, brand icon, and badge
+      all render
+- [unit] a real APNs payload shape (app keys beside `aps`, and nested under `data`) routes
+      to the pod, job or approvals inbox it names; `aps` itself is never read as app data
+- [sim] opening a notification **cold-starts the app and opens the correct stopped pod**,
+      restoring authentication and replaying its transcript. In iOS 26.5 Notification
+      Center, tap the stack to expand it, then swipe the notification right to open it.
+      A second tap only hints at this gesture. Root reproduced a real main-thread
+      assertion crash through this path, fixed delegate completion handlers to finish
+      on the main actor, then verified the complete flow again without a crash.
+      Evidence: [notification](screenshots/cold-notification.png) →
+      [correct conversation](screenshots/cold-notification-session.png).
+      The Debug test build embeds only fixture server/issuer URLs, never a JWT.
+- [unit/sim] outgoing messages retain accessible contrast in light and dark mode,
+      including pending delivery; non-error bubbles no longer fade their background
+- [unit] the recovery actions meet the 44pt minimum, measured by laying each one
+      out and reading its height back: `RefreshErrorTile` (shared by seven
+      screens), `WorkstationNoticeTile` (the only way out of an exhausted wait)
+      and both `WorkstationWaitCard` controls
+- [ ] real APNs delivery from Apple's gateway (this was `simctl push`, not APNs)
+- [ ] iPad Split View and Slide Over under real multitasking
+
+### Privacy manifest
+- [unit] `PrivacyInfo.xcprivacy` is present **in the built bundle**, declares
+      `NSPrivacyAccessedAPICategoryUserDefaults` with reason `CA92.1`, and declares no
+      tracking and no tracking domains
+
+The manifest covers required-reason APIs and tracking. It deliberately omits a
+collected-data declaration rather than asserting that the service collects nothing.
+Account and session-content disclosures must be reviewed separately for store release.
+
+### Release safety
+- [sim] a Release build compiles for `generic/platform=iOS` (real arm64 device slice)
+- [sim] the Release `Info.plist` carries the production server and issuer, bundle id
+      `com.pipod.app`, display name "pi pod", both device families, and
+      `ITSAppUsesNonExemptEncryption = false`
+- [sim] the Release entitlements expand `aps-environment` to `production`
+- [sim] a Release build ignores every `-PIPOD_*` launch argument
+- [ci] signed device archive and TestFlight upload using the migrated Apple secrets;
+      see the repository's `testflight` workflow for the latest build status
+- [ ] push against production APNs
+
+## The test backend
+
+The workspace runs an isolated `dev/main-fake.mts` server for this client. It is a scripted
+fake provider, not a sandbox host, so it covers the gateway and the API faithfully and
+covers real provisioning not at all.
+
+Prompt keywords, on a pod the fake provider actually owns: `TOOL`, `SLOW`, `CONFIRM`,
+`SELECT`, `INPUT`, `EDITOR`, `REMOTEUI`, `REMOTEUICLOSE`.
+
+Two things about it are load-bearing:
+
+- **Only attach to pods the fake provider launched.** Seeded `fixture-*` rows exist to make
+  the list and detail screens representative. Opening a session on one makes the server
+  honestly report the pod gone and flips that row for everyone.
+- **An interaction answer must carry `type: "extension_ui_response"`.** The gateway
+  forwards the answer unchanged to pi, which only releases the blocked prompt when the
+  frame has it. Without it the resolve still returns 200 and the card still clears, while
+  the agent's turn hangs until pi's 120s timeout — which reads exactly like a working
+  approval until you notice the reply never arrives. `InteractionResponse` in
+  `Core/Models/SessionModels.swift` is the one place that adds it; every answer, over REST
+  or the socket, goes through it.
+
+Not covered by this backend at all: real sandbox launches, production PKCE/OAuth, APNs
+push, and background wake. Do not report those as verified.

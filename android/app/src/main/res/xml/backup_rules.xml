@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tokens live in EncryptedSharedPreferences keyed by an Android Keystore key that
+     cannot leave the device, so a restored backup would be undecryptable noise.
+     Backup is disabled in the manifest; these rules keep it that way explicitly. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="database" path="." />
+    <exclude domain="file" path="." />
+</full-backup-content>

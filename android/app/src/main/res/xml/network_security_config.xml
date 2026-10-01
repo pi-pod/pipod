@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shipping configuration: TLS everywhere, no cleartext. The debug source set
+     overlays this file to allow plain HTTP to the emulator's host loopback so a
+     local pi-pod-server can be used without terminating TLS. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

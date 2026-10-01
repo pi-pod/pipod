@@ -1,0 +1,17 @@
+# Dependencies and build output (each component also ignores its own).
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Local secrets — never commit.
+.env
+.env.local
+.pi-pod/env
+
+# Local dev state and agent scratch.
+.dev/
+.pi-subagents/
+.firecrawl/

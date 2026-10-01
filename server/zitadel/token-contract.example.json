@@ -1,0 +1,27 @@
+{
+  "note": "Shape of a Zitadel v4 access token (JWT) for the pipod project with role assertion enabled and the `urn:zitadel:iam:user:resourceowner` scope. `aud` carries the generated project id plus the requesting app's client id. Role claims map each role key to the organizations that granted it; the server only honours grants attributed to the token's resource-owner organization.",
+  "iss": "https://auth.pipod.dev",
+  "aud": ["330045871823077377", "330045912398552065"],
+  "sub": "330046107525127169",
+  "email": "dev@example.com",
+  "name": "Dev User",
+  "urn:zitadel:iam:user:resourceowner:id": "330045650719285249",
+  "urn:zitadel:iam:user:resourceowner:name": "Dev Org",
+  "urn:zitadel:iam:user:resourceowner:primary_domain": "dev-org.auth.pipod.dev",
+  "urn:zitadel:iam:org:project:roles": {
+    "owner": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "pods:launch": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "pods:manage_any": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "templates:write": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "jobs:write": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "secrets:org:write": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "secrets:own:write": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "settings:own:write": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "policy:write": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "org:manage": { "330045650719285249": "dev-org.auth.pipod.dev" },
+    "audit:read": { "330045650719285249": "dev-org.auth.pipod.dev" }
+  },
+  "urn:zitadel:iam:org:project:330045871823077377:roles": {
+    "owner": { "330045650719285249": "dev-org.auth.pipod.dev" }
+  }
+}

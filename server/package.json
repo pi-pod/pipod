@@ -1,0 +1,53 @@
+{
+  "name": "pi-pod-server",
+  "version": "0.1.0",
+  "description": "Control plane for pi pod: REST API, session gateway, and lifecycle workers serving the CLI and mobile clients",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "bin": {
+    "pi-pod-server": "dist/main.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsup && node scripts/check-dist-sandbox-provider.mjs",
+    "check:core": "node --import tsx scripts/check-core-sync.ts",
+    "check:pi-pin": "node scripts/check-pi-pin.mjs",
+    "typecheck": "tsc --noEmit",
+    "dev": "ROLE=all node --import tsx src/server/main.ts",
+    "start": "node dist/main.js",
+    "migrate": "node --import tsx src/server/db/migrate-main.ts",
+    "fleet": "node --import tsx src/server/pods/sandboxfleet-cli.ts",
+    "secrets:maintenance": "node --import tsx src/secrets-maintenance.ts",
+    "check": "npm run check:core && npm run check:pi-pin && npm run typecheck",
+    "sync-core": "scripts/sync-core.sh",
+    "migrate:dist": "node dist/migrate.js",
+    "fleet:dist": "node dist/fleet.js",
+    "secrets:maintenance:dist": "node dist/secrets-maintenance.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-tui": "0.84.4",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/swagger": "^9.4.0",
+    "@fastify/websocket": "^11.0.1",
+    "@prometheus-io/client": "^0.16.1",
+    "cron-parser": "^5.6.2",
+    "fastify": "^5.2.0",
+    "fastify-type-provider-zod": "^4.0.2",
+    "jose": "^5.10.0",
+    "pg": "^8.13.1",
+    "pino": "^9.5.0",
+    "ws": "^8.21.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.11.10",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

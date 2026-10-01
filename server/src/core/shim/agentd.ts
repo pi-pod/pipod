@@ -1,0 +1,1216 @@
+/**
+ * src/shim/agentd.ts — pi-pod-agentd, the pod-side shim (§4.2).
+ *
+ * A single-file Node script (CommonJS, no dependencies), embedded in the launcher as source
+ * and uploaded via `sandbox.uploadFile` — the exact pattern of the keepalive watcher. It is
+ * not baked into the image, so shim fixes ship with pi-pod releases, not image rebuilds.
+ *
+ * Why a shim instead of running `pi --mode rpc` directly in the PTY: a PTY is a terminal, not
+ * a pipe — echo, CR/LF translation, flow-control bytes and kill characters all corrupt an
+ * 8-bit JSON stream. The shim spawns pi with plain pipes (no terminal semantics at all) and
+ * uses the PTY strictly as a byte carrier for base64-framed lines. It also outlives pi to
+ * report the exit code, and gives reattach a stable process to come back to.
+ */
+import { FRAME_PROTO_VERSION } from "../client/frames.js";
+import {
+  REMOTE_UI_INPUT_PREFIX,
+  REMOTE_UI_NOTIFICATION_PREFIX,
+} from "../remote-ui-protocol.js";
+
+/** Bumped when the shim's own behavior changes in a way the client must know about. */
+export const SHIM_VERSION = "13";
+
+/**
+ * The immediately preceding generation remains attachable in compatibility mode. Keep this
+ * explicit: a shim bump must confirm that its fallback is safe instead of assuming all skew is.
+ *
+ * v12 adds an argv-selected dial-out transport and v13 adds the `tui_manifest` control
+ * command without changing the PTY protocol or its replay semantics. A v12 gateway never
+ * sends `tui_manifest`, and a v13 gateway asking a v12 shim gets no answer and treats the
+ * capability as absent — the unchanged C/E/S framing keeps both directions safe.
+ */
+export const PREVIOUS_SHIM_VERSION = "12";
+
+/** Where the launcher uploads the shim (§6.1). */
+export const SHIM_PATH = "/tmp/pi-pod-agentd.cjs";
+
+/** Where the shim logs, for the handshake-timeout error to name (§12). */
+export const SHIM_LOG_PATH = "/tmp/pi-pod-agentd.log";
+
+/** Daemon supervisor ownership and readiness markers. */
+export const AGENTD_PID_PATH = "/tmp/pi-pod-agentd.pid";
+export const AGENTD_READY_PATH = "/tmp/pi-pod-agentd.ready";
+/** Backwards-friendly names alongside the process-specific exports. */
+export const SHIM_PID_PATH = AGENTD_PID_PATH;
+export const SHIM_READY_PATH = AGENTD_READY_PATH;
+
+/**
+ * Present while pi has work in flight (§8): an agent run that has not settled, or a
+ * compaction. The keepalive watcher reads it as its third "is pi working?" signal, covering
+ * silent model calls that burn no CPU and write nothing under ~/.pi. `agent_end` is not a
+ * settle boundary — retries and automatic compaction happen after it — so only
+ * `agent_settled` releases the agent half of the marker.
+ */
+export const TURN_MARKER_PATH = "/tmp/pi-pod-turn-active";
+
+export interface AgentdScriptOpts {
+  /** Where pi's exit status lands for the transport-drop fallback (§4.2). */
+  exitCodeFile: string;
+  /** Version of the generated Pi extension loaded by this child. */
+  extensionVersion?: number;
+  /** Test seam; production waits five seconds before signaling a pi that ignores EOF. */
+  shutdownFallbackMs?: number;
+  /** Test seam; production allows a timed dialog thirty seconds of clock skew before dropping it. */
+  dialogExpiryGraceMs?: number;
+  /** Test seam; production uses {@link TURN_MARKER_PATH}. */
+  turnMarkerPath?: string;
+  /** Test seam; production uses 4 MiB. */
+  outboxCapBytes?: number;
+  /** Test seam; production resumes the journal pump below 1 MiB. */
+  outboxLowWaterBytes?: number;
+  /** Test seam; production keeps 4000 journaled events. */
+  eventJournalMaxEvents?: number;
+  /** Test seam; production keeps 16 MiB of journaled events. */
+  eventJournalMaxBytes?: number;
+  /** Test seam; production elides journaled events over 1 MiB. */
+  maxEventFrameBytes?: number;
+  /** Test seam; production logs RPC responses over 8 MiB to the shim log. */
+  responseSizeWarnBytes?: number;
+  /** Test seam; production logs to {@link SHIM_LOG_PATH}. */
+  logFile?: string;
+  /** Test seam; production retries the journal pump every 250 ms while backlogged. */
+  pumpIntervalMs?: number;
+  /** Test seam; when true, `S {"cmd":"test_set_writable","bytes":N}` overrides stdout pressure. */
+  testWritableLength?: boolean;
+  /** Test seams for daemon ownership markers. */
+  pidFile?: string;
+  readyFile?: string;
+  /** Test seams for deterministic daemon reconnects and heartbeats. */
+  daemonReconnectInitialMs?: number;
+  daemonReconnectMaxMs?: number;
+  daemonPingIntervalMs?: number;
+  daemonReadDeadlineMs?: number;
+  /** Test seams for daemon WebSocket pressure. */
+  daemonHighWaterBytes?: number;
+  daemonLowWaterBytes?: number;
+}
+
+/**
+ * The shim source. Invoked as `node /tmp/pi-pod-agentd.cjs -- <pi argv...>`; everything after
+ * `--` is the pi command, spawned with plain pipes in the shim's own cwd (the clone — the PTY
+ * channel was opened there).
+ */
+export function buildAgentdScript(opts: AgentdScriptOpts): string {
+  return `// pi-pod-agentd — generated by pi-pod; do not edit (see src/shim/agentd.ts)
+"use strict";
+const { spawn, spawnSync, execFileSync } = require("node:child_process");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const { constants: osConstants } = require("node:os");
+
+const PROTO = ${FRAME_PROTO_VERSION};
+const SHIM_VERSION = ${JSON.stringify(SHIM_VERSION)};
+const EXTENSION_VERSION = ${opts.extensionVersion ?? 0};
+const EXIT_CODE_FILE = ${JSON.stringify(opts.exitCodeFile)};
+const LOG_FILE = ${JSON.stringify(opts.logFile ?? SHIM_LOG_PATH)};
+const TURN_MARKER = ${JSON.stringify(opts.turnMarkerPath ?? TURN_MARKER_PATH)};
+const LF = 0x0a;
+const SHUTDOWN_FALLBACK_MS = ${opts.shutdownFallbackMs ?? 5000};
+const REMOTE_UI_NOTIFICATION_PREFIX = ${JSON.stringify(REMOTE_UI_NOTIFICATION_PREFIX)};
+const REMOTE_UI_INPUT_PREFIX = ${JSON.stringify(REMOTE_UI_INPUT_PREFIX)};
+const AGENTD_PID_FILE = ${JSON.stringify(opts.pidFile ?? AGENTD_PID_PATH)};
+const AGENTD_READY_FILE = ${JSON.stringify(opts.readyFile ?? AGENTD_READY_PATH)};
+
+function log(msg) {
+  try {
+    fs.appendFileSync(LOG_FILE, new Date().toISOString() + " " + msg + "\\n");
+  } catch {}
+}
+
+// --- argv: supervisor flags precede "--"; everything after it is pi argv ----
+const sep = process.argv.indexOf("--");
+const supervisorArgv = process.argv.slice(2, sep === -1 ? process.argv.length : sep);
+const daemonMode = supervisorArgv.includes("--daemon");
+const piArgv = sep === -1 ? [] : process.argv.slice(sep + 1);
+if (piArgv.length === 0) {
+  log("no pi argv after --; exiting");
+  process.exit(2);
+}
+
+let ownsDaemonFiles = false;
+let supervisedPi = null;
+function livePid(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return e?.code !== "ESRCH"; }
+}
+function claimDaemonFiles() {
+  for (;;) {
+    try {
+      const fd = fs.openSync(AGENTD_PID_FILE, "wx", 0o600);
+      try { fs.writeFileSync(fd, String(process.pid)); } finally { fs.closeSync(fd); }
+      ownsDaemonFiles = true;
+      try { fs.unlinkSync(AGENTD_READY_FILE); } catch {}
+      return;
+    } catch (e) {
+      if (e?.code !== "EEXIST") throw e;
+      let incumbent = 0;
+      try { incumbent = Number(fs.readFileSync(AGENTD_PID_FILE, "utf8").trim()); } catch {}
+      if (livePid(incumbent)) {
+        log("refusing duplicate live daemon supervisor (pid " + incumbent + ")");
+        process.exit(73);
+      }
+      try { fs.unlinkSync(AGENTD_PID_FILE); } catch (unlinkError) {
+        if (unlinkError?.code !== "ENOENT") throw unlinkError;
+      }
+      try { fs.unlinkSync(AGENTD_READY_FILE); } catch {}
+    }
+  }
+}
+function clearDaemonReadyFile() {
+  if (!ownsDaemonFiles) return;
+  try {
+    if (fs.readFileSync(AGENTD_READY_FILE, "utf8").trim() === String(process.pid)) fs.unlinkSync(AGENTD_READY_FILE);
+  } catch {}
+}
+function cleanupDaemonFiles() {
+  if (!ownsDaemonFiles) return;
+  try {
+    if (fs.readFileSync(AGENTD_PID_FILE, "utf8").trim() === String(process.pid)) fs.unlinkSync(AGENTD_PID_FILE);
+  } catch {}
+  clearDaemonReadyFile();
+}
+if (daemonMode) {
+  try { claimDaemonFiles(); }
+  catch (e) { log("could not claim daemon pid file: " + e); process.exit(1); }
+  process.on("exit", cleanupDaemonFiles);
+  // A second shutdown signal while the first is still being handled must no-op instead
+  // of killing the daemon: teardown signals the process group and the direct child, so
+  // a redundant SIGTERM can land after once() removed the last listener — with no
+  // listener installed the redundant delivery is fatal and the daemon dies mid-cleanup
+  // with its pid/ready markers leaked. Keeping the listener installed keeps the
+  // redundant delivery caught, and the flag keeps the owned-process cleanup exact.
+  let shutdownSignal = null;
+  for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+    process.on(signal, () => {
+      if (shutdownSignal !== null) return;
+      shutdownSignal = signal;
+      log("received " + signal + " — stopping supervised pi and releasing daemon markers");
+      try { supervisedPi?.kill("SIGTERM"); } catch {}
+      cleanupDaemonFiles();
+      process.exit(code);
+    });
+  }
+}
+
+// --- terminal: belt-and-suspenders under the base64 framing (§4.2) ----------
+if (!daemonMode) {
+  try {
+    spawnSync("stty", ["raw", "-echo"], { stdio: ["inherit", "ignore", "ignore"] });
+  } catch {}
+}
+
+// --- frame output ------------------------------------------------------------
+// Node makes TTY writes blocking on POSIX, so a channel nobody drains — a dropped
+// connection, a phone that went to sleep — fills the kernel's PTY buffer and parks the
+// shim's whole event loop inside process.stdout.write(). The shim then stops reading pi's
+// stdout, pi's pipe backs up behind it, and pi stops mid-turn until someone reattaches. A
+// non-blocking stdout keeps the shim draining pi whatever the channel is doing; events
+// that pile up past the cap stay in the journal and are pumped once the channel drains.
+const OUTBOX_CAP_BYTES = ${opts.outboxCapBytes ?? 4 * 1024 * 1024};
+const OUTBOX_LOW_WATER_BYTES = ${opts.outboxLowWaterBytes ?? 1024 * 1024};
+const DAEMON_HIGH_WATER_BYTES = ${opts.daemonHighWaterBytes ?? 4 * 1024 * 1024};
+const DAEMON_LOW_WATER_BYTES = ${opts.daemonLowWaterBytes ?? 1024 * 1024};
+const PUMP_INTERVAL_MS = ${opts.pumpIntervalMs ?? 250};
+const TEST_WRITABLE = ${opts.testWritableLength === true};
+if (!daemonMode) {
+  try {
+    process.stdout._handle.setBlocking(false);
+  } catch (e) {
+    // Writes stay synchronous, which is the old behavior: congestion is then never reported.
+    log("could not make stdout non-blocking: " + e);
+  }
+}
+let testWritableLength = null;
+let daemonSocket = null;
+function transportBufferedAmount() {
+  if (daemonMode) return daemonSocket?.readyState === 1 ? daemonSocket.bufferedAmount : DAEMON_HIGH_WATER_BYTES + 1;
+  return testWritableLength == null ? process.stdout.writableLength : testWritableLength;
+}
+function transportHighWaterBytes() {
+  return daemonMode ? DAEMON_HIGH_WATER_BYTES : OUTBOX_CAP_BYTES;
+}
+function transportLowWaterBytes() {
+  return daemonMode ? DAEMON_LOW_WATER_BYTES : OUTBOX_LOW_WATER_BYTES;
+}
+let backloggedEvents = 0;
+let backlogging = false;
+function writeFrame(text, droppable) {
+  const highWater = transportHighWaterBytes();
+  if (droppable && transportBufferedAmount() > highWater) return false;
+  if (daemonMode) {
+    const socket = daemonSocket;
+    if (!socket || socket.readyState !== 1) return false;
+    // WebSocket message boundaries replace PTY newlines: exactly one frame line per text message.
+    const message = text.endsWith("\\n") ? text.slice(0, -1) : text;
+    try { socket.send(message); return true; }
+    catch (e) { log("websocket send failed: " + e); return false; }
+  }
+  process.stdout.write(text);
+  return true;
+}
+// An RPC response rides pi's stdout like any event, but it is the one line on this channel
+// nothing can recover: the reattach handshake replays events, the UI journal and the
+// cumulative snapshot, and none of them carry a reply to a command a client already sent.
+// Dropping one leaves that client awaiting a promise no later frame can settle — a session
+// that never finishes seeding and a terminal that never paints. pi writes the response
+// envelope (id, type, command, success) ahead of the payload, so the marker sits in the first
+// bytes of even a multi-megabyte reply and costs no parse of the payload to find.
+const RESPONSE_MARKER = '"type":"response"';
+const RESPONSE_MARKER_WINDOW = 256;
+const BASH_COMMAND_MARKER = '"command":"bash"';
+function isRpcResponse(jsonLine) {
+  return jsonLine.lastIndexOf(RESPONSE_MARKER, RESPONSE_MARKER_WINDOW) !== -1;
+}
+function isBashRpcResponse(jsonLine) {
+  return isRpcResponse(jsonLine) && jsonLine.indexOf(BASH_COMMAND_MARKER) !== -1;
+}
+const EVENT_JOURNAL_MAX_BYTES = ${opts.eventJournalMaxBytes ?? 16 * 1024 * 1024};
+const EVENT_JOURNAL_MAX_EVENTS = ${opts.eventJournalMaxEvents ?? 4000};
+// A single journaled event larger than this cannot be drained by any readiness window —
+// the frame decoder buffers until newline, so a multi-megabyte line sits in pendingBytes
+// with zero decoded frames and every attach times out. Elide it into an event_replay_gap
+// instead; the full output still lives in pi's session file on disk. RPC responses are
+// exempt: nothing can recover a dropped response, so an oversized one rides through.
+const MAX_EVENT_FRAME_BYTES = ${opts.maxEventFrameBytes ?? 1024 * 1024};
+// Telemetry, not policy: a response this large still rides through, but the shim log names
+// it (size and command) so the next transport-limit report starts with evidence instead of
+// a bare client-side timeout.
+const RESPONSE_SIZE_WARN_BYTES = ${opts.responseSizeWarnBytes ?? 8 * 1024 * 1024};
+let eventSeq = 0;
+let nextSendSeq = 1;
+const eventJournal = [];
+let eventJournalBytes = 0;
+let pumping = false;
+let pumpTimer = null;
+function journalEntry(seq) {
+  if (!eventJournal.length) return null;
+  const idx = seq - eventJournal[0].seq;
+  if (idx < 0 || idx >= eventJournal.length) return null;
+  const entry = eventJournal[idx];
+  return entry && entry.seq === seq ? entry : null;
+}
+function journalAgentEvent(jsonLine) {
+  if (isRpcResponse(jsonLine)) return;
+  eventSeq += 1;
+  // The journal must stay dense — journalEntry() indexes by seq - first — so an elided
+  // event still pushes an entry; only its payload and byte cost disappear.
+  const oversized = jsonLine.length > MAX_EVENT_FRAME_BYTES;
+  const entry = { seq: eventSeq, json: oversized ? null : jsonLine };
+  eventJournal.push(entry);
+  if (!oversized) eventJournalBytes += jsonLine.length;
+  while (eventJournal.length > EVENT_JOURNAL_MAX_EVENTS || eventJournalBytes > EVENT_JOURNAL_MAX_BYTES) {
+    const dropped = eventJournal.shift();
+    if (!dropped) break;
+    if (dropped.json != null) eventJournalBytes -= dropped.json.length;
+  }
+}
+function emitGap(fromSeq, toSeq) {
+  return emitControl({ event: "event_replay_gap", fromSeq: fromSeq, toSeq: toSeq });
+}
+function pumpJournal() {
+  if (pumping) return;
+  pumping = true;
+  try {
+    const first = eventJournal.length ? eventJournal[0].seq : eventSeq + 1;
+    if (nextSendSeq < first) {
+      if (!emitGap(nextSendSeq, first - 1)) return;
+      nextSendSeq = first;
+    }
+    while (nextSendSeq <= eventSeq && transportBufferedAmount() < transportHighWaterBytes()) {
+      const entry = journalEntry(nextSendSeq);
+      if (!entry || entry.json == null) {
+        if (!emitGap(nextSendSeq, nextSendSeq)) break;
+        nextSendSeq += 1;
+        continue;
+      }
+      if (!writeFrame("E " + Buffer.from(entry.json, "utf8").toString("base64") + "\\n", false)) break;
+      nextSendSeq += 1;
+    }
+    if (nextSendSeq <= eventSeq) {
+      backloggedEvents = eventSeq - nextSendSeq + 1;
+      if (!backlogging) {
+        backlogging = true;
+        log("channel stopped draining — backlogging events; pi keeps running");
+      }
+      if (!pumpTimer) {
+        pumpTimer = setInterval(() => {
+          if (nextSendSeq > eventSeq) {
+            if (pumpTimer) { clearInterval(pumpTimer); pumpTimer = null; }
+            return;
+          }
+          if (transportBufferedAmount() < transportLowWaterBytes()) pumpJournal();
+        }, PUMP_INTERVAL_MS);
+        if (pumpTimer.unref) pumpTimer.unref();
+      }
+    } else if (backlogging) {
+      backlogging = false;
+      log("channel draining again after backlogging " + backloggedEvents + " events");
+      backloggedEvents = 0;
+      if (pumpTimer) { clearInterval(pumpTimer); pumpTimer = null; }
+    } else if (pumpTimer) {
+      clearInterval(pumpTimer);
+      pumpTimer = null;
+    }
+  } finally {
+    pumping = false;
+  }
+}
+if (!daemonMode) {
+  process.stdout.on("drain", () => {
+    if (transportBufferedAmount() < transportLowWaterBytes()) pumpJournal();
+  });
+}
+function replayAgentEvents(since) {
+  const first = eventJournal.length ? eventJournal[0].seq : eventSeq + 1;
+  if (since + 1 < first && eventJournal.length) {
+    emitControl({ event: "event_replay_gap", fromSeq: since + 1, toSeq: first - 1 });
+  }
+  for (const entry of eventJournal) {
+    if (entry.seq <= since) continue;
+    if (entry.json == null) {
+      emitGap(entry.seq, entry.seq);
+      continue;
+    }
+    writeFrame("E " + Buffer.from(entry.json, "utf8").toString("base64") + "\\n", false);
+  }
+  emitControl({ event: "event_replay_end", lastSeq: eventSeq });
+  nextSendSeq = eventSeq + 1;
+}
+function flushJournalForResponse() {
+  // Causal: a bash RPC response must not overtake earlier journaled updates from that request.
+  // These writes are non-droppable, same as the response itself.
+  const first = eventJournal.length ? eventJournal[0].seq : eventSeq + 1;
+  if (nextSendSeq < first) {
+    emitGap(nextSendSeq, first - 1);
+    nextSendSeq = first;
+  }
+  while (nextSendSeq <= eventSeq) {
+    const entry = journalEntry(nextSendSeq);
+    if (!entry || entry.json == null) {
+      emitGap(nextSendSeq, nextSendSeq);
+      nextSendSeq += 1;
+      continue;
+    }
+    if (!writeFrame("E " + Buffer.from(entry.json, "utf8").toString("base64") + "\\n", false)) return;
+    nextSendSeq += 1;
+  }
+}
+function emitEvent(jsonLine) {
+  journalAgentEvent(jsonLine);
+  if (isRpcResponse(jsonLine)) {
+    if (jsonLine.length > RESPONSE_SIZE_WARN_BYTES) {
+      const command = /"command":"([^"]*)"/.exec(jsonLine.slice(0, RESPONSE_MARKER_WINDOW));
+      log("oversized rpc response riding through: " + jsonLine.length + " bytes" + (command ? " (" + command[1] + ")" : ""));
+    }
+    if (isBashRpcResponse(jsonLine)) flushJournalForResponse();
+    return writeFrame("E " + Buffer.from(jsonLine, "utf8").toString("base64") + "\\n", false);
+  }
+  pumpJournal();
+  return true;
+}
+// Control frames are the handshake and lifecycle surface, so they are never dropped; the
+// two bulk carriers (pi's stderr, mirror bytes) opt in.
+function emitControl(obj, droppable) {
+  return writeFrame("S " + JSON.stringify(obj) + "\\n", droppable === true);
+}
+
+// --- cumulative stream snapshot (§6.3) --------------------------------------
+// Pi 0.84's JSON/RPC output carries only assistant deltas. The shim is the one process
+// guaranteed to observe the whole turn, so retain one cumulative message for a client that
+// reattaches after missing message_start or any intervening deltas.
+let streamingMessage = null;
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+function applyStreamDelta(event) {
+  if (!streamingMessage || typeof event?.contentIndex !== "number" || event.contentIndex < 0) return;
+  const index = event.contentIndex;
+  const block = streamingMessage.content?.[index];
+  if (!Array.isArray(streamingMessage.content)) streamingMessage.content = [];
+  if (event.type === "text_start") streamingMessage.content[index] = { type: "text", text: "" };
+  else if (event.type === "text_delta") {
+    if (block?.type === "text") block.text += event.delta || "";
+    else streamingMessage.content[index] = { type: "text", text: event.delta || "" };
+  } else if (event.type === "text_end") {
+    streamingMessage.content[index] = { type: "text", text: event.content ?? (block?.type === "text" ? block.text : "") };
+  } else if (event.type === "thinking_start") streamingMessage.content[index] = { type: "thinking", thinking: "" };
+  else if (event.type === "thinking_delta") {
+    if (block?.type === "thinking") block.thinking += event.delta || "";
+    else streamingMessage.content[index] = { type: "thinking", thinking: event.delta || "" };
+  } else if (event.type === "thinking_end") {
+    streamingMessage.content[index] = { type: "thinking", thinking: event.content ?? (block?.type === "thinking" ? block.thinking : "") };
+  } else if (event.type === "toolcall_end" && event.toolCall) {
+    streamingMessage.content[index] = cloneJson(event.toolCall);
+  }
+}
+function trackStreaming(jsonLine) {
+  if (!jsonLine.includes('"message_') && !jsonLine.includes('"agent_start"')) return;
+  let event;
+  try { event = JSON.parse(jsonLine); } catch { return; }
+  if (event?.type === "agent_start") streamingMessage = null;
+  else if (event?.type === "message_start" && event.message?.role === "assistant") {
+    streamingMessage = cloneJson(event.message);
+  } else if (event?.type === "message_update") {
+    if (event.message?.role === "assistant") streamingMessage = cloneJson(event.message);
+    else applyStreamDelta(event.assistantMessageEvent);
+  } else if (event?.type === "message_end" && event.message?.role === "assistant") {
+    streamingMessage = null;
+  }
+}
+
+// --- work marker: the keepalive's third signal (§8) --------------------------
+function clearTurnMarker() {
+  try {
+    if (fs.readFileSync(TURN_MARKER, "utf8").trim() === String(process.pid)) fs.unlinkSync(TURN_MARKER);
+  } catch {}
+
+}
+let agentActive = false;
+let compactionActive = false;
+function syncTurnMarker() {
+  if (agentActive || compactionActive) {
+    // PID ownership lets the keepalive reject a marker left behind by a crashed shim.
+    try { fs.writeFileSync(TURN_MARKER, String(process.pid)); } catch {}
+  } else {
+    clearTurnMarker();
+  }
+  noteBackgroundWork();
+
+}
+let lastBackgroundCount = 0;
+function noteBackgroundWork() {
+  let raw = "";
+  try { raw = fs.readFileSync(TURN_MARKER, "utf8").trim(); } catch { raw = ""; }
+  const heldByOther = raw !== "" && raw !== String(process.pid);
+  const count = heldByOther && !agentActive && !compactionActive ? 1 : 0;
+  if (count === lastBackgroundCount) return;
+  lastBackgroundCount = count;
+  emitControl({ event: "background_work", active: count > 0, count });
+
+}
+// --- extension-UI journal (§5.3) ---------------------------------------------
+// Ordinary fire-and-forget UI is retained as before. Remote component surfaces have their
+// own bounded latest-frame + pending-input journal: frame streams must not evict user toasts,
+// while a reconnect must still recover the one request Pi is waiting for. Blocking dialogs
+// (tool approvals, extension prompts) are journaled for the same reason: pi's turn is parked
+// inside one until its extension_ui_response arrives, so a client that reattaches after the
+// dialog was emitted must be told about it or the session never moves again.
+const UI_RETAINED_KEY_CAP = 100;
+const UI_NOTIFY_LOG_CAP = 100;
+const UI_NOTIFY_REPLAY_CAP = 20;
+const REMOTE_UI_SURFACE_CAP = 32;
+// pi resolves a timed dialog itself; the grace covers clock skew before we stop replaying it.
+const DIALOG_EXPIRY_GRACE_MS = ${opts.dialogExpiryGraceMs ?? 30000};
+// Inverted allowlist, as the gateway classifies interactions: an unrecognized method that
+// carries no timeout is assumed blocking, because a dialog that hangs silently is the
+// failure this journal exists to prevent.
+const NON_BLOCKING_UI_METHODS = new Set([
+  "notify", "setStatus", "set_status", "setWidget", "set_widget",
+  "setTitle", "set_title", "set_editor_text", "setEditorText",
+]);
+let uiSeq = 0;
+const uiNotifyLog = [];
+const uiRetained = { status: new Map(), widget: new Map(), title: null };
+const remoteUiFrames = new Map();
+const remoteUiPending = new Map();
+const pendingDialogs = new Map();
+
+function decodeRemoteUiEnvelope(encoded) {
+  if (typeof encoded !== "string" || !/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+  try {
+    const value = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (value && typeof value.surfaceId === "string") return value;
+    if (value?.kind === "control" && typeof value.action === "string") {
+      return { ...value, surfaceId: "control:" + value.action };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberRemoteUi(map, key, entry) {
+  map.delete(key);
+  map.set(key, entry);
+  while (map.size > REMOTE_UI_SURFACE_CAP) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+// Substring first so the JSON.parse cost is only paid on candidate lines, same posture as
+// trackWork. A remote surface input and an ordinary blocking dialog are both journaled for
+// the same reason: pi waits on them, so they must stay replayable until the response lands.
+function journalUiLine(text) {
+  if (!text.includes('"extension_ui_request"')) return text;
+  let msg;
+  try { msg = JSON.parse(text); } catch { return text; }
+  if (!msg || msg.type !== "extension_ui_request") return text;
+  const method = msg.method;
+
+  let remoteEnvelope = null;
+  if (method === "input" && typeof msg.title === "string" && msg.title.startsWith(REMOTE_UI_INPUT_PREFIX)) {
+    remoteEnvelope = decodeRemoteUiEnvelope(msg.title.slice(REMOTE_UI_INPUT_PREFIX.length));
+  } else if (method === "notify" && typeof msg.message === "string" && msg.message.startsWith(REMOTE_UI_NOTIFICATION_PREFIX)) {
+    remoteEnvelope = decodeRemoteUiEnvelope(msg.message.slice(REMOTE_UI_NOTIFICATION_PREFIX.length));
+  }
+  if (remoteEnvelope) {
+    msg.podSeq = ++uiSeq;
+    const entry = { seq: msg.podSeq, json: JSON.stringify(msg), surfaceId: remoteEnvelope.surfaceId };
+    if (method === "input") rememberRemoteUi(remoteUiPending, String(msg.id || ""), entry);
+    else rememberRemoteUi(remoteUiFrames, remoteEnvelope.surfaceId, entry);
+    if (remoteEnvelope.kind === "close") {
+      for (const [id, pending] of remoteUiPending) if (pending.surfaceId === remoteEnvelope.surfaceId) remoteUiPending.delete(id);
+    }
+    return entry.json;
+  }
+
+  if (method !== "notify" && method !== "setStatus" && method !== "setWidget" && method !== "setTitle") {
+    const blocking = method === "select" || method === "confirm" || method === "input" || method === "editor" ||
+      (!NON_BLOCKING_UI_METHODS.has(method) && msg.timeout === undefined);
+    // Without an id nothing can answer it, so there is nothing to keep pending either.
+    if (!blocking || typeof msg.id !== "string" || msg.id === "") return text;
+    msg.podSeq = ++uiSeq;
+    const dialog = { seq: msg.podSeq, json: JSON.stringify(msg) };
+    // pi auto-resolves a timed dialog on its own; replaying an expired one renders a dead surface.
+    if (typeof msg.timeout === "number" && msg.timeout > 0) {
+      dialog.expiresAt = Date.now() + msg.timeout + DIALOG_EXPIRY_GRACE_MS;
+    }
+    rememberRemoteUi(pendingDialogs, msg.id, dialog);
+    return dialog.json;
+  }
+  msg.podSeq = ++uiSeq;
+  const tagged = JSON.stringify(msg);
+  const entry = { seq: msg.podSeq, json: tagged };
+  if (method === "notify") {
+    uiNotifyLog.push(entry);
+    if (uiNotifyLog.length > UI_NOTIFY_LOG_CAP) uiNotifyLog.shift();
+  } else if (method === "setTitle") {
+    uiRetained.title = entry;
+  } else {
+    const map = method === "setStatus" ? uiRetained.status : uiRetained.widget;
+    const key = String((method === "setStatus" ? msg.statusKey : msg.widgetKey) || "");
+    map.delete(key);
+    map.set(key, entry);
+    if (map.size > UI_RETAINED_KEY_CAP) {
+      const oldest = map.keys().next().value;
+      if (oldest !== undefined) map.delete(oldest);
+    }
+  }
+  return tagged;
+}
+
+// Retained state replays in full (a clear is state too); notifications replay only a recent
+// tail. Everything pi is still blocked on replays regardless of since: that counter tracks
+// delivery, and delivery is not resolution — a client that received a dialog and then lost it
+// to a session rebind has seq <= since and still needs it back. Replay stays seq-ordered so a
+// dialog and the retained state around it arrive in the order pi emitted them.
+function replayUi(since) {
+  const entries = [];
+  for (const entry of uiRetained.status.values()) entries.push(entry);
+  for (const entry of uiRetained.widget.values()) entries.push(entry);
+  if (uiRetained.title) entries.push(uiRetained.title);
+  for (const entry of uiNotifyLog.slice(-UI_NOTIFY_REPLAY_CAP)) entries.push(entry);
+  for (const entry of remoteUiFrames.values()) entries.push(entry);
+  const unanswered = [];
+  for (const entry of remoteUiPending.values()) unanswered.push(entry);
+  const now = Date.now();
+  for (const [id, dialog] of pendingDialogs) {
+    if (dialog.expiresAt && dialog.expiresAt <= now) pendingDialogs.delete(id);
+    else unanswered.push(dialog);
+  }
+  const replay = entries.filter((entry) => entry.seq > since).concat(unanswered);
+  replay.sort((a, b) => a.seq - b.seq);
+  for (const entry of replay) emitEvent(entry.json);
+}
+
+// --- session mirror (§5.6) ---------------------------------------------------
+// pi's session JSONL lives on the pod's disk and dies with the pod. Once a client asks with
+// S {"cmd":"mirror_sync","files":{rel:bytes}}, the shim polls ~/.pi/agent/sessions and
+// streams appended bytes as mirror_data control frames, so the client keeps a shadow copy
+// that survives pod deletion. The client's declared sizes let a reattach resume mid-file.
+const MIRROR_ROOT = (process.env.HOME || "/root") + "/.pi/agent/sessions";
+const MIRROR_POLL_MS = 2000;
+const MIRROR_CHUNK_BYTES = 64 * 1024;
+const MIRROR_TICK_BYTE_CAP = 1024 * 1024;
+const MIRROR_FILE_CAP = 256;
+let mirrorOffsets = null; // Map rel → bytes sent; null until a client opts in
+let mirrorTimer = null;
+let mirrorTicking = false;
+
+function mirrorFiles() {
+  const files = [];
+  const walk = (dir, depth) => {
+    if (depth > 4 || files.length >= MIRROR_FILE_CAP) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (files.length >= MIRROR_FILE_CAP) return;
+      const full = dir + "/" + entry.name;
+      if (entry.isDirectory()) walk(full, depth + 1);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(full);
+    }
+  };
+  walk(MIRROR_ROOT, 0);
+  return files;
+}
+
+function readMirrorChunk(file, offset, length) {
+  const fd = fs.openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(length);
+    const read = fs.readSync(fd, buf, 0, length, offset);
+    return buf.subarray(0, read);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// A per-tick byte budget bounds how much a busy session may put on the channel at once;
+// whatever does not fit this tick goes out on the next. An offset-0 chunk tells the client
+// to start the file over — the resend path for a truncated or rewritten session file.
+function mirrorTick() {
+  if (!mirrorOffsets || mirrorTicking) return;
+  mirrorTicking = true;
+  try {
+    let budget = MIRROR_TICK_BYTE_CAP;
+    for (const full of mirrorFiles()) {
+      if (budget <= 0) return;
+      const rel = full.slice(MIRROR_ROOT.length + 1);
+      let size;
+      try { size = fs.statSync(full).size; } catch { continue; }
+      let sent = mirrorOffsets.get(rel);
+      if (typeof sent !== "number" || sent > size) sent = 0;
+      while (sent < size && budget > 0) {
+        const want = Math.min(size - sent, MIRROR_CHUNK_BYTES, budget);
+        let data;
+        try { data = readMirrorChunk(full, sent, want); } catch { break; }
+        if (data.length === 0) break;
+        // A dropped chunk must not advance the offset, or the client's copy keeps a hole.
+        if (!emitControl({ event: "mirror_data", path: rel, offset: sent, data: data.toString("base64") }, true)) break;
+        sent += data.length;
+        budget -= data.length;
+      }
+      mirrorOffsets.set(rel, sent);
+    }
+  } finally {
+    mirrorTicking = false;
+  }
+}
+
+function startMirror(files) {
+  mirrorOffsets = new Map();
+  if (files && typeof files === "object") {
+    for (const key of Object.keys(files)) {
+      const size = files[key];
+      if (typeof size === "number" && size >= 0) mirrorOffsets.set(key, size);
+    }
+  }
+  if (!mirrorTimer) {
+    mirrorTimer = setInterval(mirrorTick, MIRROR_POLL_MS);
+    if (mirrorTimer.unref) mirrorTimer.unref();
+  }
+  mirrorTick();
+}
+
+// Substring first so the JSON.parse cost is only paid on candidate lines; parse second so a
+// user message that merely quotes an event name cannot open a phantom work lease.
+function trackWork(jsonLine) {
+  const candidate =
+    jsonLine.includes('"agent_start"') ||
+    jsonLine.includes('"agent_settled"') ||
+    jsonLine.includes('"compaction_start"') ||
+    jsonLine.includes('"compaction_end"');
+  if (!candidate) return;
+  let type;
+  try { type = JSON.parse(jsonLine).type; } catch { return; }
+  if (type === "agent_start") agentActive = true;
+  else if (type === "agent_settled") agentActive = false;
+  else if (type === "compaction_start") compactionActive = true;
+  else if (type === "compaction_end") compactionActive = false;
+  else return;
+  syncTurnMarker();
+}
+
+// --- local TUI manifest (v13): a pod-config snapshot for the launcher's TUI --
+// Data channel only: settings/theme *data* for display parity. Never auth.json,
+// never sessions/, never file contents beyond the size caps. The client
+// re-validates everything against a typed schema; this projection is defense in
+// depth, not the trust boundary.
+const AGENT_DIR = (process.env.HOME || "/root") + "/.pi/agent";
+const MANIFEST_V = 1;
+const MANIFEST_FILE_CAP = 64 * 1024;
+const MANIFEST_THEMES_MAX = 20;
+const MANIFEST_EXTENSIONS_MAX = 100;
+const MANIFEST_RESPONSE_CAP = 256 * 1024;
+const UI_SETTINGS_KEYS = [
+  "theme", "hideThinkingBlock", "showCacheMissNotices", "quietStartup", "collapseChangelog",
+  "doubleEscapeAction", "treeFilterMode", "editorPaddingX", "outputPad", "autocompleteMaxVisible",
+  "showHardwareCursor", "markdown", "terminal", "images", "warnings", "tuiMode",
+  "fullscreenExitOutput", "fullscreenScrollbar",
+];
+const DIGEST_TOP_FILES = ["settings.json", "models.json", "mcporter.json", "subagents.json", "keybindings.json"];
+function statLine(rel, lines) {
+  try {
+    const st = fs.lstatSync(AGENT_DIR + "/" + rel);
+    if (st.isFile()) lines.push(rel + "|" + st.size + "|" + Math.floor(st.mtimeMs));
+  } catch {}
+}
+function statDir(relDir, depth, lines) {
+  if (depth > 3) return;
+  let entries;
+  try { entries = fs.readdirSync(AGENT_DIR + "/" + relDir, { withFileTypes: true }); } catch { return; }
+  entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+  for (const entry of entries.slice(0, 200)) {
+    const rel = relDir + "/" + entry.name;
+    if (entry.isDirectory()) statDir(rel, depth + 1, lines);
+    else statLine(rel, lines);
+  }
+}
+const NPM_PACKAGE_NAME = /^(@[a-z0-9~][a-z0-9._~-]*\\/)?[a-z0-9~][a-z0-9._~-]*$/;
+function npmPackageNameFromEntry(entry) {
+  const source = typeof entry === "string"
+    ? entry
+    : entry && typeof entry === "object" && typeof entry.source === "string"
+      ? entry.source
+      : null;
+  if (source === null || !source.startsWith("npm:")) return null;
+  const spec = source.slice(4);
+  const at = spec.lastIndexOf("@");
+  const name = at > 0 ? spec.slice(0, at) : spec;
+  return NPM_PACKAGE_NAME.test(name) && name.length <= 214 ? name : null;
+}
+function configuredNpmPackageNames(settings) {
+  if (!Array.isArray(settings.packages)) return [];
+  const names = new Set();
+  for (const entry of settings.packages) {
+    const name = npmPackageNameFromEntry(entry);
+    if (name !== null) names.add(name);
+  }
+  return Array.from(names).sort();
+}
+function readAgentFile(rel, diagnostics) {
+  const full = AGENT_DIR + "/" + rel;
+  try {
+    const st = fs.lstatSync(full);
+    if (st.isSymbolicLink()) { diagnostics.push(rel + ": symlink skipped"); return null; }
+    if (!st.isFile()) return null;
+    if (st.size > MANIFEST_FILE_CAP) { diagnostics.push(rel + ": over " + MANIFEST_FILE_CAP + " bytes, skipped"); return null; }
+    return fs.readFileSync(full, "utf8");
+  } catch { return null; }
+}
+function readAgentSettings(diagnostics) {
+  const raw = readAgentFile("settings.json", diagnostics);
+  if (raw === null) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    diagnostics.push("settings.json: not a JSON object");
+  } catch { diagnostics.push("settings.json: invalid JSON"); }
+  return {};
+}
+function agentDirDigest() {
+  const lines = [];
+  for (const rel of DIGEST_TOP_FILES) statLine(rel, lines);
+  statDir("themes", 0, lines);
+  statDir("agents", 0, lines);
+  const settings = readAgentSettings([]);
+  for (const name of configuredNpmPackageNames(settings).slice(0, MANIFEST_EXTENSIONS_MAX)) {
+    statLine("npm/node_modules/" + name + "/package.json", lines);
+  }
+  lines.sort();
+  return crypto.createHash("sha256").update(lines.join("\\n")).digest("hex").slice(0, 32);
+}
+function buildTuiManifest() {
+  const diagnostics = [];
+  const settings = readAgentSettings(diagnostics);
+  const uiSettings = {};
+  for (const key of UI_SETTINGS_KEYS) if (settings[key] !== undefined) uiSettings[key] = settings[key];
+  const themes = [];
+  let themeFiles = [];
+  try { themeFiles = fs.readdirSync(AGENT_DIR + "/themes").filter((n) => n.endsWith(".json")).sort(); } catch {}
+  if (themeFiles.length > MANIFEST_THEMES_MAX) {
+    diagnostics.push("themes: " + (themeFiles.length - MANIFEST_THEMES_MAX) + " files skipped over the cap");
+  }
+  for (const file of themeFiles.slice(0, MANIFEST_THEMES_MAX)) {
+    const name = file.slice(0, -5);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name)) { diagnostics.push("themes/" + file + ": unsafe name skipped"); continue; }
+    const raw = readAgentFile("themes/" + file, diagnostics);
+    if (raw === null) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) themes.push({ name: name, theme: parsed });
+      else diagnostics.push("themes/" + file + ": not a JSON object");
+    } catch { diagnostics.push("themes/" + file + ": invalid JSON"); }
+  }
+  // Keep the legacy wire key for compatibility. These are directly configured packages,
+  // not every physical node_modules directory: npm hoists transitive dependencies beside
+  // their parent, but Pi runs only packages named by settings.packages.
+  const extensions = [];
+  for (const name of configuredNpmPackageNames(settings).slice(0, MANIFEST_EXTENSIONS_MAX)) {
+    const raw = readAgentFile("npm/node_modules/" + name + "/package.json", diagnostics);
+    if (raw === null) continue;
+    try {
+      const pkg = JSON.parse(raw);
+      if (typeof pkg.version !== "string") continue;
+      extensions.push({ name: name, version: pkg.version, origin: "npm" });
+    } catch {}
+  }
+  return {
+    fidelity: "disk",
+    bootDigest: bootDigest,
+    launchArgv: piArgv,
+    uiSettings: uiSettings,
+    themes: themes,
+    extensions: extensions,
+    diagnostics: diagnostics,
+  };
+}
+function emitTuiManifest(knownDigest) {
+  let digest = "";
+  try { digest = agentDirDigest(); } catch (e) { log("tui_manifest digest failed: " + e); }
+  if (knownDigest !== null && knownDigest !== "" && knownDigest === digest) {
+    emitControl({ event: "tui_manifest", v: MANIFEST_V, digest: digest, unchanged: true });
+    return;
+  }
+  let manifest;
+  try { manifest = buildTuiManifest(); } catch (e) {
+    log("tui_manifest build failed: " + e);
+    emitControl({ event: "tui_manifest", v: MANIFEST_V, digest: digest, error: "manifest collection failed" });
+    return;
+  }
+  if (JSON.stringify(manifest).length > MANIFEST_RESPONSE_CAP) {
+    manifest.themes = [];
+    manifest.diagnostics.push("manifest truncated: themes omitted over the size cap");
+  }
+  if (JSON.stringify(manifest).length > MANIFEST_RESPONSE_CAP) {
+    emitControl({ event: "tui_manifest", v: MANIFEST_V, digest: digest, error: "manifest exceeds the size cap" });
+    return;
+  }
+  emitControl({ event: "tui_manifest", v: MANIFEST_V, digest: digest, manifest: manifest });
+}
+// The boot digest is the drift baseline: pi loads its config at startup, and this snapshot
+// is taken in the same beat, before pi is spawned below.
+let bootDigest = "";
+try { bootDigest = agentDirDigest(); } catch (e) { log("boot digest failed: " + e); }
+
+// --- pi version, for the handshake's skew check (§4.3) -----------------------
+function piVersion() {
+  try {
+    return execFileSync(piArgv[0], ["--version"], { timeout: 20000 }).toString().trim() || "unknown";
+  } catch (e) {
+    log("pi --version failed: " + e);
+    return "unknown";
+  }
+}
+
+// --- spawn pi with plain pipes ----------------------------------------------
+const version = piVersion();
+let pi;
+try {
+  pi = spawn(piArgv[0], piArgv.slice(1), {
+    stdio: ["pipe", "pipe", "pipe"],
+    cwd: process.cwd(),
+  });
+} catch (e) {
+  log("spawn failed: " + e);
+  emitControl({ event: "hello", proto: PROTO, piVersion: version, shimVersion: SHIM_VERSION, extensionVersion: EXTENSION_VERSION, piRunning: false, eventSeq: eventSeq });
+  process.exit(1);
+}
+supervisedPi = pi;
+log("spawned pi (pid " + pi.pid + "): " + piArgv.join(" "));
+clearTurnMarker(); // fresh pi has no active work; a predecessor's marker must not vouch for it
+emitControl({ event: "hello", proto: PROTO, piVersion: version, shimVersion: SHIM_VERSION, extensionVersion: EXTENSION_VERSION, piRunning: true, eventSeq: eventSeq });
+const backgroundWatch = setInterval(noteBackgroundWork, 2000);
+if (backgroundWatch.unref) backgroundWatch.unref();
+
+let piExited = false;
+let piExitCode = null;
+let shutdownRequested = false;
+let shutdownTimer = null;
+
+pi.on("error", (e) => {
+  log("pi error: " + e);
+  if (!piExited) onPiExit(null);
+});
+
+// --- pi stdout → E frames, strict LF framing (§4.2) --------------------------
+// Byte-level splitting, never a generic line reader: pi's docs call out the U+2028 hazard.
+let outPending = Buffer.alloc(0);
+pi.stdout.on("data", (chunk) => {
+  outPending = outPending.length === 0 ? chunk : Buffer.concat([outPending, chunk]);
+  let start = 0;
+  for (;;) {
+    const nl = outPending.indexOf(LF, start);
+    if (nl === -1) break;
+    const line = outPending.subarray(start, nl);
+    start = nl + 1;
+    if (line.length > 0) {
+      const text = journalUiLine(line.toString("utf8"));
+      trackStreaming(text);
+      trackWork(text);
+      emitEvent(text);
+    }
+  }
+  if (start > 0) outPending = Buffer.from(outPending.subarray(start));
+});
+
+// --- pi stderr → pi_stderr frames, surfaced in --verbose / crash reports -----
+pi.stderr.on("data", (chunk) => {
+  emitControl({ event: "pi_stderr", data: Buffer.from(chunk).toString("base64") }, true);
+});
+
+// --- inbound transport → frames --------------------------------------------
+// PTY mode is an LF-delimited byte stream. Daemon mode installs a WebSocket message
+// listener below and passes each complete text message to the same frame parser.
+let inPending = Buffer.alloc(0);
+if (!daemonMode) {
+  process.stdin.on("data", (chunk) => {
+    inPending = inPending.length === 0 ? Buffer.from(chunk) : Buffer.concat([inPending, chunk]);
+    let start = 0;
+    for (;;) {
+      const nl = inPending.indexOf(LF, start);
+      if (nl === -1) break;
+      const line = inPending.subarray(start, nl);
+      start = nl + 1;
+      handleFrame(line);
+    }
+    if (start > 0) inPending = Buffer.from(inPending.subarray(start));
+  });
+}
+
+function handleFrame(line) {
+  // A terminal-shaped channel may append CR; anything not a well-formed frame is ignored.
+  if (line.length > 0 && line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
+  if (line.length < 3 || line[1] !== 0x20) return;
+
+  if (line[0] === 0x43 /* C */) {
+    const json = Buffer.from(line.subarray(2).toString("latin1"), "base64").toString("utf8");
+    if (!json.startsWith("{")) return;
+    // A pending request — long-poll surface or blocking dialog — remains replayable until this
+    // exact response consumes it. Writing it to a channel never did: that is delivery, not an answer.
+    try {
+      const command = JSON.parse(json);
+      if (command?.type === "extension_ui_response" && typeof command.id === "string") {
+        remoteUiPending.delete(command.id);
+        pendingDialogs.delete(command.id);
+      }
+    } catch {}
+    if (!piExited) pi.stdin.write(json + "\\n");
+    return;
+  }
+
+  if (line[0] === 0x53 /* S */) {
+    let msg;
+    try {
+      msg = JSON.parse(line.subarray(2).toString("utf8"));
+    } catch {
+      return;
+    }
+    if (msg && msg.cmd === "shutdown") {
+      // RPC mode treats stdin EOF as graceful shutdown(0). Only signal a wedged process.
+      if (!piExited && !shutdownRequested) {
+        shutdownRequested = true;
+        log("shutdown frame received — ending pi stdin");
+        try { pi.stdin.end(); } catch (e) { log("could not end pi stdin: " + e); }
+        shutdownTimer = setTimeout(() => {
+          if (!piExited) {
+            log("pi ignored stdin EOF — SIGTERM fallback");
+            pi.kill("SIGTERM");
+          }
+        }, SHUTDOWN_FALLBACK_MS);
+        shutdownTimer.unref?.();
+      }
+    } else if (msg && msg.cmd === "hello") {
+      // A reattaching client missed the startup hello (§6.3); answer with current truth.
+      emitControl({ event: "hello", proto: PROTO, piVersion: version, shimVersion: SHIM_VERSION, extensionVersion: EXTENSION_VERSION, piRunning: !piExited, eventSeq: eventSeq });
+    } else if (msg && msg.cmd === "stream_snapshot") {
+      emitControl({ event: "stream_snapshot", message: cloneJson(streamingMessage) });
+    } else if (msg && msg.cmd === "ui_replay") {
+      replayUi(typeof msg.since === "number" ? msg.since : 0);
+    } else if (msg && msg.cmd === "event_replay") {
+      replayAgentEvents(typeof msg.since === "number" ? msg.since : 0);
+    } else if (msg && msg.cmd === "mirror_sync") {
+      startMirror(msg.files);
+    } else if (msg && msg.cmd === "tui_manifest") {
+      emitTuiManifest(typeof msg.knownDigest === "string" ? msg.knownDigest : null);
+    } else if (TEST_WRITABLE && msg && msg.cmd === "test_set_writable") {
+      testWritableLength = typeof msg.bytes === "number" ? msg.bytes : null;
+      pumpJournal();
+    }
+  }
+}
+
+// Channel drop (PTY client detach) must not take pi down: the provider's PTY session
+// survives client disconnect, and the shim and pi ride it (§4.2).
+if (!daemonMode) {
+  process.stdin.on("end", () => {
+    log("stdin ended (client detached) — staying up");
+  });
+  process.stdin.on("error", () => {});
+  process.stdin.resume();
+}
+
+// --- pi exit: report in-band, and via the file for the drop-race fallback ----
+function onPiExit(code) {
+  if (piExited) return;
+  piExited = true;
+  piExitCode = code;
+  clearTurnMarker();
+  // Nothing can answer a dialog whose pi is gone; a later attach must not be handed one.
+  pendingDialogs.clear();
+  if (shutdownTimer) clearTimeout(shutdownTimer);
+  log("pi exited with code " + code);
+  try {
+    fs.writeFileSync(EXIT_CODE_FILE, String(code === null ? 1 : code));
+  } catch (e) {
+    log("could not write exit code file: " + e);
+  }
+  // pi's last session write raced the poll; flush the tail before the exit frame lands.
+  try { mirrorTick(); } catch {}
+  emitControl({ event: "pi_exit", code: code });
+  // A daemon is the observable supervisor, not Pi's lifetime: it keeps dialing after Pi exits
+  // and repeats the exit fact on every successful connection. PTY mode retains its old exit.
+  if (!daemonMode) {
+    // Keep the channel open briefly so the frame lands, then exit (§4.2). Non-blocking output
+    // makes "written" mean "queued", so wait for the queue to empty rather than a fixed beat;
+    // a channel that never drains falls back to the exit-code file the way a hard drop does.
+    const exitDeadline = Date.now() + 5000;
+    const finish = () => {
+      if (process.stdout.writableLength === 0 || Date.now() >= exitDeadline) process.exit(0);
+      else setTimeout(finish, 100);
+    };
+    setTimeout(finish, 500);
+  }
+}
+
+pi.on("exit", (code, signal) => {
+  const signalNumber = signal ? osConstants.signals[signal] : undefined;
+  onPiExit(code === null && signalNumber ? 128 + signalNumber : code);
+});
+
+// --- daemon dial-out transport ---------------------------------------------
+const DAEMON_RECONNECT_INITIAL_MS = ${opts.daemonReconnectInitialMs ?? 250};
+const DAEMON_RECONNECT_MAX_MS = ${opts.daemonReconnectMaxMs ?? 10_000};
+const DAEMON_PING_INTERVAL_MS = ${opts.daemonPingIntervalMs ?? 15_000};
+// Arms only after the gateway proves it answers pings (\`S {"cmd":"pong"}\`); a half-open
+// socket then reconnects in seconds instead of waiting out the TCP retransmission timeout.
+const DAEMON_READ_DEADLINE_MS = ${opts.daemonReadDeadlineMs ?? 45_000};
+const DAEMON_URL = (process.env.PI_POD_SERVER_URL || "").replace(/\\\/+$/, "") + "/v1/pod-transport";
+const DAEMON_TOKEN = process.env.PI_POD_SERVER_TOKEN || "";
+let daemonReconnectAttempt = 0;
+let daemonReconnectTimer = null;
+let daemonPingTimer = null;
+
+function scheduleDaemonReconnect() {
+  if (!daemonMode || daemonReconnectTimer || daemonSocket) return;
+  const delay = Math.min(
+    DAEMON_RECONNECT_MAX_MS,
+    DAEMON_RECONNECT_INITIAL_MS * Math.pow(2, Math.min(daemonReconnectAttempt, 30)),
+  );
+  daemonReconnectAttempt += 1;
+  daemonReconnectTimer = setTimeout(() => {
+    daemonReconnectTimer = null;
+    connectDaemon();
+  }, delay);
+}
+
+function connectDaemon() {
+  if (!daemonMode || daemonSocket) return;
+  if (!process.env.PI_POD_SERVER_URL || !DAEMON_TOKEN) {
+    log("daemon transport credentials are unavailable; retrying");
+    scheduleDaemonReconnect();
+    return;
+  }
+  let socket;
+  try {
+    socket = new WebSocket(DAEMON_URL, { headers: { Authorization: "Bearer " + DAEMON_TOKEN } });
+  } catch (e) {
+    log("websocket connect failed: " + e);
+    scheduleDaemonReconnect();
+    return;
+  }
+  daemonSocket = socket;
+  let lastInboundAt = Date.now();
+  let sawPong = false;
+  socket.addEventListener("open", () => {
+    if (daemonSocket !== socket) return;
+    daemonReconnectAttempt = 0;
+    lastInboundAt = Date.now();
+    try { fs.writeFileSync(AGENTD_READY_FILE, String(process.pid), { mode: 0o600 }); }
+    catch (e) { log("could not write daemon ready file: " + e); }
+    emitControl({ event: "hello", proto: PROTO, piVersion: version, shimVersion: SHIM_VERSION, extensionVersion: EXTENSION_VERSION, piRunning: !piExited, eventSeq: eventSeq });
+    if (piExited) emitControl({ event: "pi_exit", code: piExitCode });
+    pumpJournal();
+    if (daemonPingTimer) clearInterval(daemonPingTimer);
+    daemonPingTimer = setInterval(() => {
+      if (sawPong && Date.now() - lastInboundAt > DAEMON_READ_DEADLINE_MS) {
+        log("transport silent for " + (Date.now() - lastInboundAt) + "ms despite pings; reconnecting");
+        reconnectAfterSocketEnd();
+        socket.addEventListener("error", () => {}, { once: true });
+        try { socket.close(); } catch {}
+        return;
+      }
+      emitControl({ event: "ping" }, true);
+      if (transportBufferedAmount() < transportLowWaterBytes()) pumpJournal();
+    }, DAEMON_PING_INTERVAL_MS);
+  });
+  socket.addEventListener("message", (event) => {
+    if (daemonSocket !== socket || typeof event.data !== "string") return;
+    lastInboundAt = Date.now();
+    if (event.data.startsWith('S ') && event.data.includes('"pong"')) {
+      try { if (JSON.parse(event.data.slice(2)).cmd === "pong") { sawPong = true; return; } } catch {}
+    }
+    // Each WebSocket text message is exactly one frame line and carries no delimiter.
+    handleFrame(Buffer.from(event.data, "utf8"));
+  });
+  function reconnectAfterSocketEnd() {
+    if (daemonSocket !== socket) return;
+    daemonSocket = null;
+    clearDaemonReadyFile();
+    if (daemonPingTimer) { clearInterval(daemonPingTimer); daemonPingTimer = null; }
+    scheduleDaemonReconnect();
+  }
+  function onSocketError(event) {
+    log("websocket transport error" + (event?.message ? ": " + event.message : ""));
+    // Node 22's built-in WebSocket may report a failed HTTP upgrade as an error
+    // without following it with a close event. Release it and arm the normal retry. Remove
+    // this listener before closing: close() while CONNECTING otherwise recursively emits
+    // "Connection was closed before it was established" and buries the original failure.
+    reconnectAfterSocketEnd();
+    socket.removeEventListener("error", onSocketError);
+    socket.addEventListener("error", () => {}, { once: true });
+    try { socket.close(); } catch {}
+  }
+  socket.addEventListener("error", onSocketError);
+  socket.addEventListener("close", (event) => {
+    if (daemonSocket !== socket) return;
+    // 4001 unknown/revoked token, 4404 pod not found, 4410 pod archived: permanent rejections.
+    // Retrying cannot succeed, so the daemon retires itself instead of reconnect-looping —
+    // each rejected upgrade otherwise resets the backoff and hammers the gateway forever.
+    const code = event && event.code ? event.code : 1006;
+    if (code !== 4001 && code !== 4404 && code !== 4410) { reconnectAfterSocketEnd(); return; }
+    daemonSocket = null;
+    if (daemonPingTimer) { clearInterval(daemonPingTimer); daemonPingTimer = null; }
+    log("transport permanently rejected (close " + code + "); daemon exiting");
+    try { supervisedPi?.kill("SIGTERM"); } catch {}
+    cleanupDaemonFiles();
+    process.exit(0);
+  });
+}
+
+if (daemonMode) connectDaemon();
+`;
+}

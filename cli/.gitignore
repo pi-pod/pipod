@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# pi pod secrets — never commit
+.pi-pod/env
+.claude-env
+
+# pi's project directory is mostly per-machine: installed packages (.pi/npm, .pi/git),
+# the host-path-keyed trust decision, session transcripts, mesh state. Two files in it are
+# repo configuration and have to reach the pod with the clone, so this is an allowlist —
+# a new pi feature writing a new directory in here stays ignored by default.
+.pi/*
+!.pi/mcporter.json
+!.pi/README.md
+
+# Agent scratch, regenerated on demand (the workspace root ignores this too).
+.pi-subagents/

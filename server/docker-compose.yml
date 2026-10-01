@@ -1,0 +1,86 @@
+# Local development: one Postgres (product + Zitadel DBs), Zitadel v4.17.1, API.
+# TLS is disabled for loopback only; the issuer is the host-facing URL.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pipod
+      POSTGRES_PASSWORD: pipod
+      POSTGRES_DB: pipod
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./dev/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipod -d pipod"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel@sha256:dbc32fd988f5725d490a145cdbbbacb4439ff946b6f9f519ae3d8dc1c0c75110
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      - start-from-init
+      - --masterkeyFromEnv
+      - --tlsMode
+      - disabled
+    environment:
+      ZITADEL_MASTERKEY: ${ZITADEL_MASTERKEY:-MasterkeyNeedsToHave32Characters}
+      ZITADEL_EXTERNALDOMAIN: 127.0.0.1
+      ZITADEL_EXTERNALPORT: "8081"
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_DATABASE_POSTGRES_HOST: db
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: pipod
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: pipod
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: pipod
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: pipod
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: pipod
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD:-Password1!}
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
+      # First-boot only; must match zitadel/oidc-settings.json. Existing instances: apply-oidc-settings.mjs.
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_ACCESSTOKENLIFETIME: 5m
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_IDTOKENLIFETIME: 5m
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENIDLEEXPIRATION: 720h
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENEXPIRATION: 2160h
+    ports:
+      - "8081:8080"
+
+  server:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ROLE: all
+      PORT: 8080
+      DATABASE_URL: postgres://pipod:pipod@db:5432/pipod
+      # Tokens are issued through the host-facing URL; signature keys are fetched
+      # over the compose network. Issuer comparison remains exact.
+      ZITADEL_ISSUER: ${ZITADEL_ISSUER:-http://127.0.0.1:8081}
+      ZITADEL_API_AUDIENCE: ${ZITADEL_API_AUDIENCE:-pipod-api}
+      ZITADEL_JWKS_URL: ${ZITADEL_JWKS_URL:-http://zitadel:8080/oauth/v2/keys}
+      # No default: compose fails fast on a missing or empty value so an installation
+      # can never silently boot with a public placeholder key. Generate with:
+      #   openssl rand -base64 32
+      SECRETS_KEK: ${SECRETS_KEK:?Set SECRETS_KEK to `openssl rand -base64 32` output}
+      SECRETS_KEK_ID: ${SECRETS_KEK_ID:-kek-1}
+      # Retired KEKs kept readable during rotation: {"kek-1":"<base64 32 bytes>"}
+      SECRETS_KEK_PREVIOUS: ${SECRETS_KEK_PREVIOUS:-}
+      # Optional /metrics bearer (min 16 chars). Empty keeps the endpoint open on this private network.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+    # /healthz and /metrics share this port. Scrape /metrics only from a private network;
+    # set METRICS_TOKEN if the scrape path is not otherwise trusted.
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

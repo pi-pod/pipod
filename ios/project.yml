@@ -1,0 +1,148 @@
+# Regenerate the Xcode project with: xcodegen generate  (or: make project)
+#
+# The generated PiPod.xcodeproj is committed so the repository opens in Xcode
+# without XcodeGen installed. project.yml stays the source of truth: change it
+# here, regenerate, and commit both.
+name: PiPod
+options:
+  bundleIdPrefix: com.pipod
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+targets:
+  PiPod:
+    type: application
+    platform: iOS
+    sources:
+      - path: PiPod
+    info:
+      path: PiPod/Info.plist
+      properties:
+        CFBundleDisplayName: pi pod
+        # The ASWebAuthenticationSession consent sheet names the app from
+        # CFBundleName, not the display name, and "PiPod" is not what we call it.
+        CFBundleName: pi pod
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # Read back through Config.swift. Per-configuration values live in the
+        # `configs` block below so CI can inject a build without touching source.
+        SERVER_URL: $(SERVER_URL)
+        OIDC_ISSUER: $(OIDC_ISSUER)
+        OIDC_CLIENT_ID: $(OIDC_CLIENT_ID)
+        OIDC_REDIRECT_URI: $(OIDC_REDIRECT_URI)
+        # Mirrors the aps-environment entitlement below, from the same build
+        # setting. Entitlements are not readable from the info dictionary, and the
+        # app must know which APNs its token belongs to before it registers it.
+        APS_ENVIRONMENT: $(APS_ENVIRONMENT)
+        # Exempt-only encryption (TLS + Keychain, both OS-provided). Baked in so
+        # App Store Connect stops asking the export-compliance question per build.
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.pipod.app
+            CFBundleURLSchemes:
+              - pipod
+        UIBackgroundModes:
+          - remote-notification
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # iPad rotates every way, which is also what lets it into Split View and
+        # Slide Over without declaring UIRequiresFullScreen.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # File sharing plus in-place documents expose the app's Documents
+        # under On My iPhone, which is where the files-round-trip UI test
+        # stages seed.png and where the document-browser attach path opens.
+        # These live here -- not just in PiPod/Info.plist -- because the
+        # generated project builds the app plist from these properties, and
+        # file-only keys never reach the built bundle.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        # No NSPhotoLibraryUsageDescription on purpose. The composer uses the
+        # out-of-process PhotosPicker (no `photoLibrary:` argument) and reads
+        # only the picked item's Data, never a PHAsset, so the app needs no
+        # photo-library authorization at all: nothing to prompt for, nothing to
+        # deny, and no "Limited" library to handle. Declaring the string would
+        # be asking for access the app does not use.
+    entitlements:
+      path: PiPod/PiPod.entitlements
+      properties:
+        aps-environment: $(APS_ENVIRONMENT)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pipod.app
+        SWIFT_VERSION: "5.0"
+        # iPhone + iPad. The App Store listing this replaces already declares both,
+        # and an update generally cannot drop a device family its customers own.
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # iPad is still iOS. pi pod ships no desktop build, so neither the Catalyst
+        # target nor the "designed for iPad" compatibility runtimes are offered.
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        DEVELOPMENT_TEAM: ""
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+      configs:
+        Debug:
+          SERVER_URL: http://localhost:8080
+          OIDC_ISSUER: https://auth.pipod.dev
+          OIDC_CLIENT_ID: "388199923079774215"
+          OIDC_REDIRECT_URI: pipod://auth/callback
+          APS_ENVIRONMENT: development
+        Release:
+          SERVER_URL: https://api.pipod.dev
+          OIDC_ISSUER: https://auth.pipod.dev
+          OIDC_CLIENT_ID: "388199923079774215"
+          OIDC_REDIRECT_URI: pipod://auth/callback
+          APS_ENVIRONMENT: production
+  PiPodUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        # Distinct from the store artifact (com.pipod.app): a test bundle
+        # must never be confused with, or replace, the shipped app.
+        PRODUCT_BUNDLE_IDENTIFIER: com.pipod.app.uitests
+    sources:
+      - path: PiPodUITests
+    dependencies:
+      - target: PiPod
+schemes:
+  PiPod:
+    build:
+      targets:
+        PiPod: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+  PiPod-UITests:
+    build:
+      targets:
+        PiPod: all
+        PiPodUITests: [test]
+    run:
+      config: Debug
+    test:
+      # Release behavior for the app under test: same compiler/optimization
+      # path as TestFlight, dev-only overrides (devToken, DevOverride) compiled
+      # out. Backend selection stays a BUILD-TIME Info.plist override
+      # (SERVER_URL=...), so issuer/client/signing/Keychain are identical to
+      # production; only the API origin varies. No debug auth, no runtime backdoor.
+      config: Release
+      targets:
+        - PiPodUITests

@@ -1,0 +1,55 @@
+# Deployment shape for a single sandbox host.
+#
+# `privileged` is not decoration: the service mounts overlayfs, writes cgroup limits, creates
+# network namespaces, and runs crun. The blast radius is stated plainly in docs/threat-model.md
+# — this host runs sandboxes and nothing else.
+services:
+  sandbox:
+    build: .
+    image: pi-pod-sandbox:latest
+    restart: unless-stopped
+    privileged: true
+    # The service must see the real unified hierarchy to create sandbox cgroups. It does not
+    # need the host PID namespace: sandboxes are children of its own crun processes.
+    cgroup: host
+    environment:
+      PI_POD_SANDBOX_TOKEN: ${PI_POD_SANDBOX_TOKEN:?set a token}
+      PI_POD_SANDBOX_PORT: 8433
+      PI_POD_SANDBOX_STATE_DIR: /state
+      # A container hostname is regenerated on every recreate, which would scatter this host's
+      # DR snapshots. Give each host in a fleet its own stable name.
+      PI_POD_SANDBOX_HOST_ID: ${PI_POD_SANDBOX_HOST_ID:-sandbox}
+      PI_POD_SANDBOX_RESERVE_DISK_GB: ${PI_POD_SANDBOX_RESERVE_DISK_GB:-5}
+      # Admission (docs/capacity-admission.md). `ceiling` reserves each live sandbox's full
+      # memory ceiling; set the budget to the host class's validated safe threshold.
+      PI_POD_SANDBOX_MEMORY_ADMISSION: ${PI_POD_SANDBOX_MEMORY_ADMISSION:-ceiling}
+      PI_POD_SANDBOX_MEMORY_BUDGET_GB: ${PI_POD_SANDBOX_MEMORY_BUDGET_GB:-}
+      PI_POD_SANDBOX_MAX_CONCURRENT_ARCHIVES: ${PI_POD_SANDBOX_MAX_CONCURRENT_ARCHIVES:-2}
+      PI_POD_SANDBOX_MAX_CONCURRENT_TRANSITIONS: ${PI_POD_SANDBOX_MAX_CONCURRENT_TRANSITIONS:-8}
+      # Single-file upload cap for PUT /v1/sandboxes/:id/files (bytes). Must cover the
+      # largest workspace-seeding tarball clients send (default 256 MiB).
+      PI_POD_SANDBOX_MAX_UPLOAD_BYTES: ${PI_POD_SANDBOX_MAX_UPLOAD_BYTES:-268435456}
+      PI_POD_SANDBOX_API_HOST: ${PI_POD_SANDBOX_API_HOST:-}
+      PI_POD_SANDBOX_ARCHIVE_DRIVER: ${PI_POD_SANDBOX_ARCHIVE_DRIVER:-local}
+      PI_POD_SANDBOX_S3_ENDPOINT: ${PI_POD_SANDBOX_S3_ENDPOINT:-}
+      PI_POD_SANDBOX_S3_REGION: ${PI_POD_SANDBOX_S3_REGION:-nyc3}
+      PI_POD_SANDBOX_S3_BUCKET: ${PI_POD_SANDBOX_S3_BUCKET:-}
+      PI_POD_SANDBOX_S3_ACCESS_KEY: ${PI_POD_SANDBOX_S3_ACCESS_KEY:-}
+      PI_POD_SANDBOX_S3_SECRET_KEY: ${PI_POD_SANDBOX_S3_SECRET_KEY:-}
+      # Optional. Unset = GET /metrics is open like /v1/healthz (loopback-bound here).
+      PI_POD_SANDBOX_METRICS_TOKEN: ${PI_POD_SANDBOX_METRICS_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "127.0.0.1:8433:8433"
+    volumes:
+      - state:/state
+      # Sandbox cgroups are created as children of the host's unified hierarchy.
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8433/v1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  state:

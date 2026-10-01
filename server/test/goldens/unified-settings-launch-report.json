@@ -1,0 +1,45 @@
+{
+  "configProvenance": [
+    {
+      "path": "pi.model",
+      "winner": "template",
+      "over": []
+    },
+    {
+      "path": "idleTimeoutMinutes",
+      "winner": "template",
+      "over": []
+    },
+    {
+      "path": "resources.diskGB",
+      "winner": "platform-default",
+      "over": []
+    }
+  ],
+  "layerOrder": [
+    "org",
+    "user",
+    "template"
+  ],
+  "initSteps": [
+    {
+      "scope": "template",
+      "status": "pending"
+    }
+  ],
+  "secretKeys": [
+    "PROJECT_TOKEN"
+  ],
+  "secretScopes": {
+    "PROJECT_TOKEN": "org"
+  },
+  "piSettings": {
+    "files": [
+      "settings.json",
+      "subagents.json"
+    ],
+    "packageCount": 3,
+    "droppedKeys": [],
+    "status": "pending"
+  }
+}

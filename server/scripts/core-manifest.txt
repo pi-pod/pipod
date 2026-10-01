@@ -1,0 +1,65 @@
+# Classification of every file under src/core/ that also exists in pi-pod's src/.
+#
+# Paths are relative to src/core/ here and to src/ in a pi-pod checkout.
+# scripts/sync-core.sh reads the [shared] paths; scripts/check-core-sync.ts reads
+# both sections. Files under src/core/ that appear in neither section are
+# server-only — they have no pi-pod counterpart and nothing syncs them.
+#
+# [shared]  re-vendored verbatim from pi-pod. sync-core.sh overwrites these and
+#           refreshes the sha256 column; the checker fails if src/core/ drifts
+#           from the recorded hash, and (given a pi-pod checkout) if it drifts
+#           from upstream. Do not hand-edit a shared file — change it in pi-pod
+#           and re-sync, or move it to [forked] first.
+#
+# [forked]  a pi-pod file the server has deliberately diverged from. sync-core.sh
+#           must never touch these. The checker warns if one becomes byte-identical
+#           to pi-pod again, since that means it can probably be promoted.
+#
+# [pinned]  byte-identical to pi-pod today, but held here because it transitively
+#           depends on a [forked] file — re-vendoring it alone could pull in an
+#           incompatibility. Promote to [shared] once its dependencies reconcile.
+#           Listed separately so the [forked] identity warning stays meaningful.
+
+[shared]
+# sha256                                                            path
+2defb1e7cbd4f824f5a001643fcf4b323ace60b47e9967d3542211cd9fa2e3ef  client/piversion.ts
+3de23f7b3f0f6b4b9b8f819c5349aa714b38fd103931c98405c5e59596312149  client/pod-title.ts
+618f5028250a13723a58253df57a0fc8f0a8e834dbab9c1ccd845cf53bb1932f  client/runtime/bridge.ts
+4a7a6eed7cb56f653fb6838bb29395d87dc34a33123ac1baf59c5de6ef935bc1  client/runtime/stream-heal.ts
+3ab3d6f2b0d2df2c964f3bbfcbcc002836f6aae5ccbd5856d976eb7502b81f14  client/stream-events.ts
+f577623a7c6c11c28e29e08cc15338c6535ba89fc41636d7c6cabe825dde8e53  dotenv.ts
+be3bcf920675939227b687303b5896122bd319bfd56da7109792a5912045d3cf  errors.ts
+ef792ff3380ceea875df57deb08bce3dd955442bb0c1aeb2d4fb4735c7ae4df1  jsonc.ts
+c3b48bbe0e675163d3d9afc8c086cbf57d23e0b4e6f1dc6469697d6e059c7bd2  log.ts
+b101288631a00da5310c1784e16dbc77c2583772ea548d29f15c6810bb4ac38d  prompt.ts
+872d5456732e3592c3fa3d164ba4a8af6fe3f453ca2144d459359d2c5e27ed1f  providers/meta.ts
+eb4ff8099e6a803155fd94c81bbfa1832cc7d283e590a29b2dd988f93706f391  redact.ts
+d374cb3bb7a041fcd0d825cb7948f1a692c78ad5439c94167d5aedf1f681eda5  remote-ui-protocol.ts
+c6d46a903b72985acd4b73c71490a52ca7276ab29d63aad11fe5e57d47c989cc  wire-codec.ts
+
+[forked]
+# path                                    reason
+client/headless.ts                        comment is provider-pty-specific because server headless still uses that transport
+client/podinfo.ts                         stale: predates cli archive-transition status and mislabels same-as-stop storage
+client/rpc.ts                             implements framed provider-pty rpc; cli only needs the gateway rpc base
+client/runtime/local-extensions.ts        derives active context from the server's full-log cache, not branch entries
+client/runtime/pod-commands.ts            supports /pod shell because the server session owns a provider pty
+client/runtime/pod-extension-bridge.ts    uses direct get_entries, so only tree mutations need an extension bridge
+client/runtime/remote-runtime.ts          adapts context and forks to the server's full-log provider-pty cache
+client/runtime/state.ts                   caches full get_entries logs over provider pty; cli uses the seed bridge
+config.ts                                 retains provider blocks and provider-pty settings for its lifecycle
+egress.ts                                 builds and enforces provider egress; cli only retains endpoint hints
+hostconfig.ts                             keeps host-config planning and uploads for server-side pod provisioning
+image-recipe.ts                           resolves provider-aware managed and custom recipes for image publishing
+image.ts                                  builds and publishes managed images because the server owns provisioning
+providers/registry.ts                     lazy-loads sandbox adapters because the server still provisions pods
+shim/agentd.ts                            generates the pod-side pty shim that the server uploads and launches
+shim/pi-pod-ext.ts                        generates the uploaded extension implementing the pod side of rpc bridges
+userconfig.ts                             retains server-side provisioning helpers while the CLI copy is client-preferences-only
+
+[pinned]
+# path                                    depends on
+client/runtime/auth-bridge.ts             identical today, but reaches client/rpc.ts and shim/pi-pod-ext.ts
+client/runtime/chords.ts                  identical today, but reaches client/runtime/pod-commands.ts
+client/runtime/extension-ui.ts            identical today, but reaches client/rpc.ts
+client/runtime/remote-ui.ts               identical today, but reaches client/rpc.ts

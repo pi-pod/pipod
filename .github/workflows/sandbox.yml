@@ -1,0 +1,105 @@
+name: sandbox
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["sandbox/**", ".github/workflows/sandbox.yml"]
+  push:
+    branches: [main]
+    paths: ["sandbox/**", ".github/workflows/sandbox.yml"]
+
+permissions: {}
+
+concurrency:
+  group: sandbox-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: sandbox
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: sandbox/package-lock.json
+
+      - name: Install image integrity tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends attr zstd
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Integration tests (reviewed nonunit selection)
+        run: npm run test:integration
+
+      - name: Package native runtime
+        run: npm run package:native
+
+      - name: Upload native runtime
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pi-pod-sandbox-native-linux-x64-node22
+          path: sandbox/artifacts/*
+          if-no-files-found: error
+
+  # Real kernel/runtime qualification on an isolated ephemeral runner only.
+  # Missing prerequisites or skipped/cancelled/todo cases fail the gate.
+  root-tests:
+    name: Privileged root suite (ephemeral runner)
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: sandbox
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: sandbox/package-lock.json
+      - name: Install harness dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            crun iproute2 nftables iptables e2fsprogs util-linux mount tar zstd attr \
+            build-essential musl-tools ca-certificates curl
+          sudo modprobe loop || true
+          crun --version
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run root suite (all checks must execute)
+        env:
+          PI_POD_SANDBOX_NETWORK_TESTS: "1"
+        run: |
+          set -euo pipefail
+          chmod +x scripts/root-test-gate.sh
+          sudo --preserve-env=PATH,PI_POD_SANDBOX_NETWORK_TESTS,RUNNER_TEMP \
+            env PATH="$PATH" ./scripts/root-test-gate.sh
+      - name: Upload root TAP report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: root-tests-tap
+          path: ${{ runner.temp }}/root-tests.tap
+          if-no-files-found: warn

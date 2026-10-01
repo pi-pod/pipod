@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window background is Ivory Porcelain so the pre-Compose frame matches the
+         light scaffold instead of flashing white. values-night overrides it with the
+         dark scaffold. Compose owns everything after that. -->
+    <style name="Theme.PiPod" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/pipod_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

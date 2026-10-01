@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Package visibility only. The runner never links to or embeds app code. -->
+    <queries>
+        <package android:name="com.pipod" />
+        <!-- Safe numeric public inventory only: lets the host PackageManager
+            resolve com.android.chrome for the version major/longVersionCode
+            digit tags. No interaction with the browser beyond version lookup. -->
+        <package android:name="com.android.chrome" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="pi pod Release blackbox runner"
+        android:supportsRtl="true" />
+</manifest>
