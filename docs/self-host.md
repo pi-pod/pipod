@@ -107,7 +107,7 @@ Then:
 cd server
 docker compose up -d db zitadel
 docker compose build server
-docker compose run --rm server node dist/migrate.js   # prints "applied: 001_init.sql, ..."
+docker compose run --rm server node dist/migrate.js   # prints "applied: 000_baseline.sql"
 docker compose up -d server
 curl -fsS http://127.0.0.1:8080/healthz
 ```
@@ -432,14 +432,6 @@ docker compose up -d server                # only now: it prewarms this tag on b
 Start the server last. It prewarms the base image as it comes up, and against a
 tag that is not published yet that logs a pull failure in the sandbox and spends
 one of the three attempts before the ten-minute cooldown.
-
-A new server holds launch admission until an operator opens it, so a deployment
-is verified before it takes work. Open it once the server is healthy:
-
-```bash
-docker compose exec server node dist/fleet.js launch-gate open \
-  --actor admin --reason fresh_install --source-sha "$(git rev-parse HEAD)"
-```
 
 `PI_POD_SANDBOX_IMAGE_MIRROR=registry.example.com/you` points at any other registry
 your sandbox host can pull from anonymously; the server then looks for
