@@ -9,8 +9,8 @@ import type { ListedObject, ObjectStore, PutOptions, StoredObject } from "./type
 /**
  * Server-mediated archive store ("proxy" driver).
  *
- * The box holds NO object-store credentials: every request carries only the
- * host's own runtime token (the same PI_POD_SANDBOX_TOKEN the box already
+ * The boat holds NO object-store credentials: every request carries only the
+ * host's own runtime token (the same PI_POD_SANDBOX_TOKEN the boat already
  * holds), and the server namespaces all keys under the token's host id.
  * Cross-host and cross-prefix access is refused server-side; the client-side
  * key check below is defense in depth, never the boundary.

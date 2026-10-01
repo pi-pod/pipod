@@ -45,7 +45,7 @@ export async function main(): Promise<void> {
     log: (msg) => log.debug({ images: msg }, "image store"),
   });
   // No network, cgroup reconciliation, reaper, or listener until every retained lower
-  // has been checked against verified blobs. Box snapshots can retain empty directories.
+  // has been checked against verified blobs. Boat snapshots can retain empty directories.
   await ociImages.validateAndRepair(store.all().filter((row) => row.tier !== "archived"));
   const images = instrumentImageStore(ociImages, metrics);
   const runtime = instrumentRuntime(new Runtime(cfg.runtime), metrics);

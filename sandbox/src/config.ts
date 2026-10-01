@@ -24,7 +24,7 @@ const Schema = z.object({
     .default(os.hostname()),
   /** `crun` for shared-kernel isolation, `runsc` for gVisor (§2, optional hardening). */
   PI_POD_SANDBOX_RUNTIME: z.string().default("crun"),
-  PI_POD_SANDBOX_HOST_BACKEND: z.enum(["static", "box"]).default("static"),
+  PI_POD_SANDBOX_HOST_BACKEND: z.enum(["static", "boat"]).default("static"),
   /** Opt-in, immutable one-pod profile; never inferred from the vendor machine type. */
   PI_POD_SANDBOX_PROFILE: z.enum(["shared", "small-v1"]).default("shared"),
   /** Nonbillable, signed lifecycle observations on disposable small guests only. */
@@ -49,14 +49,14 @@ const Schema = z.object({
    * Kernel aggregate cap applied to every tenant parent cgroup (`pps/tenant-<key>`),
    * in GiB. This is the kill boundary that stops a bursting tenant from reclaiming
    * memory out of vendor/system services: per-sandbox `memory.max` partitions the tenant,
-   * the tenant cap bounds the tenant. Unset defaults to the conservative box value in
-   * box mode and to uncapped in static mode (static contract unchanged). An explicit 0
-   * in box mode is rejected at startup: a box host must never silently run unlimited.
+   * the tenant cap bounds the tenant. Unset defaults to the conservative boat value in
+   * boat mode and to uncapped in static mode (static contract unchanged). An explicit 0
+   * in boat mode is rejected at startup: a boat host must never silently run unlimited.
    */
   PI_POD_SANDBOX_TENANT_MEMORY_GB: z.coerce.number().nonnegative().default(0),
   /**
    * Total CPU cores a tenant parent may use. Unset derives `max(0.5, host CPUs − reserve)`
-   * in box mode and leaves the parent uncapped in static mode (grant-managed hosts keep
+   * in boat mode and leaves the parent uncapped in static mode (grant-managed hosts keep
    * their grant/fallback semantics either way). Explicit 0 removes the cap.
    */
   PI_POD_SANDBOX_TENANT_CPU: z.coerce.number().nonnegative().optional(),
@@ -155,7 +155,7 @@ const Schema = z.object({
 
   /** Archive object store. `local` keeps archives on the state volume (dev, air-gapped).
    * `proxy` streams archives through the server's authenticated, path-scoped ingest
-   * so the box never holds object-store credentials. */
+   * so the boat never holds object-store credentials. */
   PI_POD_SANDBOX_ARCHIVE_DRIVER: z.enum(["s3", "local", "none", "proxy"]).default("local"),
   PI_POD_SANDBOX_ARCHIVE_PROXY_URL: z.string().optional(),
   PI_POD_SANDBOX_ARCHIVE_PROXY_TIMEOUT_MS: z.coerce.number().int().min(1000).max(3_600_000).default(120_000),
@@ -193,7 +193,7 @@ export interface Config {
   stateDir: string;
   hostId: string;
   runtime: string;
-  hostBackend: "static" | "box";
+  hostBackend: "static" | "boat";
   profile: "shared" | "small-v1";
   serviceObservations: {mode:"off"|"shadow-v1";keyPath:string|null;keyId:string|null};
   warmAfterMinutes: number;
@@ -283,7 +283,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const quota=8_000_000_000;
     const disk=quota/(1024**3);
     const exact:Record<string,number|string>={
-      PI_POD_SANDBOX_HOST_BACKEND:"box",PI_POD_SANDBOX_MEMORY_ADMISSION:"ceiling",
+      PI_POD_SANDBOX_HOST_BACKEND:"boat",PI_POD_SANDBOX_MEMORY_ADMISSION:"ceiling",
       PI_POD_SANDBOX_DISK_ADMISSION:"sparse",PI_POD_SANDBOX_FLEET_MEMORY_GB:2,
       PI_POD_SANDBOX_TENANT_MEMORY_GB:2,PI_POD_SANDBOX_MAX_MEMORY_GB:2,
       PI_POD_SANDBOX_FLEET_CPU:1.5,PI_POD_SANDBOX_TENANT_CPU:1.5,
@@ -307,16 +307,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (e.PI_POD_SANDBOX_DISK_ADMISSION === "sparse" && e.PI_POD_SANDBOX_STORAGE_QUOTA_GB === undefined) {
     throw new Error("sparse disk admission requires PI_POD_SANDBOX_STORAGE_QUOTA_GB");
   }
-  if (e.PI_POD_SANDBOX_HOST_BACKEND === "box") {
-    // Box capability implies a pinned per-user host: a hostname default here would boot
-    // "healthy" with capabilities.box=true while the server rejects every capacity report
-    // as identity-mismatch, leaving the box unplaceable yet apparently fine. Infra boot.py
+  if (e.PI_POD_SANDBOX_HOST_BACKEND === "boat") {
+    // Boat capability implies a pinned per-user host: a hostname default here would boot
+    // "healthy" with capabilities.boat=true while the server rejects every capacity report
+    // as identity-mismatch, leaving the boat unplaceable yet apparently fine. Infra boot.py
     // enforces the same rule outside this repo; fail closed here too so a missing
     // identity.env can never look placeable. Static mode keeps the hostname default.
     const rawId = env.PI_POD_SANDBOX_HOST_ID;
-    if (typeof rawId !== "string" || !/^box-[A-Za-z0-9._-]+$/.test(rawId)) {
+    if (typeof rawId !== "string" || !/^boat-[A-Za-z0-9._-]+$/.test(rawId)) {
       throw new Error(
-        "invalid configuration: PI_POD_SANDBOX_HOST_BACKEND=box requires PI_POD_SANDBOX_HOST_ID explicitly set to box-<userId> (object-key-safe, e.g. box-abc123); the hostname default is static-mode only",
+        "invalid configuration: PI_POD_SANDBOX_HOST_BACKEND=boat requires PI_POD_SANDBOX_HOST_ID explicitly set to boat-<userId> (object-key-safe, e.g. boat-abc123); the hostname default is static-mode only",
       );
     }
   }
@@ -439,7 +439,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       diskGB: e.PI_POD_SANDBOX_MAX_DISK_GB,
     },
     maxPids: e.PI_POD_SANDBOX_MAX_PIDS,
-    bridge: { name: e.PI_POD_SANDBOX_BRIDGE_NAME, cidr: env.PI_POD_SANDBOX_BRIDGE_CIDR === undefined && e.PI_POD_SANDBOX_HOST_BACKEND === "box" ? "10.78.0.0/16" : e.PI_POD_SANDBOX_BRIDGE_CIDR },
+    bridge: { name: e.PI_POD_SANDBOX_BRIDGE_NAME, cidr: env.PI_POD_SANDBOX_BRIDGE_CIDR === undefined && e.PI_POD_SANDBOX_HOST_BACKEND === "boat" ? "10.78.0.0/16" : e.PI_POD_SANDBOX_BRIDGE_CIDR },
     dns: e.PI_POD_SANDBOX_DNS.split(",").map((s) => s.trim()).filter(Boolean),
     apiHost: e.PI_POD_SANDBOX_API_HOST,
     archive,
@@ -465,36 +465,36 @@ export function hostCapacity(): { cpus: number; memoryBytes: number } {
 }
 
 /**
- * Conservative box default: an 8 GiB `default` box loses ~2.5 GiB to the vendor desktop
+ * Conservative boat default: an 8 GiB `default` boat loses ~2.5 GiB to the vendor desktop
  * image before any pod runs, so the tenant aggregate is capped at 5.5 GiB and the host
- * keeps its headroom plus swap. Larger boxes override this explicitly with a measured
- * value (see docs/native-box-runtime.md); the default stays safe-but-small there.
+ * keeps its headroom plus swap. Larger boats override this explicitly with a measured
+ * value (see docs/native-boat-runtime.md); the default stays safe-but-small there.
  */
-export const BOX_DEFAULT_TENANT_MEMORY_GB = 5.5;
+export const BOAT_DEFAULT_TENANT_MEMORY_GB = 5.5;
 /** Floor so a derived tenant CPU cap never squeezes a tenant below a runnable share. */
 export const MIN_TENANT_CPU_CORES = 0.5;
 
 /**
- * Resolve the kernel tenant aggregate memory cap. Box mode fails closed on an explicit 0:
+ * Resolve the kernel tenant aggregate memory cap. Boat mode fails closed on an explicit 0:
  * a per-user host with no tenant kill boundary is the configuration that OOM-killed
  * vendor services, so it must be a startup error, never a silent fallback to unlimited.
  */
 export function resolveTenantMemoryMaxBytes(
-  hostBackend: "static" | "box",
+  hostBackend: "static" | "boat",
   env: NodeJS.ProcessEnv,
 ): number | null {
   if (env.PI_POD_SANDBOX_TENANT_MEMORY_GB === undefined) {
-    return hostBackend === "box" ? Math.round(BOX_DEFAULT_TENANT_MEMORY_GB * 1024 ** 3) : null;
+    return hostBackend === "boat" ? Math.round(BOAT_DEFAULT_TENANT_MEMORY_GB * 1024 ** 3) : null;
   }
   const gib = Number(env.PI_POD_SANDBOX_TENANT_MEMORY_GB);
   if (!Number.isFinite(gib) || gib < 0) {
     throw new Error("invalid configuration: PI_POD_SANDBOX_TENANT_MEMORY_GB must be a non-negative number");
   }
   if (gib === 0) {
-    if (hostBackend === "box") {
+    if (hostBackend === "boat") {
       throw new Error(
-        "invalid configuration: PI_POD_SANDBOX_HOST_BACKEND=box requires PI_POD_SANDBOX_TENANT_MEMORY_GB > 0 " +
-          `(default ${BOX_DEFAULT_TENANT_MEMORY_GB}); an uncapped tenant aggregate OOM-kills vendor services`,
+        "invalid configuration: PI_POD_SANDBOX_HOST_BACKEND=boat requires PI_POD_SANDBOX_TENANT_MEMORY_GB > 0 " +
+          `(default ${BOAT_DEFAULT_TENANT_MEMORY_GB}); an uncapped tenant aggregate OOM-kills vendor services`,
       );
     }
     return null;
@@ -504,7 +504,7 @@ export function resolveTenantMemoryMaxBytes(
 
 /** Resolve the tenant aggregate CPU cap; `null` leaves the parent to weights/grants. */
 export function resolveTenantCpuMaxCores(
-  hostBackend: "static" | "box",
+  hostBackend: "static" | "boat",
   explicit: number | undefined,
   reserveCpu: number,
 ): number | null {
@@ -512,7 +512,7 @@ export function resolveTenantCpuMaxCores(
     // Explicit 0 removes the cap (a loud operator override, not a silent fallback).
     return explicit > 0 ? explicit : null;
   }
-  if (hostBackend !== "box") return null;
+  if (hostBackend !== "boat") return null;
   return Math.max(MIN_TENANT_CPU_CORES, os.cpus().length - reserveCpu);
 }
 

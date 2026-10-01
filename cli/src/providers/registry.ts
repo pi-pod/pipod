@@ -8,7 +8,7 @@ export const PROVIDER_CREDENTIAL_VARS: Record<string, string> = Object.fromEntri
  * Credential names stay reserved after an adapter is retired. Otherwise an old project env
  * can silently turn a former control-plane key into an ordinary secret injected into a pod.
  */
-export const RETIRED_PROVIDER_CREDENTIAL_VARS = ["BOX_API_KEY", "E2B_API_KEY", "DAYTONA_API_KEY"] as const;
+export const RETIRED_PROVIDER_CREDENTIAL_VARS = ["BOAT_API_KEY", "E2B_API_KEY", "DAYTONA_API_KEY"] as const;
 
 const providerCredentialVars = new Set<string>([
   ...Object.values(PROVIDER_CREDENTIAL_VARS),

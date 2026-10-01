@@ -28,8 +28,8 @@ async function proofServerProcesses(): Promise<string[]> {
   const { stdout } = await execFileAsync("ps", ["-eo", "pid,args"]);
   return stdout.split("\n").filter((line) => line.includes("proxy-origin-pin-proof-server.mjs"));
 }
-const HOST = "box-pintest";
-const OTHER_HOST = "box-otherhost";
+const HOST = "boat-pintest";
+const OTHER_HOST = "boat-otherhost";
 const KEY = (sha: string) => `pod-1/upper-${sha}.tar.zst`;
 
 /** Production-protocol stub with hit counting. Counts only /v1/host-archives hits. */
@@ -484,10 +484,10 @@ test("pin: canonicalization rejects userinfo/path/query/fragment, normalizes cas
   }
 });
 
-test("pin: box+local still boots without any binding; box/static+proxy without binding is blocked", async (t) => {
+test("pin: boat+local still boots without any binding; boat/static+proxy without binding is blocked", async (t) => {
   const stateDir = await tempStateDir(t);
-  for (const backend of ["box", "static"] as const) {
-    const hostId = backend === "box" ? "box-localboot" : HOST;
+  for (const backend of ["boat", "static"] as const) {
+    const hostId = backend === "boat" ? "boat-localboot" : HOST;
     const local = loadConfig({
       PI_POD_SANDBOX_TOKEN: TOKEN,
       PI_POD_SANDBOX_STATE_DIR: stateDir,
@@ -501,7 +501,7 @@ test("pin: box+local still boots without any binding; box/static+proxy without b
   // Proxy without binding is blocked in both backends (explicit: no static exemption).
   const stub = await startStub();
   t.after(() => stub.server.close());
-  for (const backend of ["box", "static"] as const) {
+  for (const backend of ["boat", "static"] as const) {
     const dir = await mkdtemp(path.join(os.tmpdir(), "proxy-pin-nobind-"));
     t.after(async () => {
       await rm(dir, { recursive: true, force: true });
@@ -509,7 +509,7 @@ test("pin: box+local still boots without any binding; box/static+proxy without b
     const cfg = loadConfig({
       PI_POD_SANDBOX_TOKEN: TOKEN,
       PI_POD_SANDBOX_STATE_DIR: dir,
-      PI_POD_SANDBOX_HOST_ID: backend === "box" ? "box-nobind" : HOST,
+      PI_POD_SANDBOX_HOST_ID: backend === "boat" ? "boat-nobind" : HOST,
       PI_POD_SANDBOX_HOST_BACKEND: backend,
       PI_POD_SANDBOX_ARCHIVE_DRIVER: "proxy",
       PI_POD_SANDBOX_ARCHIVE_PROXY_URL: stub.url,

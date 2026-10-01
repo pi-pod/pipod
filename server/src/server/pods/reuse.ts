@@ -338,7 +338,7 @@ async function provisionReuse(
   let podEnv: Record<string, string>;
   let resolution: Awaited<ReturnType<typeof resolveLaunchEgressPolicy>>["resolution"];
   try {
-    // ensurePodHostReady may wake the user's own box (infrastructure the claim already
+    // ensurePodHostReady may wake the user's own boat (infrastructure the claim already
     // covers); the sandbox itself — user code, exec, init — never runs before the decision.
     await edition().ensurePodHostReady(deps, pod);
     const acquired = await withProviderCredential({

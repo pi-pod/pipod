@@ -19,7 +19,7 @@ function probe(allocations: Map<string, number>, capacityBytes = 100 * GB) {
 }
 
 
-test("20 full-ceiling pods fit sparse/floor large-box admission; CPU fleet cap is honored", (t) => {
+test("20 full-ceiling pods fit sparse/floor large-boat admission; CPU fleet cap is honored", (t) => {
   const db = new Database(":memory:"); t.after(() => db.close());
   const allocations = new Map<string, number>();
   const ctrl = new AdmissionController(db, config({ PI_POD_SANDBOX_FLEET_MEMORY_GB: "12", PI_POD_SANDBOX_FLEET_CPU: "7" }), probe(allocations), { bootId: "boot", host });

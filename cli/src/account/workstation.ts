@@ -31,12 +31,12 @@ import { CancelledError, isWorkstationAsleepReason, PiPodError, WORKSTATION_ASLE
 import { color, debug, step } from "../log.js";
 
 /** Path shape of the owned-workstation status route, and of `hostId` inside a demand. */
-const WORKSTATION_HOST_ID_RULE = /^box-[A-Za-z0-9._-]{1,180}$/;
-/** `sandbox_hosts.box_state`. */
+const WORKSTATION_HOST_ID_RULE = /^boat-[A-Za-z0-9._-]{1,180}$/;
+/** `sandbox_hosts.boat_state`. */
 const WORKSTATION_STATES: ReadonlySet<string> = new Set([
   "provisioning", "starting", "running", "stopping", "stopped", "error", "unknown", "deleting", "deleted",
 ]);
-/** `box_operations.kind` / `.state`, and the bounded phase slug the controller writes. */
+/** `boat_operations.kind` / `.state`, and the bounded phase slug the controller writes. */
 const OPERATION_KINDS: ReadonlySet<string> = new Set([
   "create", "resume", "stop", "delete", "publish", "activate", "ttl",
 ]);
@@ -48,7 +48,7 @@ const PHASE_RULE = /^[A-Za-z0-9._:-]{1,64}$/;
 const ERROR_CODE_RULE = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
- * The six reasons a host-demand refusal can carry (server `BOX_HOST_DEMAND_REASONS`). A
+ * The six reasons a host-demand refusal can carry (server `BOAT_HOST_DEMAND_REASONS`). A
  * seventh value from a newer server is tolerated: `retryable` on the wire decides, not this
  * list, and unrecognized reasons fall back to the server's own sentence.
  */
@@ -58,7 +58,7 @@ export const WORKSTATION_DEMAND_REASONS = [
   "host_deleted",
   "host_retired",
   "host_requires_reconciliation",
-  "box_starts_disabled",
+  "boat_starts_disabled",
 ] as const;
 export type WorkstationDemandReason = (typeof WORKSTATION_DEMAND_REASONS)[number];
 const WORKSTATION_DEMAND_REASON_SET: ReadonlySet<string> = new Set(WORKSTATION_DEMAND_REASONS);
@@ -167,7 +167,7 @@ export function parseWorkstationOperation(value: unknown): WorkstationOperation 
 }
 
 /**
- * Recognize a host-demand `detail` (server `boxHostDemandDetail`). The three constant fields
+ * Recognize a host-demand `detail` (server `boatHostDemandDetail`). The three constant fields
  * `kind`/`resource`/`unit` plus a string `reason` and a boolean `retryable` are what identify
  * the shape; every other field is a hint that degrades gracefully. A forged or malformed host
  * pair is dropped — never dialled, never trusted — and the demand still waits, just without a
@@ -278,7 +278,7 @@ const WORKSTATION_COPY: Record<string, { headline: string; hint: string }> = {
     headline: "Your workstation is being checked after an interrupted change. This may take several minutes",
     hint: "the server settles the machine's state before using it again; your files are retained",
   },
-  box_starts_disabled: {
+  boat_starts_disabled: {
     headline: "Workstation starts are paused right now, so yours cannot be started",
     hint: "your files are retained on its disk — retry shortly, or ask an operator when starts resume",
   },

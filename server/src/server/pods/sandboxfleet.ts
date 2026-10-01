@@ -5,7 +5,7 @@
  * exists only here: a table of hosts, a choice of one at launch, and the drain/rehome steps
  * that let a machine be deleted. Stable sandbox_host_id is authoritative; the URL cached in
  * resolved config is history, except for unmapped legacy STATIC pods. Owned endpoints and
- * credentials are resolved afresh and sleeping Boxes never receive fleet traffic.
+ * credentials are resolved afresh and sleeping Boats never receive fleet traffic.
  *
  * A pod is pinned to its host for as long as it holds a local workspace. Only an
  * ARCHIVED pod can move, because only then does its workspace live in the shared object store.
@@ -30,7 +30,7 @@ import {
 } from "../safe-errors.js";
 import {
   checkRequestFit,
-  checkOwnedBoxRequestFit,
+  checkOwnedBoatRequestFit,
   rankCandidates,
   validateCapacityReport,
   type CapacityFit,
@@ -50,7 +50,7 @@ export async function sandboxFleetClient(host: SandboxHostRow, deps: FleetClient
     if (!current) throw conflict("host registration is missing");
     host = current;
   }
-  requireHostAwake({ box_state: host.box_state ?? null });
+  requireHostAwake({ boat_state: host.boat_state ?? null });
   if (deps.kek && !synthetic) return clientForHost(host.id, deps.kek, deps.platformToken ?? null);
   if (host.owner_user_id != null || host.auth_ciphertext != null) {
     throw conflict("host-specific authentication requires a KEK");
@@ -91,8 +91,8 @@ export interface SandboxHostRow {
   synthetic?: true;
   auth_ciphertext?: Buffer | null;
   owner_user_id?: string | null;
-  box_id?: string | null;
-  box_state?: HostIdentity["box_state"];
+  boat_id?: string | null;
+  boat_state?: HostIdentity["boat_state"];
   runtime_boot_id?: string | null;
   hosted_url?: string | null;
   id: string;
@@ -155,8 +155,8 @@ export async function listSandboxHosts(status?: SandboxHostStatus): Promise<Sand
 
 /**
  * Fleet-sweep listing (M6/M10): hosts whose runtime endpoint may be dialed
- * right now — static hosts (`box_state IS NULL`) plus Box hosts the vendor
- * reports `running`. Sleeping/transitional Box hosts (`stopped`, `starting`,
+ * right now — static hosts (`boat_state IS NULL`) plus Boat hosts the vendor
+ * reports `running`. Sleeping/transitional Boat hosts (`stopped`, `starting`,
  * `unknown`, …) are excluded IN SQL so a tick over thousands of mostly-stopped
  * hosts never pulls (or probes) the sleeping rows. Operator surfaces
  * (`fleet list`/`doctor`) and placement keep `listSandboxHosts`: they must
@@ -168,8 +168,8 @@ export async function listSandboxHosts(status?: SandboxHostStatus): Promise<Sand
 export async function listDiallableSandboxHosts(status?: SandboxHostStatus): Promise<SandboxHostRow[]> {
   const rows = await query<SandboxHostRow>(
     status === undefined
-      ? `SELECT * FROM sandbox_hosts WHERE (box_state IS NULL OR box_state = 'running') ORDER BY id`
-      : `SELECT * FROM sandbox_hosts WHERE status = $1 AND (box_state IS NULL OR box_state = 'running') ORDER BY id`,
+      ? `SELECT * FROM sandbox_hosts WHERE (boat_state IS NULL OR boat_state = 'running') ORDER BY id`
+      : `SELECT * FROM sandbox_hosts WHERE status = $1 AND (boat_state IS NULL OR boat_state = 'running') ORDER BY id`,
     status === undefined ? [] : [status],
   );
   return rows.rows;
@@ -376,7 +376,7 @@ export async function probeSandboxHost(host: SandboxHostRow, deps: FleetClientDe
     capacity: null,
     capacityStatus: "absent",
   };
-  if (!hostCanDial({ box_state: host.box_state ?? null }) || !(host.hosted_url ?? host.url)) return unreachable;
+  if (!hostCanDial({ boat_state: host.boat_state ?? null }) || !(host.hosted_url ?? host.url)) return unreachable;
   let health: HealthResponse;
   try {
     const client = deps.kek || host.owner_user_id != null
@@ -430,7 +430,7 @@ export async function probeSandboxHost(host: SandboxHostRow, deps: FleetClientDe
 
 /**
  * Default probe fan-out bound for recurring sweeps (M6/M10). Matches the
- * usage collector's `USAGE_COLLECTION_MAX_HOSTS` default (4) and the box
+ * usage collector's `USAGE_COLLECTION_MAX_HOSTS` default (4) and the boat
  * activity tick's batch of 4: a sweep must never open one connection per
  * host when the fleet is thousands of rows. Callers that probe a handful of
  * placement candidates or answer one operator command omit the bound and
@@ -558,12 +558,12 @@ export function screenHostEvidence(
       continue;
     }
     if (opts.ownerUserId !== undefined && (candidate.host.owner_user_id !== opts.ownerUserId ||
-        candidate.host.box_state !== "running" || !candidate.host.box_id || !candidate.host.runtime_boot_id ||
+        candidate.host.boat_state !== "running" || !candidate.host.boat_id || !candidate.host.runtime_boot_id ||
         report.bootId !== candidate.host.runtime_boot_id || report.hostId !== candidate.host.id)) {
       refuse(candidate, "host_mismatch", "host_mismatch");
       continue;
     }
-    if (opts.ownerUserId !== undefined ? report.capabilities.box !== true : report.capabilities.memoryAdmission !== "ceiling") {
+    if (opts.ownerUserId !== undefined ? report.capabilities.boat !== true : report.capabilities.memoryAdmission !== "ceiling") {
       refuse(candidate, "unsupported_admission", "unsupported_admission");
       continue;
     }
@@ -613,7 +613,7 @@ export async function placeSandboxHost(
   opts: FleetClientDeps & { allowLegacyHosts?: boolean } = {},
 ): Promise<SandboxHostRow | null> {
   const registered = await listSandboxHosts();
-  const active = registered.filter((host) => host.status === "active" && host.owner_user_id == null && !!host.url && hostCanDial({ box_state: host.box_state ?? null }) && !exclude.has(host.id));
+  const active = registered.filter((host) => host.status === "active" && host.owner_user_id == null && !!host.url && hostCanDial({ boat_state: host.boat_state ?? null }) && !exclude.has(host.id));
   if (!active.length && registered.length && placementMode === "single") throw fleetUnavailableError("no eligible static sandbox host is awake");
   if (active.length === 0) {
     if (exclude.size > 0) {
@@ -734,7 +734,7 @@ export async function checkPinnedHostEvidence(
   freshnessMs: number = DEFAULT_CAPACITY_FRESHNESS_MS,
   nowMs?: number,
   client?: SandboxClient,
-  ownedBox?: { bootId: string },
+  ownedBoat?: { bootId: string },
 ): Promise<PinnedEvidenceVerdict> {
   let health: { capacity?: unknown };
   try {
@@ -754,9 +754,9 @@ export async function checkPinnedHostEvidence(
   if (report.hostId !== hostId) return "mismatch";
   const ageMs = effectiveNow - Date.parse(report.sampledAt);
   if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > freshnessMs) return "stale";
-  if (ownedBox) {
-    if (report.bootId !== ownedBox.bootId) return "mismatch";
-    if (report.capabilities.box !== true) return "floor";
+  if (ownedBoat) {
+    if (report.bootId !== ownedBoat.bootId) return "mismatch";
+    if (report.capabilities.boat !== true) return "floor";
   } else if (report.capabilities.memoryAdmission !== "ceiling") return "floor";
   return "ok";
 }
@@ -926,14 +926,14 @@ export async function placeSandboxHostForRequest(args: RequestPlacement): Promis
     (await query<SandboxHostRow>("SELECT * FROM sandbox_hosts WHERE owner_user_id=$1", [args.ownerUserId])).rows;
   const registered = args.exactHostId ? registeredAll.filter((host) => host.id === args.exactHostId) : registeredAll;
   if (args.exactHostId && registered.length === 0) {
-    throw serviceUnavailable("this pod's box is not eligible", {
+    throw serviceUnavailable("this pod's boat is not eligible", {
       kind: "admission", reason: "transition_capacity", resource: "transitions", unit: "count", retryable: true,
       hostId: args.exactHostId,
     });
   }
   const active = registered.filter((host) => host.status === "active" &&
     (args.ownerUserId === undefined ? host.owner_user_id == null : host.owner_user_id === args.ownerUserId) &&
-    !!host.url && hostCanDial({ box_state: host.box_state ?? null }) && !exclude.has(host.id));
+    !!host.url && hostCanDial({ boat_state: host.boat_state ?? null }) && !exclude.has(host.id));
   if (!active.length && registered.length && placementMode === "single") throw fleetUnavailableError("no eligible static sandbox host is awake");
   if (active.length === 0) {
     if (exclude.size > 0) {
@@ -1012,7 +1012,7 @@ export async function placeSandboxHostForRequest(args: RequestPlacement): Promis
         continue;
       }
     }
-    const fit = args.ownerUserId === undefined ? checkRequestFit(report, args.shape) : checkOwnedBoxRequestFit(report, args.shape);
+    const fit = args.ownerUserId === undefined ? checkRequestFit(report, args.shape) : checkOwnedBoatRequestFit(report, args.shape);
     if (!fit.fits) {
       refusals.push({
         hostId: candidate.host.id,
@@ -1241,7 +1241,7 @@ export async function preloadImageOnFleet(
   // Pull concurrently: each machine has its own network and content store, while serial cold
   // pulls could exceed the production deploy job's fixed timeout as the fleet grows.
   const outcomes = await Promise.all(
-    targets.filter((host) => hostCanDial({ box_state: host.box_state ?? null })).map(async (host) => {
+    targets.filter((host) => hostCanDial({ boat_state: host.boat_state ?? null })).map(async (host) => {
       try {
         await (await fleetClient(host, platformTokenValue, host.id === DEFAULT_FLEET_PRELOAD_HOST_ID ? undefined : kek)).json<unknown>("POST", "/v1/images", {
           ref,

@@ -10,8 +10,8 @@ import { createProxyStore, assertProxyKey } from "../src/archive/proxystore.js";
 import { createObjectStore } from "../src/archive/objectstore.js";
 
 const TOKEN = "test-runtime-token-0123456789abcdef";
-const HOST = "box-testuser";
-const OTHER_HOST = "box-someoneelse";
+const HOST = "boat-testuser";
+const OTHER_HOST = "boat-someoneelse";
 const KEY = (sha: string) => `pod-1/upper-${sha}.tar.zst`;
 
 /** In-memory stub of the server proxy protocol (pi-pod-server src/server/archive/proxy.ts).

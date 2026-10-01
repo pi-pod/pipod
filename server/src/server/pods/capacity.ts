@@ -96,7 +96,7 @@ export function validateCapacityReport(raw: unknown): CapacityReportV1 | null {
   if (capabilities["memoryAdmission"] !== "ceiling" && capabilities["memoryAdmission"] !== "floor") {
     return null;
   }
-  if (capabilities["box"] !== undefined && typeof capabilities["box"] !== "boolean") return null;
+  if (capabilities["boat"] !== undefined && typeof capabilities["boat"] !== "boolean") return null;
   if (capabilities["diskAdmission"] !== undefined && capabilities["diskAdmission"] !== "sparse") return null;
   if (capabilities["storageQuotaBytes"] !== undefined && !isFiniteNonNegative(capabilities["storageQuotaBytes"])) return null;
   if (capabilities["sparseMinDiskBytes"] !== undefined && !isFiniteNonNegative(capabilities["sparseMinDiskBytes"])) return null;
@@ -205,7 +205,7 @@ export function platformDiskDefault(args: {
   explicitSandboxUrl: boolean;
   /** Per-leaf winning layers from the settings merge (raw layers only). */
   provenance: ReadonlyArray<{ path: string }>;
-  /** Provisioned large boxes use the 60 GiB workspace default. Absent keeps 20. */
+  /** Provisioned large boats use the 60 GiB workspace default. Absent keeps 20. */
   diskGB?: number;
 }): { diskGB: number; provenanceEntry: { path: string; winner: string; over: string[] } } | null {
   if (args.providerName !== "sandbox") return null;
@@ -315,23 +315,23 @@ export function checkRequestFit(report: CapacityReportV1, shape: ResolvedShape):
   return { fits: true };
 }
 
-/** Largest workspace filesystem an owned box may be asked for. Aggregate
+/** Largest workspace filesystem an owned boat may be asked for. Aggregate
  * admission stays the host storage quota; this is not a per-sandbox reservation. */
-export const OWNED_BOX_DISK_CEILING_GB = 60;
+export const OWNED_BOAT_DISK_CEILING_GB = 60;
 
 /** Fresh ext4 image of 60 GiB measured 273346560 bytes allocated after mkfs
- * (2026-09-28, large box from pipod-ws-v5). 512 MiB is above that measurement
+ * (2026-09-28, large boat from pipod-ws-v5). 512 MiB is above that measurement
  * and is the server's fresh-create charge. The host's atomic admission remains
  * final and charges the blocks the image actually allocates. */
-export const OWNED_BOX_FRESH_DISK_RESERVATION_BYTES = 512 * 1024 ** 2;
+export const OWNED_BOAT_FRESH_DISK_RESERVATION_BYTES = 512 * 1024 ** 2;
 
-/** Bytes a fresh owned-box create reserves. Sparse hosts do not reserve the
+/** Bytes a fresh owned-boat create reserves. Sparse hosts do not reserve the
  * whole filesystem ceiling. Missing sparse attestation keeps the full ceiling. */
-export function ownedBoxFreshDiskReservationBytes(report: CapacityReportV1, shape: ResolvedShape): number {
+export function ownedBoatFreshDiskReservationBytes(report: CapacityReportV1, shape: ResolvedShape): number {
   if (report.capabilities.diskAdmission !== "sparse") return shape.diskBytes;
   const advertised = report.capabilities.sparseMinDiskBytes;
-  if (typeof advertised === "number" && advertised > 0) return Math.max(advertised, OWNED_BOX_FRESH_DISK_RESERVATION_BYTES);
-  return OWNED_BOX_FRESH_DISK_RESERVATION_BYTES;
+  if (typeof advertised === "number" && advertised > 0) return Math.max(advertised, OWNED_BOAT_FRESH_DISK_RESERVATION_BYTES);
+  return OWNED_BOAT_FRESH_DISK_RESERVATION_BYTES;
 }
 
 /** Explicit personal-host policy, NEVER used for shared/static placement. The
@@ -339,11 +339,11 @@ export function ownedBoxFreshDiskReservationBytes(report: CapacityReportV1, shap
  * 4GiB is a ceiling, not a reservation: the qualified runtime charges 512MiB and
  * .25CPU floors atomically. Sparse disk reserves the qualified fresh-image
  * charge, not the filesystem ceiling; runtime admission is final. */
-export function checkOwnedBoxRequestFit(report: CapacityReportV1, shape: ResolvedShape): CapacityFit {
-  if (report.capabilities.box !== true) {
+export function checkOwnedBoatRequestFit(report: CapacityReportV1, shape: ResolvedShape): CapacityFit {
+  if (report.capabilities.boat !== true) {
     return { fits: false, reason: "unsupported_admission" };
   }
-  if (!shapeWithinMax(shape, { cpu: 2, memoryGB: 4, diskGB: OWNED_BOX_DISK_CEILING_GB }) || !shapeWithinMax(shape, report.capabilities.maxShape)) {
+  if (!shapeWithinMax(shape, { cpu: 2, memoryGB: 4, diskGB: OWNED_BOAT_DISK_CEILING_GB }) || !shapeWithinMax(shape, report.capabilities.maxShape)) {
     return { fits: false, reason: "unsupported_shape" };
   }
   if (report.capabilities.memoryAdmission === "ceiling") return checkRequestFit(report, shape);
@@ -351,7 +351,7 @@ export function checkOwnedBoxRequestFit(report: CapacityReportV1, shape: Resolve
   if (report.memory.debtBytes > 0) return { fits: false, reason: "memory_debt", requiredBytes, availableBytes: report.memory.availableBytes };
   if (report.memory.availableBytes < requiredBytes) return { fits: false, reason: "memory_capacity", requiredBytes, availableBytes: report.memory.availableBytes };
   if (report.cpu.budgetCores - report.cpu.committedFloorCores < 0.25) return { fits: false, reason: "cpu_capacity" };
-  const requiredDisk = ownedBoxFreshDiskReservationBytes(report, shape);
+  const requiredDisk = ownedBoatFreshDiskReservationBytes(report, shape);
   if (report.disk.availableBytes < requiredDisk) return { fits: false, reason: "disk_capacity", requiredBytes: requiredDisk, availableBytes: report.disk.availableBytes };
   if (report.transitions.inFlight >= report.transitions.maxInFlight) return { fits: false, reason: "transition_capacity" };
   return { fits: true };

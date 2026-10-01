@@ -187,12 +187,12 @@ describe("review regressions", () => {
     });
   });
 
-  it("Box cold resume stops vanished hot pods, rebases local timers and retains boot usage lineage/workspaces", async () => {
-    cfg.hostBackend = "box";
+  it("Boat cold resume stops vanished hot pods, rebases local timers and retains boot usage lineage/workspaces", async () => {
+    cfg.hostBackend = "boat";
     const now = Date.now();
-    const id = "sb-boxresume00000000001";
+    const id = "sb-boatresume0000000001";
     store.insert(row({ id, tier: "hot", netIndex: 1, lastActivityAt: now - 86_400_000, runtimeGeneration: 3 }));
-    const stoppedId = "sb-boxstopped000000001";
+    const stoppedId = "sb-boatstopped00000001";
     store.insert(row({ id: stoppedId, tier: "stopped", netIndex: 2, stoppedAt: now - 86_400_000 }));
     fs.mkdirSync(path.join(cfg.paths.sandboxes, id), { recursive: true });
     const workspace = path.join(cfg.paths.sandboxes, id, "writable.ext4");
@@ -215,7 +215,7 @@ describe("review regressions", () => {
     const boots = store.database.prepare("SELECT boot_id FROM usage_events ORDER BY seq").all() as Array<{ boot_id: string }>;
     assert.deepEqual(boots.map((r) => r.boot_id), ["boot-before-sleep", "boot-after-resume"]);
     assert.ok(events.events[1]!.seq > seq);
-    assert.equal(resumed.capacityReport().capabilities.box, true);
+    assert.equal(resumed.capacityReport().capabilities.boat, true);
   });
 
   describe("F3: malformed shapes are refused, never stored", () => {

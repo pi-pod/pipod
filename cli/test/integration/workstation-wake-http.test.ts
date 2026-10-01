@@ -17,7 +17,7 @@ import { launchRidingOutBlips } from "../../src/account/launch-provision.js";
 import type { AccountLaunchPlan } from "../../src/account/launch-types.js";
 import { CancelledError, PiPodError } from "../../src/errors.js";
 
-const HOST = "box-9622f2fa-48d5-493f-82e4-4c0dee0d54f9";
+const HOST = "boat-9622f2fa-48d5-493f-82e4-4c0dee0d54f9";
 const POD_ID = "0198f5a0-0000-7000-8000-0000000000d1";
 
 const hostDemandBody = (state: string): Record<string, unknown> => ({

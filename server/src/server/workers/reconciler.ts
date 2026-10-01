@@ -58,7 +58,7 @@ export function isFreshProviderTransition(
 const CAPTURED_TUPLE_PREDICATE = `id = $1 AND provider_state = $2 AND org_id = $3 AND provider = $4
            AND provider_sandbox_id = $5
            AND sandbox_host_id IS NOT DISTINCT FROM $9::text
-           AND ($11::text IS NULL OR EXISTS (SELECT 1 FROM sandbox_hosts h WHERE h.id = $11 AND h.generation = $10::bigint AND (h.box_state IS NULL OR h.box_state = 'running') FOR SHARE))
+           AND ($11::text IS NULL OR EXISTS (SELECT 1 FROM sandbox_hosts h WHERE h.id = $11 AND h.generation = $10::bigint AND (h.boat_state IS NULL OR h.boat_state = 'running') FOR SHARE))
            AND COALESCE(resolved_config #> ARRAY['config', 'providers', provider], '{}'::jsonb) = $6::jsonb`;
 
 export async function runReconciler(deps: WorkerDeps): Promise<void> {

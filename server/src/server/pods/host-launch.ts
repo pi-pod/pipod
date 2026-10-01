@@ -109,8 +109,8 @@ export async function launchHostChild(
   await assertLaunchAllowed(undefined, args.userId);
   const host = args.hostPod;
   const identityHost = await hostForPod(host);
-  // A dedicated box is still the owner's machine: co-locating onto it is the same
-  // explicit choice as on a static host, and adds no box and no box time.
+  // A dedicated boat is still the owner's machine: co-locating onto it is the same
+  // explicit choice as on a static host, and adds no boat and no boat time.
   if (identityHost?.owner_user_id != null && identityHost.owner_user_id !== args.userId) {
     throw conflict("--on cannot place pods on another user's personal host, even within the same organization");
   }

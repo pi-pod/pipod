@@ -109,7 +109,7 @@ console.log(
 );
 
 // Make each sandbox hold real memory and real files, so freeze/reclaim and archive have
-// something to work on rather than measuring an empty box.
+// something to work on rather than measuring an empty boat.
 for (const id of ids) {
   await exec(id, ["/bin/sh", "-c", `dd if=/dev/zero of=/workspace/payload bs=1M count=${PAYLOAD_MB} 2>/dev/null`]);
 }

@@ -183,15 +183,15 @@ export function intEnv(name: string, fallback: number): number {
   return n;
 }
 
-/** One-line host identity for operator output. Box lifecycle state and ownership
+/** One-line host identity for operator output. Boat lifecycle state and ownership
  * ride along so a stopped-but-healthy personal host reads as asleep-at-a-glance
  * (never mistaken for a broken static host), without suppressing any fault line. */
 function describeHost(host: SandboxHostRow): string {
-  const box = host.box_state != null ? ` box=${host.box_state}` : "";
+  const boat = host.boat_state != null ? ` boat=${host.boat_state}` : "";
   const owner = host.owner_user_id != null ? " owned" : "";
-  // Owned Box rows carry url NULL with the dial endpoint in hosted_url;
+  // Owned Boat rows carry url NULL with the dial endpoint in hosted_url;
   // printing raw null sends the operator chasing a missing URL.
-  return `${host.id.padEnd(20)} ${host.status.padEnd(9)} ${host.hosted_url ?? host.url}${box}${owner}`;
+  return `${host.id.padEnd(20)} ${host.status.padEnd(9)} ${host.hosted_url ?? host.url}${boat}${owner}`;
 }
 
 /**
@@ -241,7 +241,7 @@ async function list(): Promise<void> {
     const detail = entry.reachable
       ? `hot=${counts?.hot ?? 0} warm=${counts?.warm ?? 0} stopped=${counts?.stopped ?? 0} ` +
         `archived=${counts?.archived ?? 0} | ${headroom}`
-      : entry.host.box_state != null && entry.host.box_state !== "running" ? `sleeping (${entry.host.box_state}) — probe skipped` : "UNREACHABLE";
+      : entry.host.boat_state != null && entry.host.boat_state !== "running" ? `sleeping (${entry.host.boat_state}) — probe skipped` : "UNREACHABLE";
     console.log(`${describeHost(entry.host)}\n  ${detail}`);
     if (entry.reachable) console.log(`  ${describeFairness(entry.capacity?.fairness ?? null)}`);
   }
@@ -265,8 +265,8 @@ async function doctor(): Promise<void> {
   const probed = await probeSandboxHosts(hosts, fleetDeps());
   let problems = 0;
   for (const entry of probed) {
-    if (entry.host.box_state != null && entry.host.box_state !== "running") {
-      console.log(`${describeHost(entry.host)}\n  sleeping (${entry.host.box_state}) — probe skipped`);
+    if (entry.host.boat_state != null && entry.host.boat_state !== "running") {
+      console.log(`${describeHost(entry.host)}\n  sleeping (${entry.host.boat_state}) — probe skipped`);
       continue;
     }
     const notes: string[] = [];

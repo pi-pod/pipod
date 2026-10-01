@@ -370,7 +370,7 @@ export class Manager {
 
   /**
    * Kernel aggregate caps for one tenant parent: equal weight, CPU (the grant's cores on
-   * grant-managed hosts, the box aggregate CPU cap when unmanaged on a box host, uncapped
+   * grant-managed hosts, the boat aggregate CPU cap when unmanaged on a boat host, uncapped
    * weights otherwise) and the tenant memory kill boundary. Throws conflict when the
    * kernel rejects the memory cap so the launch is refused instead of running uncapped.
    */
@@ -379,7 +379,7 @@ export class Manager {
     tenant.ensure();
     const grant = this.grants.status(userKey, this.fallbackContext());
     const cpuApplied=tenant.setCpuMax(
-      this.grants.managedMode() || this.cfg.hostBackend !== "box"
+      this.grants.managedMode() || this.cfg.hostBackend !== "boat"
         ? grant.effectiveCores
         : this.cfg.tenancy.tenantCpuMaxCores,
     );
@@ -537,15 +537,15 @@ export class Manager {
     }
     for (const dir of Object.values(this.cfg.paths)) fs.mkdirSync(dir, { recursive: true });
     this.cgroups.ensure({ memoryBytes: this.cfg.fleet.memoryBytes, cpu: this.cfg.fleet.cpu },this.singleton.enabled);
-    if (this.cfg.hostBackend === "box") {
-      // Observable at every boot so an uncapped box host can never pass as configured:
-      // box mode already fails closed at config load when the memory cap is missing.
+    if (this.cfg.hostBackend === "boat") {
+      // Observable at every boot so an uncapped boat host can never pass as configured:
+      // boat mode already fails closed at config load when the memory cap is missing.
       this.log.info(
         {
           tenantMemoryMaxBytes: this.cfg.tenancy.tenantMemoryMaxBytes,
           tenantCpuMaxCores: this.cfg.tenancy.tenantCpuMaxCores,
         },
-        "box tenant aggregate caps in force",
+        "boat tenant aggregate caps in force",
       );
     }
     this.normalizeStoredResources();
@@ -554,7 +554,7 @@ export class Manager {
     await this.recoverJournal();
     if(this.singleton.enabled && this.admission.active().some(r=>r.status==="quarantined"))
       throw new Error("small VM recovery left unresolved admission custody");
-    if (this.cfg.hostBackend === "box") this.store.rebaseTimers(this.clock());
+    if (this.cfg.hostBackend === "boat") this.store.rebaseTimers(this.clock());
     this.cleanupTenantParents();
     this.housekeeping();
   }
@@ -1896,7 +1896,7 @@ export class Manager {
   }
 
   /** Operator-forced DR snapshot of the host registry. Ignores drIntervalMinutes=0
-   * (Box hosts disable the wall-clock reaper snapshot). Refuses when the object
+   * (Boat hosts disable the wall-clock reaper snapshot). Refuses when the object
    * store is `none` so a "success" can never mean bytes landed on the dying disk. */
   async forceDisasterRecoverySnapshot(): Promise<{ key: string; size: number }> {
     if (this.objects.kind === "none") {
@@ -2542,7 +2542,7 @@ export class Manager {
         standardShape: standardShape(this.cfg),
         resize: { memoryGrowOnline: true, memoryShrink: false, diskGrowOnline: true, diskShrink: false },
         memoryAdmission: this.cfg.admission.memoryMode,
-        ...(this.cfg.hostBackend === "box" ? { box: true } : {}),
+        ...(this.cfg.hostBackend === "boat" ? { boat: true } : {}),
         ...(this.cfg.admission.diskMode === "sparse" ? { diskAdmission: "sparse" as const, storageQuotaBytes: this.cfg.admission.storageQuotaBytes! } : {}),
         ownerIdentity: true,
         tenantCgroups: true,

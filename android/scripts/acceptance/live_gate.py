@@ -7,7 +7,7 @@ Modes (required argv):
   fence     After native Stop: non-waking GET must be product asleep.
   verify    After native resume: same sha+mtime_ns on the same pod.
   custody   After second sandbox fence: no owned pod still started.
-  arm-wait  SaaS last: POST /v1/workstations/{box-*}/stop with {}.
+  arm-wait  SaaS last: POST /v1/workstations/{boat-*}/stop with {}.
 
 Bearer /me is not native PKCE proof. 503 host_starting is SaaS-only and is
 caused by the UI, not this script.

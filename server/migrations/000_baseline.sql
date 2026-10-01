@@ -27,7 +27,7 @@ CREATE FUNCTION public.sandbox_host_identity_immutable() RETURNS trigger
     AS $$
 BEGIN
   IF NEW.id IS DISTINCT FROM OLD.id OR NEW.owner_user_id IS DISTINCT FROM OLD.owner_user_id
-    OR (OLD.box_id IS NOT NULL AND NEW.box_id IS DISTINCT FROM OLD.box_id) THEN
+    OR (OLD.boat_id IS NOT NULL AND NEW.boat_id IS DISTINCT FROM OLD.boat_id) THEN
     RAISE EXCEPTION 'sandbox host identity is immutable' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
@@ -42,9 +42,9 @@ BEGIN
     RAISE EXCEPTION 'isolated pod custody is immutable' USING ERRCODE='23514';
   END IF;
   IF OLD.isolated_pod_id IS NOT NULL
-    AND OLD.box_state IN ('deleted','superseded')
-    AND NEW.box_state IS DISTINCT FROM OLD.box_state
-    AND NEW.box_state NOT IN ('deleted','superseded') THEN
+    AND OLD.boat_state IN ('deleted','superseded')
+    AND NEW.boat_state IS DISTINCT FROM OLD.boat_state
+    AND NEW.boat_state NOT IN ('deleted','superseded') THEN
     RAISE EXCEPTION 'terminal isolated host cannot reenter live custody' USING ERRCODE='23514';
   END IF;
   RETURN NEW;
@@ -58,7 +58,7 @@ DECLARE owner_id text; isolated_id uuid;
 BEGIN
   IF TG_OP='UPDATE' AND EXISTS (SELECT 1 FROM sandbox_hosts h
     WHERE h.isolated_pod_id=OLD.id
-      AND h.box_state IS DISTINCT FROM 'deleted' AND h.box_state IS DISTINCT FROM 'superseded'
+      AND h.boat_state IS DISTINCT FROM 'deleted' AND h.boat_state IS DISTINCT FROM 'superseded'
       AND (NEW.id IS DISTINCT FROM OLD.id OR NEW.sandbox_host_id IS DISTINCT FROM h.id)) THEN
     RAISE EXCEPTION 'live isolated pod identity or route cannot change' USING ERRCODE='23514';
   END IF;
@@ -636,8 +636,8 @@ CREATE TABLE public.sandbox_hosts (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     owner_user_id text,
-    box_id text,
-    box_state text,
+    boat_id text,
+    boat_state text,
     hosted_url text,
     last_seen_at timestamp with time zone,
     runtime_boot_id text,
@@ -647,8 +647,8 @@ CREATE TABLE public.sandbox_hosts (
     auth_encryption_version integer,
     isolated_pod_id uuid,
     CONSTRAINT sandbox_hosts_auth_complete_check CHECK (((num_nonnulls(auth_ciphertext, auth_key_id, auth_encryption_version) = ANY (ARRAY[0, 3])) AND ((auth_encryption_version IS NULL) OR (auth_encryption_version = 2)))),
-    CONSTRAINT sandbox_hosts_box_owner_check CHECK ((((owner_user_id IS NULL) AND (box_state IS NULL) AND (box_id IS NULL) AND (url IS NOT NULL)) OR ((owner_user_id IS NOT NULL) AND (box_state IS NOT NULL)))),
-    CONSTRAINT sandbox_hosts_box_state_check CHECK (((box_state IS NULL) OR (box_state = ANY (ARRAY['provisioning'::text, 'starting'::text, 'running'::text, 'stopping'::text, 'stopped'::text, 'error'::text, 'unknown'::text, 'deleting'::text, 'deleted'::text, 'superseded'::text])))),
+    CONSTRAINT sandbox_hosts_boat_owner_check CHECK ((((owner_user_id IS NULL) AND (boat_state IS NULL) AND (boat_id IS NULL) AND (url IS NOT NULL)) OR ((owner_user_id IS NOT NULL) AND (boat_state IS NOT NULL)))),
+    CONSTRAINT sandbox_hosts_boat_state_check CHECK (((boat_state IS NULL) OR (boat_state = ANY (ARRAY['provisioning'::text, 'starting'::text, 'running'::text, 'stopping'::text, 'stopped'::text, 'error'::text, 'unknown'::text, 'deleting'::text, 'deleted'::text, 'superseded'::text])))),
     CONSTRAINT sandbox_hosts_generation_check CHECK ((generation >= 0)),
     CONSTRAINT sandbox_hosts_hosted_url_public_check CHECK (((hosted_url IS NULL) OR ((hosted_url ~ '^https?://'::text) AND (hosted_url !~ '[?#]'::text) AND (hosted_url !~ '://[^/]*@'::text)))),
     CONSTRAINT sandbox_hosts_isolated_owner_check CHECK (((isolated_pod_id IS NULL) OR (owner_user_id IS NOT NULL))),
@@ -867,7 +867,7 @@ ALTER TABLE ONLY public.queued_prompts
     ADD CONSTRAINT queued_prompts_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.sandbox_hosts
-    ADD CONSTRAINT sandbox_hosts_box_id_key UNIQUE (box_id);
+    ADD CONSTRAINT sandbox_hosts_boat_id_key UNIQUE (boat_id);
 
 ALTER TABLE ONLY public.sandbox_hosts
     ADD CONSTRAINT sandbox_hosts_pkey PRIMARY KEY (id);
@@ -1005,9 +1005,9 @@ CREATE INDEX sandbox_hosts_active_idx ON public.sandbox_hosts USING btree (id) W
 
 CREATE INDEX sandbox_hosts_isolated_pod_history_idx ON public.sandbox_hosts USING btree (isolated_pod_id) WHERE (isolated_pod_id IS NOT NULL);
 
-CREATE UNIQUE INDEX sandbox_hosts_one_live_isolated_pod_idx ON public.sandbox_hosts USING btree (isolated_pod_id) WHERE ((isolated_pod_id IS NOT NULL) AND (box_state IS DISTINCT FROM 'deleted'::text) AND (box_state IS DISTINCT FROM 'superseded'::text));
+CREATE UNIQUE INDEX sandbox_hosts_one_live_isolated_pod_idx ON public.sandbox_hosts USING btree (isolated_pod_id) WHERE ((isolated_pod_id IS NOT NULL) AND (boat_state IS DISTINCT FROM 'deleted'::text) AND (boat_state IS DISTINCT FROM 'superseded'::text));
 
-CREATE UNIQUE INDEX sandbox_hosts_one_live_owner_idx ON public.sandbox_hosts USING btree (owner_user_id) WHERE ((owner_user_id IS NOT NULL) AND (isolated_pod_id IS NULL) AND (box_state IS DISTINCT FROM 'deleted'::text) AND (box_state IS DISTINCT FROM 'superseded'::text));
+CREATE UNIQUE INDEX sandbox_hosts_one_live_owner_idx ON public.sandbox_hosts USING btree (owner_user_id) WHERE ((owner_user_id IS NOT NULL) AND (isolated_pod_id IS NULL) AND (boat_state IS DISTINCT FROM 'deleted'::text) AND (boat_state IS DISTINCT FROM 'superseded'::text));
 
 CREATE INDEX session_events_created_idx ON public.session_events USING btree (created_at);
 
@@ -1021,7 +1021,7 @@ CREATE TRIGGER job_host_wait_snapshot_guard BEFORE UPDATE ON public.job_runs FOR
 
 CREATE TRIGGER sandbox_host_identity_immutable BEFORE UPDATE ON public.sandbox_hosts FOR EACH ROW EXECUTE FUNCTION public.sandbox_host_identity_immutable();
 
-CREATE TRIGGER sandbox_host_isolated_custody_guard_trigger BEFORE UPDATE OF isolated_pod_id, box_state ON public.sandbox_hosts FOR EACH ROW EXECUTE FUNCTION public.sandbox_host_isolated_custody_guard();
+CREATE TRIGGER sandbox_host_isolated_custody_guard_trigger BEFORE UPDATE OF isolated_pod_id, boat_state ON public.sandbox_hosts FOR EACH ROW EXECUTE FUNCTION public.sandbox_host_isolated_custody_guard();
 
 CREATE TRIGGER sandbox_pod_host_identity_guard BEFORE INSERT OR UPDATE OF id, sandbox_host_id, user_id, provider ON public.pods FOR EACH ROW EXECUTE FUNCTION public.sandbox_pod_host_identity_guard();
 

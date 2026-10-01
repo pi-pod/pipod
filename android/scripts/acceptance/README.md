@@ -15,14 +15,14 @@ edition, stop fence, owner-host re-arm). Bearer is not app-auth proof.
 Workflow `acceptance-live`, **never** `push: main`.
 
 Inputs: `backend`, `run_live`, `scope` (`auth` | `full`, default `full`),
-`pod_id` (full only). SaaS full also needs secret `PIPOD_ACCEPTANCE_WORKSTATION_ID` (`box-*`); GET `/v1/me` does not expose it.
+`pod_id` (full only). SaaS full also needs secret `PIPOD_ACCEPTANCE_WORKSTATION_ID` (`boat-*`); GET `/v1/me` does not expose it.
 
 - **auth**: native PKCE on the protected Release URL with LOGIN/PASSWORD.
   No pod fixtures, no companion token, not whole M5.
 - **full**: PKCE, session, fresh assistant nonce, picker open/cancel,
   native Stop → companion non-waking **sandbox** asleep fence → native resume →
   marker tuple verify. SaaS then a second native sandbox stop + fence +
-  owned-custody clear, then POST `/v1/workstations/{box-*}/stop` with `{}` and
+  owned-custody clear, then POST `/v1/workstations/{boat-*}/stop` with `{}` and
   the UI wait/cancel/retry leg last. Retry requires new Stop-waiting or a
   fresh assistant reply (not mere composer presence).
 

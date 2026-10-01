@@ -137,13 +137,13 @@ describe("pipod secrets", () => {
         "secrets",
         "set",
         "template/reserved-credential",
-        "BOX_API_KEY",
+        "BOAT_API_KEY",
       ]);
       assert.notEqual(r.code, 0);
-      assert.match(r.out, /BOX_API_KEY is a provider credential and can never be stored/);
+      assert.match(r.out, /BOAT_API_KEY is a provider credential and can never be stored/);
       const template = server.templates.find((entry) => entry.name === "reserved-credential");
       assert.ok(template);
-      assert.equal(server.secrets[`template/${template.id}`]?.BOX_API_KEY, undefined);
+      assert.equal(server.secrets[`template/${template.id}`]?.BOAT_API_KEY, undefined);
     } finally {
       await capture(["templates", "rm", "reserved-credential", "--yes"]);
     }
@@ -295,16 +295,16 @@ describe("pipod secrets sync", () => {
     useFakeOp({ "op://v/i/empty": "", "op://v/i/ok": "ok" });
     await capture(["templates", "create", "sync-tpl"]);
     const file = path.join(HOME.home, "tpl.env");
-    fs.writeFileSync(file, "DAYTONA_API_KEY=op://v/i/ok\nBOX_API_KEY=op://v/i/ok\nEMPTY=op://v/i/empty\nOK=op://v/i/ok\n");
+    fs.writeFileSync(file, "DAYTONA_API_KEY=op://v/i/ok\nBOAT_API_KEY=op://v/i/ok\nEMPTY=op://v/i/empty\nOK=op://v/i/ok\n");
     const r = await capture(["secrets", "sync", "template/sync-tpl", "--file", file]);
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /DAYTONA_API_KEY is a provider credential/);
-    assert.match(r.out, /BOX_API_KEY is a provider credential/);
+    assert.match(r.out, /BOAT_API_KEY is a provider credential/);
     assert.match(r.out, /skip empty field: EMPTY/);
     const stored = Object.values(server.secrets).find((scope) => scope.OK === "ok");
     assert.ok(stored, r.out);
     assert.equal(stored.DAYTONA_API_KEY, undefined);
-    assert.equal(stored.BOX_API_KEY, undefined);
+    assert.equal(stored.BOAT_API_KEY, undefined);
     assert.equal(stored.EMPTY, undefined);
   });
 });

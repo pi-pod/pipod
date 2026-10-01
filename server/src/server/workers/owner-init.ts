@@ -278,7 +278,7 @@ export interface OwnerInitEnv {
 /** Platform URLs the sweep may touch: fleet hosts (+ default in single mode). */
 export async function platformOwnerInitUrls(env?: OwnerInitEnv): Promise<Map<string, string>> {
   const urls = new Map<string, string>();
-  // M6/M10: diallable-only listing IN SQL. Sleeping Box rows never enter the
+  // M6/M10: diallable-only listing IN SQL. Sleeping Boat rows never enter the
   // map, so the sweep cannot queue owner PUTs against them (each candidate
   // still re-checks `requireHostAwake` before its PUT as defense in depth).
   const hosts = await listDiallableSandboxHosts();

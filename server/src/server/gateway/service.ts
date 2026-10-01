@@ -46,7 +46,7 @@ import { podRuntimePaths } from "../pods/runtime-paths.js";
 import { getPod } from "../pods/store.js";
 import { runCreateRecovery } from "../pods/create-recovery.js";
 import { assertLaunchGateOpen, launchGateIsOpen } from "../pods/launch-control.js";
-import { hostForPod, hostCanDial, personalBoxHostIsAsleep, requireHostAwake } from "../pods/hostidentity.js";
+import { hostForPod, hostCanDial, personalBoatHostIsAsleep, requireHostAwake } from "../pods/hostidentity.js";
 import { assertPersonalPodAccess, edition } from "../edition.js";
 import { assertLaunchStateSupported } from "../pods/retired-launch-state.js";
 import { workspaceSeedGateOpen } from "../pods/workspace-seed.js";
@@ -707,11 +707,11 @@ export class GatewayService {
     const sessions = [...this.sessions.values()].filter((session) => !session.closed);
     const hostIds = uniqueLiveHostIds(sessions);
     if (hostIds.length === 0) return;
-    const hosts = await query<{ id: string; owner_user_id: string | null; box_id: string | null; box_state: string | null }>(
-      `SELECT id, owner_user_id, box_id, box_state FROM sandbox_hosts WHERE id = ANY($1::text[])`,
+    const hosts = await query<{ id: string; owner_user_id: string | null; boat_id: string | null; boat_state: string | null }>(
+      `SELECT id, owner_user_id, boat_id, boat_state FROM sandbox_hosts WHERE id = ANY($1::text[])`,
       [hostIds],
     );
-    const asleep = new Set(hosts.rows.filter((host) => personalBoxHostIsAsleep(host)).map((host) => host.id));
+    const asleep = new Set(hosts.rows.filter((host) => personalBoatHostIsAsleep(host)).map((host) => host.id));
     await Promise.all(
       sessions
         .filter((session) => session.pod.sandbox_host_id != null && asleep.has(session.pod.sandbox_host_id))
@@ -2886,7 +2886,7 @@ export class GatewayService {
     // not wake from teardown; consult registry evidence only and preserve 4420.
     if (reason === "transport_lost" || reason === "channel_closed") {
       const host = await hostForPod(session.pod).catch(() => null);
-      if (host && personalBoxHostIsAsleep(host)) {
+      if (host && personalBoatHostIsAsleep(host)) {
         reason = "host_stopped";
         retireOwnership = null;
       }

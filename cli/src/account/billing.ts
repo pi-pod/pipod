@@ -4,7 +4,7 @@
  * pi pod ships in two editions from one codebase. The self-hosted edition runs the sandbox
  * runtime next to the server on hardware the operator already pays for: it has no plan, no
  * metered active hours and no spend cap, so the server omits the `workstation` block entirely.
- * The SaaS edition (`SANDBOX_HOST_BACKEND=box`) meters a personal workstation per user and
+ * The SaaS edition (`SANDBOX_HOST_BACKEND=boat`) meters a personal workstation per user and
  * sends a flat `workstation` block on `GET /v1/me`.
  *
  * The client's whole half of that boundary is this rule: **when the block is absent, the

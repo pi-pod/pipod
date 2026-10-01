@@ -48,8 +48,8 @@ New env knobs:
 | `PI_POD_SANDBOX_USAGE_EVENT_MAX_ROWS` / `PI_POD_SANDBOX_USAGE_EVENT_MAX_AGE_HOURS` | `50000` / `168` |
 | `PI_POD_SANDBOX_USAGE_MAX_ROWS` | `1000` (hard cap on `GET /v1/usage` snapshot pages; larger `limit` is clamped) |
 | `PI_POD_SANDBOX_CLAMP_OVERSIZED_SHAPES` | `0` (off; oversized shapes are `400 unsupported_shape`) |
-| `PI_POD_SANDBOX_TENANT_MEMORY_GB` | `0` (uncapped) static; `5.5` box (explicit `0` in box mode refuses to start) |
-| `PI_POD_SANDBOX_TENANT_CPU` | unset (uncapped static; box derives `max(0.5, host CPUs − reserve)`; explicit `0` removes the cap) |
+| `PI_POD_SANDBOX_TENANT_MEMORY_GB` | `0` (uncapped) static; `5.5` boat (explicit `0` in boat mode refuses to start) |
+| `PI_POD_SANDBOX_TENANT_CPU` | unset (uncapped static; boat derives `max(0.5, host CPUs − reserve)`; explicit `0` removes the cap) |
 | `PI_POD_SANDBOX_TENANT_CPU_FALLBACK_CORES` | unset (derived bounded fallback) |
 | `PI_POD_SANDBOX_GRANT_GATE_ADMISSION` | `1` (gate degraded tenants) |
 | `PI_POD_SANDBOX_REQUIRE_OWNER` | `0` (refuse unowned launches after owner initialization) |

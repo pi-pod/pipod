@@ -1,7 +1,7 @@
 /**
  * The SaaS workstation surface and the edition boundary that hides it (plan §3.4, M5).
  *
- * pi pod is one client for two products. The SaaS server (`SANDBOX_HOST_BACKEND=box`) meters a
+ * pi pod is one client for two products. The SaaS server (`SANDBOX_HOST_BACKEND=boat`) meters a
  * personal workstation per user and sends a flat `workstation` block on `GET /v1/me`; the
  * self-hosted server runs on hardware its operator already pays for and omits the block
  * entirely. The client's whole half of the boundary is the last test in each group: when the
@@ -83,7 +83,7 @@ describe("accountBilling reads the workstation block off /v1/me", () => {
     });
   });
 
-  it("is null when the box backend is absent from the response", async () => {
+  it("is null when the boat backend is absent from the response", async () => {
     await withRawServer((_req, res) => {
       sendJson(res, 200, { user: { id: "u1" }, currentOrgId: null });
     }, async (serverUrl) => {

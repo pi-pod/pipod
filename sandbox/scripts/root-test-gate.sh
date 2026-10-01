@@ -53,7 +53,7 @@ fi
 files=(
   test/root/archive-handshake.test.ts
   test/root/archive-roundtrip.test.ts
-  test/root/box-tenant-cap.test.ts
+  test/root/boat-tenant-cap.test.ts
   test/root/cost-controls.test.ts
   test/root/fleet-import.test.ts
   test/root/grant-lifecycle.test.ts

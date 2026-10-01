@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 
-const HOST = process.env.PROOF_HOST ?? "box-proofhost";
+const HOST = process.env.PROOF_HOST ?? "boat-proofhost";
 const TOKEN = process.env.PROOF_TOKEN ?? "synthetic-proof-token-0123456789abcdef";
 const objects = new Map();
 let hits = 0;

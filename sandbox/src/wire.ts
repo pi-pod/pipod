@@ -308,8 +308,8 @@ export const CAPACITY_CONTRACT_VERSION = 1 as const;
 export type MemoryAdmissionMode = "ceiling" | "floor";
 
 export interface CapacityCapabilities {
-  /** Opt-in per-user Box host; absent on static hosts. */
-  box?: boolean;
+  /** Opt-in per-user Boat host; absent on static hosts. */
+  boat?: boolean;
   diskAdmission?: "sparse";
   storageQuotaBytes?: number;
   /** Largest shape this host accepts; larger requests are `unsupported_shape`, never clamped. */
@@ -327,7 +327,7 @@ export interface CapacityCapabilities {
   tenantCgroups: boolean;
   /**
    * Kernel aggregate caps enforced on every tenant parent cgroup. `null` is uncapped;
-   * omitted by hosts predating this field. A box host must report a finite memory cap.
+   * omitted by hosts predating this field. A boat host must report a finite memory cap.
    */
   tenantLimits?: { memoryMaxBytes: number | null; cpuMaxCores: number | null };
   cpuGrants: boolean;

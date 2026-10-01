@@ -478,7 +478,7 @@ object FriendlyText {
                 return "This organization doesn’t have a sandbox credential. " +
                     "Ask an owner to add it in Settings, then try again."
             }
-            val displayName = if (provider.lowercase() == "box") "Box" else provider
+            val displayName = if (provider.lowercase() == "boat") "Boat" else provider
             return "This organization doesn’t have a $displayName sandbox credential. " +
                 "Ask an owner to add it in Settings, then try again."
         }

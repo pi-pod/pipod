@@ -3,7 +3,7 @@
  *
  * Production 2026-09-09: POST /v1/pods {provider:'e2b'} answered 400
  * {"error":"validation failed","detail":[{"instancePath":"/provider",...}]}
- * with NO supported list, violating the box plan §3.5 release order ("old
+ * with NO supported list, violating the boat plan §3.5 release order ("old
  * clients that send provider:e2b get a 400 naming the supported list").
  *
  * The zod-enum failure carries the allowed list only in message/params, which
