@@ -160,7 +160,9 @@ export async function runAccountLaunch(opts: RunAccountLaunchOptions): Promise<n
     !placement;
   const launchBody = {
     ...(plan.templateId ? { templateId: plan.templateId } : {}),
-    ...(plan.projectName ? { project: { name: plan.projectName } } : {}),
+    // A fork continues another pod's conversation, which belongs to that pod's project, not
+    // to wherever the command happens to run.
+    ...(plan.projectName && !flags.forkFrom ? { project: { name: plan.projectName } } : {}),
     ...(piOverrides ? { piOverrides } : {}),
     ...(flags.forkFrom ? { forkFrom: flags.forkFrom } : {}),
     ...(placement ? { placement } : {}),
@@ -447,9 +449,8 @@ function printAccountDryRun(client: AccountClient, plan: AccountLaunchPlan): voi
  * A pod signed in to no model provider has nothing to talk to, and pi's own advice there —
  * `/login` inside the pod — would keep the sign-in in that one pod. Say what works, up front.
  */
-export function warnNoModelProvider(resolve: { piAuthProviders: string[] }): boolean {
-  if (resolve.piAuthProviders.length > 0) return false;
+export function warnNoModelProvider(resolve: { piAuthProviders: string[] }): void {
+  if (resolve.piAuthProviders.length > 0) return;
   warn("no model provider is connected, so pi in the pod has no model to use");
   info("  `pipod credentials connect` connects the ones your local pi uses; `pipod credentials` lists the rest");
-  return true;
 }

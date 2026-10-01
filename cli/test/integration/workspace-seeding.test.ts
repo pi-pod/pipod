@@ -129,7 +129,11 @@ describe("source-less workspace seeding", () => {
       assert.match(result.out, new RegExp(`workspace seed: the pod will clone ${checkout.url} at main \\(${checkout.commit.slice(0, 12)}\\)`));
       assert.match(result.out, /workspace seeded: cloned main at/);
       const calls = server.calls.slice(before);
-      assert.deepEqual(calls.find(isLaunch)?.body, { workspaceSeed: true }, "the launch arms the seed gate and carries nothing else");
+      assert.deepEqual(
+        calls.find(isLaunch)?.body,
+        { project: { name: path.basename(checkout.repo.dir) }, workspaceSeed: true },
+        "the launch names its project, arms the seed gate and carries nothing else",
+      );
       const clone = calls.find(isClone);
       assert.ok(clone, "the clone route must be called");
       assert.deepEqual(clone.body, { url: checkout.url, branch: "main", commit: checkout.commit });
@@ -378,7 +382,7 @@ describe("source-less workspace seeding", () => {
         assert.equal(result.code, 0, result.out);
         assert.match(result.out, /workspace seed: none \(--no-seed\)/);
         const calls = server.calls.slice(before);
-        assert.deepEqual(calls.find(isLaunch)?.body, {}, "--no-seed never arms the seed gate");
+        assert.deepEqual(calls.find(isLaunch)?.body, { project: { name: path.basename(checkout.repo.dir) } }, "--no-seed never arms the seed gate");
         assert.equal(calls.some((call) => isClone(call) || isArchive(call) || isFiles(call) || isSkip(call)), false);
       } finally {
         await checkout.close();
@@ -411,7 +415,10 @@ describe("source-less workspace seeding", () => {
         assert.equal(result.code, 0, result.out);
         assert.match(result.out, /workspace seed: none \(a co-located pod shares its host's workdir\)/);
         const calls = server.calls.slice(before);
-        assert.deepEqual(calls.find(isLaunch)?.body, { placement: { host: "0198f5a0-0000-7000-8000-00000000000a" } });
+        assert.deepEqual(calls.find(isLaunch)?.body, {
+          project: { name: path.basename(checkout.repo.dir) },
+          placement: { host: "0198f5a0-0000-7000-8000-00000000000a" },
+        });
         assert.equal(calls.some((call) => isClone(call) || isArchive(call) || isFiles(call)), false);
       } finally {
         await checkout.close();
@@ -424,7 +431,8 @@ describe("source-less workspace seeding", () => {
       const stopped = fakePod({
         id: "0198f5a0-0000-7000-8000-0000000000d2",
         name: "warm",
-        project: null,
+        // Reuse picks only this project's own stopped pod.
+        project: path.basename(checkout.repo.dir),
         templateId: null,
         ready: false,
         initializing: false,
@@ -439,7 +447,7 @@ describe("source-less workspace seeding", () => {
         const calls = server.calls.slice(before);
         const reuse = calls.find((call) => call.path.endsWith(`/pods/${stopped.id}/reuse`));
         assert.ok(reuse);
-        assert.deepEqual(reuse.body, {}, "a reuse never arms the seed gate");
+        assert.deepEqual(reuse.body, { project: { name: path.basename(checkout.repo.dir) } }, "a reuse never arms the seed gate");
         assert.equal(calls.some((call) => isClone(call) || isArchive(call) || isFiles(call) || isSkip(call)), false);
       } finally {
         server.pods = server.pods.filter((pod) => pod.id !== stopped.id);
@@ -474,7 +482,7 @@ describe("source-less workspace seeding", () => {
         assert.equal(result.code, 0, result.out);
         assert.match(result.out, new RegExp(`copied into the pod \\(cloneable from ${checkout.url} at main\\)`));
         const calls = server.calls.slice(before);
-        assert.deepEqual(calls.find(isLaunch)?.body, {}, "the legacy copy keeps its post-start timing: no seed gate");
+        assert.deepEqual(calls.find(isLaunch)?.body, { project: { name: "configured" } }, "the legacy copy keeps its post-start timing: no seed gate");
         assert.ok(calls.some(isFiles), "configured projects still copy over /files");
         assert.equal(calls.some((call) => isClone(call) || isArchive(call) || isSkip(call)), false);
       } finally {
@@ -497,7 +505,12 @@ describe("source-less workspace seeding", () => {
         assert.match(result.out, /this server predates workspace archives — copying files individually/);
         assert.match(result.out, /workspace seeded\n/);
         const launches = legacy.calls.filter(isLaunch);
-        assert.deepEqual(launches.map((call) => call.body), [{ workspaceSeed: true }, {}], "the gate flag is retried away on a strict old server");
+        const project = { name: path.basename(dir) };
+        assert.deepEqual(
+          launches.map((call) => call.body),
+          [{ project, workspaceSeed: true }, { project }],
+          "the gate flag is retried away on a strict old server",
+        );
         assert.ok(legacy.calls.some(isArchive), "the archive route is tried first");
         assert.equal(legacy.calls.some(isSkip), false, "an ungated launch has no gate to release");
         const files = legacy.calls.find(isFiles);

@@ -265,11 +265,11 @@ describe("signed-in account CLI", () => {
     assert.equal(archived.code, 0, archived.out);
     assert.match(
       archived.out,
-      /pod p-000000000a: logically archived.*hidden from active lists.*cold archive follows after 60 stopped minutes/,
+      /archived p-000000000a: hidden from `pipod list`, files kept; `pipod restore p-000000000a` brings it back/,
     );
     const restored = await capture(["restore", "000000000a"]);
     assert.equal(restored.code, 0, restored.out);
-    assert.match(restored.out, /pod p-000000000a: active/);
+    assert.match(restored.out, /restored p-000000000a \(active\)/);
     assert.equal((await capture(["rename", id, "fixer"])).code, 0);
     assert.equal((await capture(["gc"])).code, 0);
     assert.ok(server.calls.some((entry) => entry.method === "POST" && entry.path.endsWith("/archive")));
@@ -343,7 +343,7 @@ describe("signed-in account CLI", () => {
 
       const live = await capture(["archive", "--template", "web", "--idle", "4h", "--yes"]);
       assert.equal(live.code, 0, live.out);
-      assert.match(live.out, /pod p-000000001e: logically archived/);
+      assert.match(live.out, /archived p-000000001e/);
       const archives = server.calls
         .slice(before)
         .filter((entry) => entry.method === "POST" && entry.path.endsWith("/archive"))
@@ -421,7 +421,7 @@ describe("signed-in account CLI", () => {
     const launch = calls.find(
       (entry) => entry.method === "POST" && entry.path === "/v1/pods",
     )?.body as Record<string, unknown>;
-    assert.deepEqual(launch, {});
+    assert.deepEqual(launch, { project: { name: "overlay-project" } }, "the project names the pod; nothing else travels");
   });
 
   it("sends only template selection and invocation flags for a pinned-template launch", async () => {
@@ -444,7 +444,7 @@ describe("signed-in account CLI", () => {
       assert.deepEqual(resolve.body, { templateId: "tpl-1" });
     }
     const launch = calls.find((entry) => entry.method === "POST" && entry.path === "/v1/pods")?.body;
-    assert.deepEqual((launch as Record<string, unknown>), { templateId: "tpl-1" });
+    assert.deepEqual((launch as Record<string, unknown>), { templateId: "tpl-1", project: { name: "pinned" } });
   });
 
   it("rejects the retired --provider flag instead of launching", async () => {
@@ -474,7 +474,7 @@ describe("signed-in account CLI", () => {
 
       const calls = server.calls.slice(before);
       const launch = calls.find((entry) => entry.method === "POST" && entry.path === "/v1/pods")?.body as Record<string, unknown>;
-      assert.deepEqual(launch, {}, "workspace transport is not a settings layer");
+      assert.deepEqual(launch, { project: { name: "seed-copy" } }, "workspace transport is not a settings layer");
 
       const send = calls.find((entry) => entry.method === "POST" && /\/files$/.test(entry.path));
       assert.ok(send, "the launch must send the workspace to the pod it created");
@@ -513,7 +513,7 @@ describe("signed-in account CLI", () => {
 
       const calls = server.calls.slice(before);
       const launch = calls.find((entry) => entry.method === "POST" && entry.path === "/v1/pods")?.body as Record<string, unknown>;
-      assert.deepEqual(launch, {});
+      assert.deepEqual(launch, { project: { name: "seed-clone" } });
       assert.equal(calls.some((entry) => /\/files$/.test(entry.path)), true);
     } finally {
       await serving.close();
@@ -575,7 +575,7 @@ describe("signed-in account CLI", () => {
     await signIn();
     const logout = await capture(["logout"]);
     assert.equal(logout.code, 0, logout.out);
-    assert.match(logout.out, /signed out.*pod operations are unavailable/i);
+    assert.match(logout.out, /signed out of .*; sign back in with `pipod login --server /i);
     assert.equal(fs.existsSync(authFile), false);
 
     const whoami = await capture(["whoami"]);

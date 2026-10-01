@@ -93,7 +93,7 @@ export async function runAccountDoctor(flags: AccountDoctorFlags, cwd = process.
     for (const clamp of resolved.clamps) {
       warn(`org policy: ${clamp.path} → ${JSON.stringify(clamp.to)} (${clamp.reason})`);
     }
-    if (warnNoModelProvider(resolved)) failed = true;
+    warnNoModelProvider(resolved);
     reportWorkspaceSeed(plan.workspaceSeed);
     const seen = new Set<string>();
     for (const warning of [...plan.warnings, ...resolved.warnings]) {

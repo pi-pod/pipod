@@ -343,7 +343,7 @@ export async function launchRidingOutBlips(
 ): Promise<{ pod: ApiPod; report: LaunchReport }> {
   const retryMs = timing.retryMs ?? 2000;
   const blipGraceMs = timing.blipGraceMs ?? LAUNCH_BLIP_GRACE_MS;
-  const before = await podsForThisLaunch(client, plan);
+  const before = await podsForThisLaunch(client, plan, body.project?.name ?? null);
   const knownIds = before ? new Set(before.map((pod) => pod.id)) : null;
   let blipSince: number | null = null;
   let announced = false;
@@ -382,7 +382,7 @@ export async function launchRidingOutBlips(
         // and buy itself a retry the grace period never granted.
         if (Date.now() >= deadline) throw error;
         await new Promise((resolve) => setTimeout(resolve, retryMs));
-        landed = await podsForThisLaunch(client, plan);
+        landed = await podsForThisLaunch(client, plan, body.project?.name ?? null);
       }
       const fresh = landed.filter((pod) => !knownIds.has(pod.id));
       if (fresh.length === 1) {
@@ -410,13 +410,13 @@ export async function launchRidingOutBlips(
 }
 
 /** This launch's identity among the caller's pods, or null when the server cannot say. */
-async function podsForThisLaunch(client: AccountClient, plan: AccountLaunchPlan): Promise<ApiPod[] | null> {
+async function podsForThisLaunch(client: AccountClient, plan: AccountLaunchPlan, project: string | null): Promise<ApiPod[] | null> {
   try {
     const { pods } = await client.listPods({
       mine: true,
       state: "active",
     });
-    return pods.filter((pod) => pod.templateId === (plan.templateId ?? null) && pod.project === (plan.projectName ?? null));
+    return pods.filter((pod) => pod.templateId === (plan.templateId ?? null) && pod.project === project);
   } catch (e) {
     debug(`could not list this project's pods: ${e instanceof Error ? e.message : String(e)}`);
     return null;

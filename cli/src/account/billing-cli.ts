@@ -42,12 +42,6 @@ function requireHttpsUrl(value: unknown, what: string): string {
 
 export async function runBillingCommand(client: AccountClient, args: string[], deps: BillingCommandDeps = {}): Promise<number> {
   const [verb, ...rest] = args;
-  // Clients key every billing surface off the account summary's `workstation` block, which only
-  // the hosted service sends. A self-hosted server has nothing to pay for.
-  if (!(await client.me()).workstation) {
-    info(`${client.serverUrl} has no billing: plans and payment belong to the hosted service at pipod.dev`);
-    return EXIT.OK;
-  }
   if (!verb || verb === "help" || verb === "--help") {
     info(`Usage: pipod billing checkout [--plan standard|pro] [--trial]
        pipod billing portal
@@ -80,9 +74,19 @@ Install: GitHub release tarball or a git clone + npm run build. Public npm 404
 is not a supported distribution path.`);
     return EXIT.OK;
   }
-  if (verb === "checkout") return runCheckout(client, rest);
-  if (verb === "portal") return runPortal(client);
-  if (verb === "change") return runPlanChange(client, rest, deps);
+  try {
+    if (verb === "checkout") return await runCheckout(client, rest);
+    if (verb === "portal") return await runPortal(client);
+    if (verb === "change") return await runPlanChange(client, rest, deps);
+  } catch (error) {
+    // A server without billing routes is a self-hosted one: there is nothing to pay for.
+    if (error instanceof PiPodError && error.status === 404 && /\bRoute \S+ not found\b/.test(error.message)) {
+      throw new PiPodError(`${client.serverUrl} has no billing`, {
+        hint: "plans and payment belong to the hosted service at pipod.dev",
+      });
+    }
+    throw error;
+  }
   throw new PiPodError(`unknown billing command ${verb}`, {
     hint: "pipod billing checkout | pipod billing portal | pipod billing change --plan pro",
     exitCode: EXIT.USAGE,
