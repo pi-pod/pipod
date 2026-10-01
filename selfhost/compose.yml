@@ -1,0 +1,185 @@
+# pi pod, self-hosted: Postgres, Zitadel, the server and the native sandbox on one host.
+#
+# Install and upgrade with one command, from this checkout:
+#
+#   git pull && selfhost/upgrade
+#
+# `upgrade` builds the server and sandbox from the checked-out commit, publishes the pod base
+# image to the bundled registry, and runs `docker compose up -d`. On every `up`, `backup` dumps
+# the database before Zitadel or the server can start, and the server (UPGRADE_ON_START) applies
+# its own migrations. Site settings and secrets live in .env (see .env.example); local additions
+# go in compose.override.yml. Guide: ../docs/self-host.md.
+
+x-postgres-image: &postgres-image postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+
+name: pipod
+
+services:
+  db:
+    image: *postgres-image
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pipod
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: pipod
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # First boot only: Zitadel's database beside the product's.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipod -d pipod"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-shot. Runs on every `docker compose up`, while the previous server is still serving, and
+  # Zitadel and the server wait for it to succeed: no upgrade starts without a fresh dump. Keeps
+  # the newest PIPOD_BACKUP_KEEP dumps of both databases in ./backups.
+  backup:
+    image: *postgres-image
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PIPOD_BACKUP_KEEP: ${PIPOD_BACKUP_KEEP:-7}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu -o pipefail
+        umask 077
+        name=pipod-$$(date -u +%Y%m%dT%H%M%SZ).sql.gz
+        pg_dumpall --clean --if-exists -h db -U pipod | gzip > /backups/.$$name.partial
+        mv /backups/.$$name.partial /backups/$$name
+        ls -1t /backups/pipod-*.sql.gz | tail -n +$$((PIPOD_BACKUP_KEEP + 1)) | xargs -r rm -f
+        echo "backup: /backups/$$name"
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v4.17.1@sha256:3ac6910685d48f32481f01f45e3e6215efe5a9df2c069591b481e9a101712db5
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      backup:
+        condition: service_completed_successfully
+    # start-from-init also applies Zitadel's own migrations when its pin moves.
+    command:
+      - start-from-init
+      - --masterkeyFromEnv
+      - --tlsMode
+      - ${ZITADEL_TLS_MODE:-disabled}
+    environment:
+      ZITADEL_MASTERKEY: ${ZITADEL_MASTERKEY:?set ZITADEL_MASTERKEY in .env}
+      ZITADEL_EXTERNALDOMAIN: ${ZITADEL_EXTERNALDOMAIN:-127.0.0.1}
+      ZITADEL_EXTERNALPORT: ${ZITADEL_EXTERNALPORT:-8081}
+      ZITADEL_EXTERNALSECURE: ${ZITADEL_EXTERNALSECURE:-false}
+      ZITADEL_DATABASE_POSTGRES_HOST: db
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: pipod
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: pipod
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: pipod
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD:?set ZITADEL_ADMIN_PASSWORD in .env}
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
+      # First boot only; must match server/zitadel/oidc-settings.json.
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_ACCESSTOKENLIFETIME: 5m
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_IDTOKENLIFETIME: 5m
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENIDLEEXPIRATION: 720h
+      ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENEXPIRATION: 2160h
+    # Loopback only: a browser reaches it through an SSH tunnel, later through a reverse proxy.
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  server:
+    image: pipod/server:local
+    build:
+      context: ../server
+      args:
+        # Set by selfhost/upgrade; the server records it when it opens launch admission.
+        SOURCE_SHA: ${PIPOD_SOURCE_SHA:-}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      backup:
+        condition: service_completed_successfully
+    environment:
+      ROLE: all
+      PORT: 8080
+      DATABASE_URL: postgres://pipod:${POSTGRES_PASSWORD}@db:5432/pipod
+      # The only server against this database: it migrates and opens launch admission itself.
+      UPGRADE_ON_START: "true"
+      ZITADEL_ISSUER: ${ZITADEL_ISSUER:-http://127.0.0.1:8081}
+      ZITADEL_API_AUDIENCE: ${ZITADEL_API_AUDIENCE:-pipod-api}
+      ZITADEL_JWKS_URL: ${ZITADEL_JWKS_URL:-http://zitadel:8080/oauth/v2/keys}
+      SECRETS_KEK: ${SECRETS_KEK:?set SECRETS_KEK in .env}
+      SECRETS_KEK_ID: ${SECRETS_KEK_ID:-kek-1}
+      SECRETS_KEK_PREVIOUS: ${SECRETS_KEK_PREVIOUS:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env to an address a pod can reach}
+      WEB_ORIGINS: ${WEB_ORIGINS:-}
+      PI_POD_SANDBOX_TOKEN: ${PI_POD_SANDBOX_TOKEN:?set PI_POD_SANDBOX_TOKEN in .env}
+      PI_POD_SANDBOX_URL: http://sandbox:8433
+      SANDBOX_HOST_BACKEND: static
+      # The registry below, where selfhost/upgrade publishes the pod base image.
+      PI_POD_SANDBOX_IMAGE_MIRROR: 127.0.0.1:5000/pipod
+    # Every interface: pods dial PUBLIC_URL from inside the sandbox, through this host.
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  sandbox:
+    image: pipod/sandbox:local
+    build: ../sandbox
+    restart: unless-stopped
+    # Mounts overlayfs, writes cgroup limits and creates network namespaces: the host kernel is
+    # the isolation boundary. Recreating this container ends live sessions; workspaces persist.
+    privileged: true
+    init: true
+    cgroup: host
+    environment:
+      PI_POD_SANDBOX_TOKEN: ${PI_POD_SANDBOX_TOKEN:?set PI_POD_SANDBOX_TOKEN in .env}
+      PI_POD_SANDBOX_PORT: 8433
+      PI_POD_SANDBOX_STATE_DIR: /state
+      # Stable identity: the container hostname changes on every recreate.
+      PI_POD_SANDBOX_HOST_ID: local
+      # The bridge gateway the in-pod keepalive dials.
+      PI_POD_SANDBOX_API_HOST: 10.77.0.1
+      # Kernel-enforced ceiling over all sandboxes, and what admission keeps back for the rest of
+      # this host. Defaults fit an 8 GB host; see "Sizing" in the guide.
+      PI_POD_SANDBOX_FLEET_MEMORY_GB: ${PI_POD_SANDBOX_FLEET_MEMORY_GB:-4}
+      PI_POD_SANDBOX_FLEET_CPU: ${PI_POD_SANDBOX_FLEET_CPU:-3}
+      PI_POD_SANDBOX_RESERVE_MEMORY_GB: ${PI_POD_SANDBOX_RESERVE_MEMORY_GB:-3}
+      PI_POD_SANDBOX_RESERVE_CPU: ${PI_POD_SANDBOX_RESERVE_CPU:-0.5}
+    volumes:
+      - sandbox_state:/state
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # The registry shares this network namespace: the host pushes the base image to
+    # 127.0.0.1:5000 and the sandbox pulls it from 127.0.0.1:5000, the only plain-HTTP origin
+    # the sandbox accepts.
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  registry:
+    image: registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
+    restart: unless-stopped
+    network_mode: "service:sandbox"
+    volumes:
+      - registry_data:/var/lib/registry
+
+volumes:
+  pgdata:
+  sandbox_state:
+  registry_data:

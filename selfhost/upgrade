@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Install or upgrade this deployment to the checked-out commit:
+#
+#   git pull && selfhost/upgrade
+#
+# Builds the server and sandbox images from the checkout, publishes the pod base image the new
+# server launches from to the bundled registry, then `docker compose up -d`: Compose dumps the
+# database first, and the server migrates itself and opens launch admission before it serves.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# The server records this commit when it opens launch admission after a migration held it.
+PIPOD_SOURCE_SHA="$(git rev-parse HEAD)"
+export PIPOD_SOURCE_SHA
+
+docker compose build server sandbox
+
+# The registry lives in the sandbox's network namespace, so it is reachable once the sandbox is.
+docker compose up -d sandbox registry
+for _ in $(seq 1 60); do
+  if docker compose exec -T sandbox curl -fsS http://127.0.0.1:8433/v1/healthz >/dev/null 2>&1; then break; fi
+  sleep 2
+done
+
+# The base image tag digests the pi version, the launcher and the image assets, so only the new
+# server knows it. Rebuilding an unchanged tag is a cache hit and the push a no-op.
+read -r base pi < <(docker compose run --rm --no-deps -T server node dist/base-image.js </dev/null)
+target="127.0.0.1:5000/pipod/$base"
+context="$(mktemp -d)"
+trap 'rm -rf "$context"' EXIT
+cp ../server/image/Dockerfile "$context/"
+: > "$context/pi-packages.txt"
+: > "$context/pi-packages-npm.txt"
+: > "$context/bake.sh"
+docker build --build-arg "PI_VERSION=$pi" -t "$target" "$context"
+docker push "$target"
+
+docker compose up -d
+
+# The server migrates before it serves, so healthy means upgraded.
+for _ in $(seq 1 90); do
+  if [ "$(docker compose ps server --format '{{.Health}}')" = healthy ]; then
+    echo "upgrade: server healthy at $PIPOD_SOURCE_SHA"
+    exit 0
+  fi
+  sleep 2
+done
+docker compose logs --tail 20 server >&2
+echo "upgrade: the server did not become healthy; its log is above" >&2
+exit 1
