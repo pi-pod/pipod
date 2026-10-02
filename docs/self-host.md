@@ -20,10 +20,7 @@ curl -fsSL https://get.docker.com | sh
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
 ```
 
-The repository is private while pi pod is pre-release, so clone it as an account that has
-access — `gh repo clone`, or the `git@github.com:` remote. An anonymous clone fails with
-`could not read Username for 'https://github.com'`, which is the first thing you will hit,
-not a network problem. Commands below run from the repository root.
+Commands below run from the repository root.
 
 ```bash
 git clone https://github.com/pi-pod/pipod.git
