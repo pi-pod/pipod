@@ -90,19 +90,21 @@ npm install -g @pipod/cli
 
 A CLI newer than the server is refused with a message saying so; upgrade the server first.
 
-`pipod login` asks the server where to sign in, opens your browser, and waits for it. A
-server has no browser to open, so the CLI prints the URL instead — and whatever browser you
-use has to reach *both* Zitadel and the CLI's sign-in redirect as `127.0.0.1`. Forward them
-from the host you installed on and use your own browser:
+`pipod login` asks the server where to sign in, opens your browser, and waits for it. Where
+there is no browser to open — on the server itself, or in any SSH session — it prints a page
+and a short code instead, and you finish signing in in any browser that reaches Zitadel. On
+this install Zitadel answers only on the host's `127.0.0.1:8081`, so forward it from the
+machine whose browser you use, and open the page `login` printed there:
 
 ```bash
-ssh -L 8081:127.0.0.1:8081 -L 43117:127.0.0.1:43117 root@<this host>
+ssh -L 8081:127.0.0.1:8081 root@<this host>
 ```
 
-(The CLI waits on the first free port from 43117 to 43126; forward the one it names.) Keep
-the tunnel up while `login` waits. Do not reach for a public address to avoid the tunnel:
-signing in from other machines is [going public](#going-public), not a shortcut. The server
-is remembered, so later commands need nothing but `pipod`.
+Keep the tunnel up while `login` waits. Do not reach for a public address to avoid the tunnel:
+signing in from other machines is [going public](#going-public), not a shortcut. Once you
+have gone public, the page opens on any device, a phone included, with no tunnel at all.
+`pipod login --device` asks for a code even where a browser could open. The server is
+remembered, so later commands need nothing but `pipod`.
 
 Then check the result, and launch your first pod from a project directory:
 
@@ -209,6 +211,12 @@ An install from before the dashboard has no `pipod-dashboard` app in Zitadel yet
 upgrade past it warns about drift. Run `selfhost/upgrade --apply-zitadel` once to create it. If
 you have [gone public](#going-public), set `SERVER_URL` in `.env` first: the dashboard signs in
 back to that address, and Zitadel refuses any address it was not given.
+
+Likewise, signing in with a code where no browser opens needs the device-code grant on the
+`pipod-cli` app, which installs from before it lack: `upgrade` reports `app pipod-cli
+grantTypes differs` until you run `selfhost/upgrade --apply-zitadel`. Until then `pipod login`
+over SSH falls back to the browser flow, which also needs the port it names forwarded
+(`ssh -L 8081:127.0.0.1:8081 -L 43117:127.0.0.1:43117 root@<this host>`).
 
 Then update the CLI and check the result:
 
@@ -532,6 +540,7 @@ brings your existing pods' workspaces up under the new sandbox.
 | Login succeeds, every API call is 401 | `ZITADEL_API_AUDIENCE` is still unset, or `ZITADEL_ISSUER` does not match `iss` exactly. |
 | Login succeeds, nothing is permitted | The user has no role grant, or lives outside the organization that granted the roles: `selfhost/add-user <email>` grants them. |
 | Invites and password resets never arrive | No SMTP provider, or one whose credential was dropped — [Email](#email). `selfhost/add-user <email> --new-password` lets someone in meanwhile. |
+| `pipod login --device` says the identity provider *"does not allow this CLI to sign in with a code"* | The install predates sign-in with a code: `selfhost/upgrade --apply-zitadel`. |
 | `pipod login` signs in to pipod.dev, or Zitadel says the client is unknown | The CLI is pointed at another server: `pipod login --server <this server>`. A server that predates sign-in discovery needs `--issuer` and `PI_POD_OIDC_CLIENT_ID`. |
 | `the image mirror is private` on launch | The base image was not published — the server was started without `selfhost/upgrade`. Run it. A failed pull is remembered for ten minutes. |
 | A launch fails with *"the server is full"*, or the server log says `provisioning failed: … (507)` | Running pods hold the whole budget. Stop one (`pipod stop`), lower the default shape, or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |

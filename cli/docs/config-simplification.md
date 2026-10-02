@@ -128,8 +128,10 @@ ignored, except `--dry-run`/`--on`-with-fork which are usage errors.
   `show` prints JSON; `edit` uses `$VISUAL`/`$EDITOR`; `set` takes a dotted key
   plus a JSON value. Templates are not a settings scope (hint points at
   `templates`).
-- `login`: Zitadel PKCE in the browser. `--server`, `--issuer` (self-hosted),
-  `--org` (domain pin), `--token` (dev/CI JWT). `logout` revokes and deletes
+- `login`: Zitadel PKCE in the browser; where none can open (SSH, headless), the
+  device flow with a code finished on another device. `--server`, `--issuer`
+  (self-hosted), `--org` (domain pin), `--device` (force the code), `--token`
+  (dev/CI JWT). `logout` revokes and deletes
   auth; `whoami` reports server/user/org/permissions (exit 1 signed out);
   `account` / `org-admin` open the consoles.
 - `doctor`: per-layer diagnosis (auth, server, org, secrets, resolve) plus the
