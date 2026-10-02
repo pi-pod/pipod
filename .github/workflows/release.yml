@@ -1,0 +1,93 @@
+name: release
+
+# Pushing a tag vX.Y.Z (X.Y.Z = cli/package.json version) publishes that commit: a GitHub
+# release with the CLI package attached, then that same package to npm as `pipod`.
+# npm authenticates this workflow by trusted publishing (OIDC); there is no token secret.
+# Both jobs skip what is already published, so a failed run can simply be re-run.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  github:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+
+      - name: Tag matches the CLI version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match cli/package.json version $version"
+            exit 1
+          fi
+
+      - name: Already released
+        id: released
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install, check, build and pack
+        if: steps.released.outputs.skip != 'true'
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check
+          npm run build
+          npm pack
+
+      - name: Create the GitHub release
+        if: steps.released.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$GITHUB_REF_NAME" --generate-notes pipod-*.tgz
+
+  npm:
+    needs: github
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Trusted publishing needs npm >= 11.5.1; this only publishes a built package.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish the released package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if npm view "pipod@$version" version >/dev/null 2>&1; then
+            echo "pipod@$version is already on npm"
+            exit 0
+          fi
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "pipod-$version.tgz"
+          npm publish "./pipod-$version.tgz" --access public
