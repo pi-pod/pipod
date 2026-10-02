@@ -1,11 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { PI_THINKING_LEVELS, validateConfig } from "../../core/config.js";
+import { supportedProviders } from "../../core/providers/registry.js";
 import { requirePermission } from "../auth/plugin.js";
 import { audit } from "../audit.js";
+import type { ServerEnv } from "../env.js";
 import { forbidden } from "../httperrors.js";
 import { IdentityId } from "../ids.js";
-import { MAX_INIT_SCRIPT_BYTES, readLayer, writeLayer } from "./merge.js";
+import { admittedSandboxMemoryGB } from "../pods/capacity.js";
+import { NESTED_PODS_DEFAULTS } from "../pods/lineage.js";
+import { deploymentResourceMaximums } from "../pods/planning.js";
+import { clientFacingConfig, MAX_INIT_SCRIPT_BYTES, readLayer, writeLayer } from "./merge.js";
 import { PiSettingsFilesSchema } from "./pi-settings.js";
 import { registerSettingsProposalRoutes } from "./proposals.js";
 
@@ -113,4 +119,20 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
   );
 
   registerSettingsProposalRoutes(app);
+}
+
+/**
+ * What a key left unset in every settings layer comes to on this server, and the choices a
+ * settings editor offers, so an editor can show what a blank field inherits without keeping
+ * its own copy of the defaults. `podLimits` is the largest pod a launch gets: more CPU or
+ * disk is reduced to it, and more memory is refused.
+ */
+export function registerSettingsDefaultsRoute(app: FastifyInstance, env: ServerEnv): void {
+  app.get("/settings/defaults", { preHandler: [app.authenticate] }, async () => ({
+    config: clientFacingConfig(validateConfig({}).config),
+    nestedPods: NESTED_PODS_DEFAULTS,
+    providers: supportedProviders(),
+    thinkingLevels: PI_THINKING_LEVELS,
+    podLimits: { ...deploymentResourceMaximums(env), memoryGB: admittedSandboxMemoryGB(env) },
+  }));
 }

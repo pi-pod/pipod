@@ -428,6 +428,11 @@ export class CapacityTracker {
   }
 }
 
+/** The most memory a launch on this deployment may ask for; see below. */
+export function admittedSandboxMemoryGB(env: { POD_MAX_MEMORY_GB: number }): number {
+  return Math.max(env.POD_MAX_MEMORY_GB, STANDARD_SHAPE.memoryGB);
+}
+
 /**
  * Refuse memory beyond what this deployment admits (§7.4). Silently shrinking an explicit
  * memory request trades a clear refusal for an out-of-memory pod, so a request above
@@ -440,7 +445,7 @@ export function assertSandboxMemoryWithinDeployment(
   env: { POD_MAX_MEMORY_GB: number },
 ): void {
   const memoryGB = requested.memoryGB ?? STANDARD_SHAPE.memoryGB;
-  if (memoryGB <= Math.max(env.POD_MAX_MEMORY_GB, STANDARD_SHAPE.memoryGB)) return;
+  if (memoryGB <= admittedSandboxMemoryGB(env)) return;
   throw new HttpError(
     400,
     `memoryGB ${memoryGB} exceeds this deployment's ${env.POD_MAX_MEMORY_GB} GiB per-sandbox limit (POD_MAX_MEMORY_GB)`,
