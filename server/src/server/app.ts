@@ -13,7 +13,7 @@ import { makeAuthHook } from "./auth/plugin.js";
 import { registerAuthRoutes } from "./auth/routes.js";
 import { registerVersionRoute } from "./release.js";
 import { registerOrgRoutes } from "./orgs/routes.js";
-import { registerSettingsRoutes } from "./settings/routes.js";
+import { registerSettingsDefaultsRoute, registerSettingsRoutes } from "./settings/routes.js";
 import { registerSecretRoutes } from "./secrets/routes.js";
 import { registerModelCredentialRoutes } from "./model-credentials/routes.js";
 import { registerTemplateRoutes } from "./templates/routes.js";
@@ -288,6 +288,7 @@ export async function buildApp(deps: AppDeps) {
       registerVersionRoute(v1);
       registerOrgRoutes(v1, deps.env);
       registerSettingsRoutes(v1);
+      registerSettingsDefaultsRoute(v1, deps.env);
       registerSecretRoutes(v1, deps.kek);
       registerModelCredentialRoutes(v1, { kek: deps.kek, podDeps: deps.podDeps });
       registerTemplateRoutes(v1);
