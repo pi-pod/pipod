@@ -184,21 +184,6 @@ class ConfigBundleEditorState(
         }
     }
 
-    /**
-     * Re-reads the bundle when it is open and has nothing unsaved in it.
-     *
-     * For a change that landed somewhere else — applying a settings proposal
-     * writes the very layer this editor is showing — where silently leaving
-     * the old contents on screen would invite a save carrying a version the
-     * server has already moved past. Typed edits are never discarded: a dirty
-     * editor keeps what is in it and the reader reloads deliberately.
-     */
-    suspend fun reloadIfClean() {
-        val current = _state.value
-        if (!current.isExpanded || !current.isLoaded || current.isDirty) return
-        reload { true }
-    }
-
     suspend fun saveNow() {
         val current = _state.value
         val version = current.version ?: return

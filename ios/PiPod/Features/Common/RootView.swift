@@ -175,10 +175,6 @@ struct AppShell: View {
             TemplateDetailView(templateId: nil, initialTemplate: nil)
         case .credentials:
             CredentialsView()
-        case .proposals:
-            SettingsProposalsView()
-        case .proposalDetail(let proposal):
-            ProposalDetailView(proposal: proposal)
         case .configBundle(let scope):
             ConfigBundleEditorView(scope: scope)
         case .secrets(let scope, let scopeId, let title):

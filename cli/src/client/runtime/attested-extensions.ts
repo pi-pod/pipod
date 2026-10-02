@@ -216,6 +216,6 @@ export function unattestedPackageNotice(
     `pod reports ${mismatches.length} configured ${noun} outside its exact launch-attested set: ${examples}; ` +
     `extension rendering from ${mismatches.length === 1 ? "that package is" : "those packages is"} unavailable locally — ` +
     `land intentional top-level Pi packages in your bundle's settings.json "packages" ` +
-    `(pipod push, or a settings proposal); do not add transitive dependencies`
+    `(pipod push); do not add transitive dependencies`
   );
 }

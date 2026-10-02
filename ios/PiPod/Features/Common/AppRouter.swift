@@ -67,8 +67,6 @@ public enum SettingsRoute: Hashable, Sendable {
     case environmentDetail(templateId: String, template: PodTemplate?)
     case newEnvironment
     case credentials
-    case proposals
-    case proposalDetail(proposal: SettingsProposal)
     case configBundle(scope: ConfigBundleScope)
     case secrets(scope: String, scopeId: String, title: String)
     case planChange
@@ -199,11 +197,6 @@ public final class AppRouter {
         selectedTab = .pods
         guard podsPath.last != .modelPicker(podId: podId) else { return }
         podsPath.append(.modelPicker(podId: podId))
-    }
-
-    public func openProposal(_ proposal: SettingsProposal) {
-        selectedTab = .settings
-        settingsPath.append(.proposalDetail(proposal: proposal))
     }
 
     public func openJob(_ jobId: String, job: Job? = nil) {

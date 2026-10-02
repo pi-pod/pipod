@@ -57,6 +57,13 @@ export function assertScopeChange(
 
 /** A template is visible to `userId` when it is org-wide or their own (spec §6). */
 export async function getTemplate(orgId: string, id: string, userId: string): Promise<TemplateRow> {
+  const row = await findTemplate(orgId, id, userId);
+  if (!row) throw notFound("template not found");
+  return row;
+}
+
+/** Like getTemplate, but null when the template is not visible or has been deleted. */
+export async function findTemplate(orgId: string, id: string, userId: string): Promise<TemplateRow | null> {
   const rows = await query<TemplateRow>(
     `SELECT * FROM pod_templates
      WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
@@ -64,6 +71,5 @@ export async function getTemplate(orgId: string, id: string, userId: string): Pr
     [id, orgId, userId],
   );
   const row = rows.rows[0];
-  if (!row) throw notFound("template not found");
-  return { ...row, pi_settings: flattenTemplatePiSettings(row.pi_settings) };
+  return row ? { ...row, pi_settings: flattenTemplatePiSettings(row.pi_settings) } : null;
 }

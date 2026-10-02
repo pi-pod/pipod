@@ -142,19 +142,11 @@ Shared tags the design system sets and these screens rely on: `app-list`,
 | Composable | Signature |
 | --- | --- |
 | `SettingsScreen` | `(viewModel: SettingsViewModel, repository: SettingsRepository, socketFactory: LoginSocketFactory, onOpenEnvironments: () -> Unit, modifier, openUrl: UrlOpener = NoUrlOpener, serverHost: String? = RuntimeConfig.serverUrl, dialogs)` |
-| `SettingsScreen` | `(state: SettingsState, actions: SettingsActions, modifier, dialogs, toastHostState, listState: LazyListState = rememberLazyListState(), proposalsSection: @Composable () -> Unit = {}, organizationBundle: (@Composable () -> Unit)? = null, userBundle: (@Composable () -> Unit)? = null)` |
-| `ProposalsSection` | `(proposals: List<SettingsProposal>, onOpenProposal: (SettingsProposal) -> Unit, modifier)` |
-| `ProposalDetailScreen` | `(viewModel: ProposalDetailViewModel, onBack: () -> Unit, onSetSecret: (String) -> Unit, onResolved: () -> Unit, modifier, dialogs)` |
-| `ProposalDetailScreen` | `(proposal: SettingsProposal, state: ProposalDetailState, onBack: () -> Unit, onApply: () -> Unit, onReject: () -> Unit, onSetSecret: (String) -> Unit, modifier, dialogs)` |
+| `SettingsScreen` | `(state: SettingsState, actions: SettingsActions, modifier, dialogs, toastHostState, listState: LazyListState = rememberLazyListState(), organizationBundle: (@Composable () -> Unit)? = null, userBundle: (@Composable () -> Unit)? = null)` |
 | `CredentialLoginSheet` | `(provider: ConnectableProvider, authType: String, socketFactory: LoginSocketFactory, onDismiss: () -> Unit, onConnected: (CredentialStatus) -> Unit, modifier, podId: String? = null, openUrl: UrlOpener = NoUrlOpener, serverHost: String? = RuntimeConfig.serverUrl)` |
 | `ColumnScope.CredentialLoginView` | `(provider: ConnectableProvider, authType: String, state: CredentialLoginState, onSubmit: (String) -> Unit, onOpenUrl: (String) -> Unit, onCancel: () -> Unit)` |
 | `ConfigBundleEditor` | `(editor: ConfigBundleEditorState, modifier, canEdit: Boolean = true, readOnlyReason: String? = null, dialogs)` |
 | `ConfigBundleEditor` | `(subject: String, description: String, state: ConfigBundleEditorUiState, onToggle, onReload, onSave, onConfigChange, onInitScriptChange, onBakeScriptChange, modifier, canEdit, readOnlyReason)` |
-
-There is **no route for a proposal**. When `SettingsState.openProposal` is set
-the settings screen renders `ProposalDetailScreen` in place of its own content
-and handles back itself; `onSetSecret(name)` is the port of Flutter's
-`Navigator.pop(secretName)` and opens the secret form pre-filled.
 
 ### View models, holders and factories
 
@@ -162,9 +154,7 @@ and handles back itself; `onSetSecret(name)` is the port of Flutter's
 | --- | --- |
 | `SettingsViewModel` | `(repository: SettingsRepository, credentials: CredentialsRepository, account: SettingsAccount = SettingsAccount(), notifications: NotificationSettingsService = UnavailableNotificationSettings, serverHost: String? = RuntimeConfig.serverUrl)` |
 | `SettingsAccount` | `(user, organization, canManageOrganization, adminConsoleUrl, signOutUnavailable, setOrganizationAlias: suspend (String) -> Unit, signOut: suspend () -> Unit, openExternalUrl: UrlOpener)` |
-| `SettingsActions` | 25 named callbacks, all defaulted — see `SettingsScreen.kt` |
-| `ProposalDetailViewModel` | `(proposal: SettingsProposal, repository: SettingsRepository, serverHost)` |
-| `rememberProposalDetailViewModel` | `(proposal, repository, serverHost): ProposalDetailViewModel` |
+| `SettingsActions` | 34 named callbacks, all defaulted — see `SettingsScreen.kt` |
 | `CredentialLoginViewModel` | `(provider, authType, socketFactory, podId, openUrl, serverHost, scope: CoroutineScope? = null)` — a plain holder with `close()`, not a `ViewModel` |
 | `rememberCredentialLoginViewModel` | `(provider, authType, socketFactory, podId, openUrl, serverHost)` — remembered per sheet, closed on dispose |
 | `ConfigBundleEditorState` | `(subject: String, description: String, load: ConfigBundleLoader, save: ConfigBundleSaver, serverHost)` |
@@ -237,42 +227,13 @@ so a pristine save cannot round-trip version N to N+1 with no diff.
 | `Permission, {text}` | the notification row; text is `Not requested`, `Off`, `Enabled`, `Provisional`, `Temporary`, or `Unknown — pull to refresh` |
 | `Enable notifications` | shown only when permission was never requested |
 | `Open notification settings` | shown only when permission was refused |
-| `Retry loading proposals` / `Retry loading model providers` / `Retry loading secrets` / `Retry loading notification state` | the four per-section retries |
+| `Retry loading model providers` / `Retry loading secrets` / `Retry loading notification state` | the three per-section retries |
 | `Error: {text}` / `Success: {text}` | every inline status line, a live region |
 
 Card headings, verbatim: `Account`, `Model providers`,
 `User secrets (write-only)`, `Every pod you launch`, `Organization defaults`,
 `Your defaults`, `Notifications`. Secrets are write-only: the list shows names
 only and there is no reveal for a stored value.
-
-### Semantics labels — Proposals
-
-| Label | On |
-| --- | --- |
-| `Proposed change to {scope}, needs approval` | a row in the waiting section |
-| `Proposal` | the detail's top-bar title |
-| `Changes, {scope}` | the detail's summary row |
-| `Loading current settings` | the progress bar while the current layer loads |
-| `changes to` | the arrow between current and proposed |
-| `Show raw` | the raw-JSON disclosure; expanded state is announced separately |
-| `Apply proposal to {scope}` | the apply button |
-| `Confirm apply proposal to {scope}` / `Cancel applying proposal to {scope}` | the apply confirmation |
-| `Reject proposal for {scope}` | the reject button |
-| `Confirm reject proposal for {scope}` / `Cancel rejecting proposal for {scope}` | the reject confirmation |
-| `Proposal applied` / `Proposal applied, now set {names}` | the applied card, a live region |
-| `Now set secret {name}` | one button per secret the applied proposal asks for |
-| `Done reviewing proposal` | leaves the detail |
-| `Proposal error: {text}` | the failure card, a live region |
-
-`{scope}` is `SettingsProposal.scopeLabel`: `organization defaults`, or
-`unsupported scope ({scope})` for one this build does not understand.
-
-Section copy, verbatim: header `Waiting for your approval`, footer
-`An agent drafted these from inside a pod. Nothing changes until you apply them here.`
-Card headings: `Default init script: current → proposed`,
-`Default bake script: current → proposed`, `Settings: current → proposed`,
-`Secrets it asks you to set`. An undecodable proposal renders
-`This app can’t display this approval.`
 
 ### Semantics labels — Provider sign-in
 
@@ -313,16 +274,6 @@ for `api_key` and
 `credentialRow(providerId)` = `settings-credential-$providerId`,
 `secretRow(name)` = `settings-secret-$name`.
 
-`ProposalTestTags`: `SECTION` = `settings-proposals-section`, `SCREEN` =
-`proposal-detail-screen`, `SUMMARY_CARD` = `proposal-summary`,
-`INIT_SCRIPT_CARD` = `proposal-init-script`, `BAKE_SCRIPT_CARD` =
-`proposal-bake-script`, `CONFIG_CARD` = `proposal-config`, `SECRETS_CARD` =
-`proposal-secrets`, `ACTIONS_CARD` = `proposal-actions`, `APPLIED_CARD` =
-`proposal-applied`, `APPLY` = `proposal-apply`, `REJECT` = `proposal-reject`,
-`DONE` = `proposal-done`, `SHOW_RAW` = `proposal-show-raw`, `ERROR` =
-`proposal-error`, `row(id)` = `proposal-row-$id`,
-`setSecret(name)` = `proposal-set-secret-$name`.
-
 `CredentialLoginTestTags`: `SHEET` = `credential-login`, `PROMPT` =
 `credential-login-prompt`, `SUBMIT` = `credential-login-submit`, `CANCEL` =
 `credential-login-cancel`, `OPEN` = `credential-login-open`, `ERROR` =
@@ -356,27 +307,10 @@ named for what it does; its dialog's confirm action is named `Confirm …`:
 | `Delete {provider} model provider sign-in` | `Confirm delete {provider} model provider sign-in` |
 | `Sign out of pi pod` | `Confirm sign out of pi pod` |
 | `Reload {subject}` | `Confirm reload {subject}` |
-| `Apply proposal to {scope}` | `Confirm apply proposal to {scope}` |
-| `Reject proposal for {scope}` | `Confirm reject proposal for {scope}` |
 
 Cancel is scoped rather than built from the confirm name — `Cancel deleting
 {name}`, not `Cancel Confirm delete job {name}` — and `AppConfirmDialog` asserts
 that the cancel name never contains the confirm name.
-
-## Bringing the secret form into view
-
-`SettingsState.secretFormFocusRequest` is a counter, bumped only by
-`openSecretForm(name)` — the path an applied proposal takes — and never by
-`showSecretForm()`, where the button that opened the form is already beside it.
-The screen watches the counter and scrolls the secrets row to the top of the
-viewport, which is the port of Flutter's `Scrollable.ensureVisible`. A counter
-rather than a flag, so two proposals applied in a row each bring the form back
-and nothing has to remember to clear it.
-
-The index comes from `settingsItemKeys(state, hasOrganizationBundle,
-hasUserBundle)`, which is the single source of the list's row order — the
-renderer dispatches on the same keys, so a section becoming conditional cannot
-put the scroll off by one. `SettingsItemKeysTest` pins the order.
 
 ## Deliberate differences from the Flutter original
 
@@ -406,5 +340,5 @@ put the scroll off by one. `SettingsItemKeysTest` pins the order.
   activity-scoped holder would hand a second attempt at the same provider back
   the finished first one, over a connection already closed; a composition-scoped
   one closes with the sheet. The cost is that rotating mid-sign-in restarts it.
-  `ProposalDetailViewModel` and `SettingsViewModel` *are* `ViewModel`s, so a
-  rotation keeps an open proposal and everything loaded behind it.
+  `SettingsViewModel` *is* a `ViewModel`, so a rotation keeps everything loaded
+  behind it.

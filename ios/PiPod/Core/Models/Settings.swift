@@ -32,40 +32,6 @@ public struct EnvironmentEditorData: Codable, Hashable, Sendable {
     }
 }
 
-/// A change to organization defaults an agent proposed from inside a pod.
-public struct SettingsProposal: Codable, Hashable, Sendable, Identifiable {
-    public let id: String
-    public let scope: String
-    public let scopeId: String
-    public let config: JSONValue?
-    public let initScript: String?
-    public let bakeScript: String?
-    public let secretNames: [String]
-    public let note: String?
-    public let status: String
-    public let createdFromPod: String
-    public let createdAt: String
-
-    public var scopeLabel: String {
-        scope == "org_defaults" ? "organization defaults" : "unsupported scope (\(scope))"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        scope = try container.decode(String.self, forKey: .scope)
-        scopeId = try container.decodeIfPresent(String.self, forKey: .scopeId) ?? ""
-        config = try container.decodeIfPresent(JSONValue.self, forKey: .config)
-        initScript = try container.decodeIfPresent(String.self, forKey: .initScript)
-        bakeScript = try container.decodeIfPresent(String.self, forKey: .bakeScript)
-        secretNames = try container.decodeIfPresent([String].self, forKey: .secretNames) ?? []
-        note = try container.decodeIfPresent(String.self, forKey: .note)
-        status = try container.decode(String.self, forKey: .status)
-        createdFromPod = try container.decodeIfPresent(String.self, forKey: .createdFromPod) ?? ""
-        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
-    }
-}
-
 /// One config bundle layer — organization defaults or a person's own.
 ///
 /// `version` is the concurrency token: a write sends the version it read, and the

@@ -26,7 +26,6 @@ import com.pipod.app.core.api.model.SecretMeta
 import com.pipod.app.core.api.model.SessionEventRecord
 import com.pipod.app.core.api.model.SessionEventsPage
 import com.pipod.app.core.api.model.SettingsLayer
-import com.pipod.app.core.api.model.SettingsProposal
 import com.pipod.app.core.api.model.UnparsedRow
 import com.pipod.app.core.api.model.WorkstationStatus
 import com.pipod.app.core.api.model.WsTicket
@@ -615,23 +614,6 @@ class ApiClient(
             put("version", version)
         }
         return request("PUT", path, body = body).jsonObject.getValue("version").jsonPrimitive.int
-    }
-
-    suspend fun settingsProposals(status: String = "pending"): DecodedList<SettingsProposal> =
-        decodeListRows(
-            json = request("GET", "settings/proposals", query = mapOf("status" to status)).jsonObject,
-            key = "proposals",
-            resourceName = "settings proposal",
-            decode = { ApiJson.decodeFromJsonElement(SettingsProposal.serializer(), it) },
-        )
-
-    suspend fun applyProposal(id: String): List<String> =
-        request("POST", "settings/proposals/$id/apply", body = EMPTY_BODY).jsonObject
-            .getValue("secretNames").jsonArray
-            .map { it.jsonPrimitive.content }
-
-    suspend fun rejectProposal(id: String) {
-        request("POST", "settings/proposals/$id/reject", body = EMPTY_BODY)
     }
 
     // --- secrets ------------------------------------------------------------

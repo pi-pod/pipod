@@ -421,12 +421,12 @@ private fun SettingsRoute(container: AppContainer, onOpenEnvironments: () -> Uni
         refreshAccount = { container.session.loadMe() },
     )
 
-    // Seeded at construction, not from an effect. The account card and the
-    // proposals section only exist once there is an identity, and inserting
-    // them a frame later pushes the list down under its own anchor — the screen
-    // then opens looking scrolled past its own first section. A store view
-    // model rather than a remembered one, so leaving settings cancels its
-    // refreshes instead of leaking them behind the next tab.
+    // Seeded at construction, not from an effect. The account card only exists
+    // once there is an identity, and inserting it a frame later pushes the list
+    // down under its own anchor — the screen then opens looking scrolled past its
+    // own first section. A store view model rather than a remembered one, so
+    // leaving settings cancels its refreshes instead of leaking them behind the
+    // next tab.
     val viewModel = viewModel(key = "settings") {
         SettingsViewModel(
             repository = settings,
@@ -442,7 +442,7 @@ private fun SettingsRoute(container: AppContainer, onOpenEnvironments: () -> Uni
     }
 
     // Coming back from the environments screen has to re-read: an environment
-    // saved there can change the secrets and proposals this screen is showing,
+    // saved there can change the secrets this screen is showing,
     // and the first thing a reader does after editing one is look at the other.
     // The first RESUME is the one this composition arrived on, which the view
     // model has already loaded for.

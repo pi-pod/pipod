@@ -1,6 +1,5 @@
 package com.pipod.app.features.settings
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,7 +23,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -48,7 +46,6 @@ import com.pipod.app.core.api.model.ConnectableProvider
 import com.pipod.app.core.api.model.CredentialStatus
 import com.pipod.app.core.api.model.PlanKey
 import com.pipod.app.core.api.model.SecretMeta
-import com.pipod.app.core.api.model.SettingsProposal
 import com.pipod.app.core.config.RuntimeConfig
 import com.pipod.app.core.format.Format
 import com.pipod.app.core.push.NotificationAuthorization
@@ -92,7 +89,6 @@ import kotlinx.coroutines.launch
 class SettingsActions(
     val onRefresh: () -> Unit = {},
     val onRetrySection: (String) -> Unit = {},
-    val onOpenProposal: (SettingsProposal) -> Unit = {},
     val onToggleOrganizationForm: () -> Unit = {},
     val onOrganizationAliasChange: (String) -> Unit = {},
     val onSwitchOrganization: () -> Unit = {},
@@ -133,10 +129,8 @@ class SettingsActions(
  * Port of `SettingsView` in
  * `pi-pod-flutter/lib/features/settings/settings_view.dart`.
  *
- * [repository] is taken alongside the view model because two of this screen's
- * parts own their own state: the config bundle editors, which load on demand,
- * and the proposal detail, which is a screen in its own right shown in place of
- * this one.
+ * [repository] is taken alongside the view model because the config bundle
+ * editors own their own state and load on demand.
  */
 @Composable
 fun SettingsScreen(
@@ -151,9 +145,6 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    // The editors are remembered before the proposal branch below, so reviewing
-    // a proposal and coming back does not throw away unsaved bundle edits the
-    // way dropping their slots would.
     val organizationBundle = state.organization?.let { organization ->
         rememberConfigBundleEditor(
             subject = "organization config bundle",
@@ -195,39 +186,6 @@ fun SettingsScreen(
         )
     }
 
-    val openProposal = state.openProposal
-    if (openProposal != null) {
-        val scope = rememberCoroutineScope()
-        BackHandler { viewModel.closeProposal() }
-        ProposalDetailScreen(
-            viewModel = rememberProposalDetailViewModel(
-                proposal = openProposal,
-                repository = repository,
-                serverHost = serverHost,
-            ),
-            onBack = viewModel::closeProposal,
-            onSetSecret = viewModel::openSecretForm,
-            onResolved = {
-                viewModel.refreshProposals()
-                // Applying a proposal rewrites one of these very layers. An
-                // editor left open on the old contents would carry a version
-                // the server has already moved past.
-                scope.launch {
-                    organizationBundle?.reloadIfClean()
-                    userBundle?.reloadIfClean()
-                }
-            },
-            modifier = modifier,
-        )
-        return
-    }
-
-    val proposalsContent: @Composable () -> Unit = {
-        ProposalsSection(
-            proposals = state.proposals,
-            onOpenProposal = viewModel::openProposal,
-        )
-    }
     val organizationBundleContent: (@Composable () -> Unit)? = organizationBundle?.let { editor ->
         {
             ConfigBundleEditor(
@@ -248,13 +206,11 @@ fun SettingsScreen(
             onRefresh = viewModel::loadAll,
             onRetrySection = { section ->
                 when (section) {
-                    SettingsViewModel.PROPOSALS -> viewModel.refreshProposals()
                     SettingsViewModel.PROVIDERS -> viewModel.refreshModelCredentials()
                     SettingsViewModel.SECRETS -> viewModel.refreshSecrets()
                     SettingsViewModel.NOTIFICATIONS -> viewModel.refreshNotificationAuthorization()
                 }
             },
-            onOpenProposal = viewModel::openProposal,
             onToggleOrganizationForm = viewModel::toggleOrganizationForm,
             onOrganizationAliasChange = viewModel::onOrganizationAliasChange,
             onSwitchOrganization = viewModel::switchOrganization,
@@ -290,7 +246,6 @@ fun SettingsScreen(
         ),
         modifier = modifier,
         dialogs = dialogs,
-        proposalsSection = proposalsContent,
         organizationBundle = organizationBundleContent,
         userBundle = userBundleContent,
     )
@@ -317,7 +272,6 @@ fun SettingsScreen(
     dialogs: AppDialogHostState = rememberAppDialogHostState(),
     toastHostState: SnackbarHostState = rememberAppToastHostState(),
     listState: LazyListState = rememberLazyListState(),
-    proposalsSection: @Composable () -> Unit = {},
     organizationBundle: (@Composable () -> Unit)? = null,
     userBundle: (@Composable () -> Unit)? = null,
 ) {
@@ -326,15 +280,6 @@ fun SettingsScreen(
     val hasUserBundle = userBundle != null
     val keys = remember(state, hasOrganizationBundle, hasUserBundle) {
         settingsItemKeys(state, hasOrganizationBundle, hasUserBundle)
-    }
-
-    // A proposal that hands back a secret name fills a field most of a screen
-    // below where the reader was standing. Filling it silently off screen is the
-    // same as not filling it, so the row it lives in comes to the top.
-    LaunchedEffect(state.secretFormFocusRequest) {
-        if (state.secretFormFocusRequest == 0) return@LaunchedEffect
-        val index = keys.indexOf(SettingsItemKeys.SECRETS)
-        if (index >= 0) listState.animateScrollToItem(index)
     }
 
     val confirmDeleteSecret: (SecretMeta) -> Unit = { secret ->
@@ -413,7 +358,6 @@ fun SettingsScreen(
             keys = keys,
             state = state,
             actions = actions,
-            proposalsSection = proposalsSection,
             organizationBundle = organizationBundle,
             userBundle = userBundle,
             onConfirmDeleteSecret = confirmDeleteSecret,
@@ -458,10 +402,6 @@ fun SettingsScreen(
 /** The keys the settings list uses, one per row it can draw. */
 internal object SettingsItemKeys {
     const val LOADING = "loading"
-    const val PROPOSALS_ERROR = "proposals-error"
-    const val UNSUPPORTED_PROPOSAL = "unsupported-proposal"
-    const val PROPOSALS = "proposals"
-    const val PROPOSALS_GAP = "proposals-gap"
     const val ACCOUNT = "account"
     const val PROVIDERS = "providers"
     const val SECRETS = "secrets"
@@ -474,9 +414,7 @@ internal object SettingsItemKeys {
 /**
  * The rows the settings list draws, in order.
  *
- * The single source of that order. Bringing the secret form into view needs the
- * index of the row it sits in, and a second list that had to be kept in step
- * with the renderer would drift the first time a section became conditional.
+ * The single source of that order: each row's key is also its LazyColumn key.
  */
 internal fun settingsItemKeys(
     state: SettingsState,
@@ -484,14 +422,6 @@ internal fun settingsItemKeys(
     hasUserBundle: Boolean,
 ): List<String> = buildList {
     if (state.showsInitialProgress) add(SettingsItemKeys.LOADING)
-    if (state.sectionError(SettingsViewModel.PROPOSALS) != null) {
-        add(SettingsItemKeys.PROPOSALS_ERROR)
-    }
-    repeat(state.unsupportedProposalCount) { add("${SettingsItemKeys.UNSUPPORTED_PROPOSAL}-$it") }
-    if (state.proposals.isNotEmpty()) add(SettingsItemKeys.PROPOSALS)
-    if (state.proposals.isNotEmpty() || state.unsupportedProposalCount > 0) {
-        add(SettingsItemKeys.PROPOSALS_GAP)
-    }
     if (state.user != null) add(SettingsItemKeys.ACCOUNT)
     add(SettingsItemKeys.PROVIDERS)
     add(SettingsItemKeys.SECRETS)
@@ -505,7 +435,6 @@ private fun LazyListScope.settingsRows(
     keys: List<String>,
     state: SettingsState,
     actions: SettingsActions,
-    proposalsSection: @Composable () -> Unit,
     organizationBundle: (@Composable () -> Unit)?,
     userBundle: (@Composable () -> Unit)?,
     onConfirmDeleteSecret: (SecretMeta) -> Unit,
@@ -525,22 +454,6 @@ private fun LazyListScope.settingsRows(
                             liveRegion = LiveRegionMode.Polite
                         },
                 )
-
-                key == SettingsItemKeys.PROPOSALS_ERROR -> {
-                    SettingsSectionError(
-                        message = state.sectionError(SettingsViewModel.PROPOSALS).orEmpty(),
-                        retrySemanticsLabel = "Retry loading proposals",
-                        onRetry = { actions.onRetrySection(SettingsViewModel.PROPOSALS) },
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
-
-                key.startsWith(SettingsItemKeys.UNSUPPORTED_PROPOSAL) ->
-                    UnsupportedListItemCard(itemName = "approval")
-
-                key == SettingsItemKeys.PROPOSALS -> proposalsSection()
-
-                key == SettingsItemKeys.PROPOSALS_GAP -> Spacer(Modifier.height(12.dp))
 
                 key == SettingsItemKeys.ACCOUNT -> {
                     AccountCard(
