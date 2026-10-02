@@ -122,6 +122,19 @@ else
   echo "upgrade: warning: Zitadel's pipod project was not checked; the reason is above" >&2
 fi
 
+# A public Zitadel means people use the server from elsewhere, where the dashboard's sign-in can
+# return only to SERVER_URL; unset, Zitadel refuses it with "redirect_uri is missing".
+case "$(env_get ZITADEL_ISSUER)" in
+  "" | http://127.0.0.1* | http://localhost*) ;;
+  *)
+    if [ -z "$(env_get SERVER_URL)" ]; then
+      echo "upgrade: warning: Zitadel is public but SERVER_URL is unset, so the dashboard signs in only on 127.0.0.1." >&2
+      echo "upgrade: set SERVER_URL in selfhost/.env to the server's address (https://api.example.com), then run" >&2
+      echo "upgrade: selfhost/upgrade --apply-zitadel" >&2
+    fi
+    ;;
+esac
+
 # The server migrates before it serves, so healthy means upgraded.
 wait_healthy server
 echo "upgrade: server healthy at $PIPOD_SOURCE_SHA"

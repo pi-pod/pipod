@@ -29,6 +29,7 @@ export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv): void {
     ...(env.ZITADEL_CLI_CLIENT_ID ? { cliClientId: env.ZITADEL_CLI_CLIENT_ID } : {}),
     ...(env.ZITADEL_MOBILE_CLIENT_ID ? { mobileClientId: env.ZITADEL_MOBILE_CLIENT_ID } : {}),
     ...(env.ZITADEL_DASHBOARD_CLIENT_ID ? { dashboardClientId: env.ZITADEL_DASHBOARD_CLIENT_ID } : {}),
+    ...(env.SERVER_URL ? { serverUrl: env.SERVER_URL } : {}),
   }));
 
   r.get(
