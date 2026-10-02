@@ -3,13 +3,16 @@
 Run [pi](https://github.com/earendil-works/pi) coding-agent sessions in server-managed pods.
 
 ```bash
-npm ci && npm run build && npm install -g .   # from this directory; `pipod update` keeps it current
+npm install -g pipod         # or from a checkout of this directory: npm ci && npm run build && npm install -g .
 pipod login --server <url>   # sign in to a pi pod server (the hosted one without --server)
 pipod                        # launch a pod for the current directory and attach
 pipod --help                 # every command and launch option
+pipod update                 # upgrade the way it was installed
 ```
 
-Running your own server: [../docs/self-host.md](../docs/self-host.md).
+Running your own server: [docs/self-host.md](https://github.com/pi-pod/pipod/blob/main/docs/self-host.md).
+A self-hosted server is deployed from a checkout; install the CLI from the same checkout so the
+two match.
 
 ## Secrets
 
