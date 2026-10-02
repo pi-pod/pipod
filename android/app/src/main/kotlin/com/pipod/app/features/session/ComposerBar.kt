@@ -374,7 +374,7 @@ private fun AttachmentThumb(attachment: ChatAttachment, onRemove: () -> Unit) {
 /**
  * The bound on prompt text, mirroring the gateway's own.
  *
- * `MAX_PROMPT_TEXT_CHARS` in `pi-pod-server` `src/server/gateway/stream-fanout.ts`
+ * `MAX_PROMPT_TEXT_CHARS` in `server/src/server/gateway/stream-fanout.ts`
  * refuses a longer prompt at the socket, which used to arrive as "Not
  * delivered / Retry / Delete" on a message that could never be delivered —
  * pasting a log or a long diff reproduced it forever. Images have had a

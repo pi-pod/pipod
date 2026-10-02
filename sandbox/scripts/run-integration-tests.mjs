@@ -10,7 +10,6 @@ const files = [
   'dr-snapshot.test.ts',
   'image-extraction-confinement.test.ts',
   'image-integrity.test.ts',
-  'loadtest-entrypoints.test.ts',
   'metrics-ws.test.ts',
   'overlay.test.ts',
   'registry-auth.test.ts',

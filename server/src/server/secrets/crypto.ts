@@ -102,9 +102,9 @@ export function decodeKek(kekBase64: string, _keyId: string): Buffer {
 /**
  * KEK held in server env/config — the no-external-dependency default (spec §7).
  *
- * Custody: the key material lives only in the server's env file (0600, root-owned;
- * `/etc/pipod/pi-pod-server/runtime.env` in production) and in this process's memory. Never
- * log it, never put it in an error message, never return it from an API.
+ * Custody: the key material lives only in the server's env file (0600, root-owned)
+ * and in this process's memory. Never log it, never put it in an error message, never
+ * return it from an API.
  *
  * Rotation, without re-encrypting the tables: move the current pair into `previous`, set the
  * new key/id as current, restart. Reads keep working because every ciphertext is stored with

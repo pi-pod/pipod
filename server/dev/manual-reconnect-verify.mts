@@ -41,7 +41,7 @@
 //   it in attach()); the readiness-catch bug under test is independent of it.
 // - endSession is a spy: retireSupervisor:true is recorded, never executed.
 //
-// Usage (from the pi-pod-server checkout):
+// Usage (from server/):
 //   node --import tsx dev/manual-reconnect-verify.mts            # full matrix, post-fix expectations
 //   SCENARIO=logic node --import tsx dev/manual-reconnect-verify.mts
 //   SCENARIO=real SLEEP_SEC=90 node --import tsx dev/manual-reconnect-verify.mts

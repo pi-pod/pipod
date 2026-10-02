@@ -63,7 +63,7 @@ object FriendlyError {
 
     /**
      * Billing refusals: the five real HTTP 402 `StartBlockedReason` values from
-     * `pi-pod-server` `src/server/billing/entitlements.ts`.
+     * the hosted edition's billing entitlements.
      *
      * These are **not** retryable waits: nothing here polls, enters the
      * workstation wait, or suggests retrying in a loop. Each sentence says what

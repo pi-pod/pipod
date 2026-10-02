@@ -204,9 +204,8 @@ export const serverEnvShape = {
 
     /**
      * Base64-encoded 32-byte key-encryption key for envelope encryption of secrets (§7). It
-     * stays in the server's env file only — 0600, root-owned, in production
-     * `/etc/pipod/pi-pod-server/runtime.env` — and is never logged. Validated here so that a
-     * truncated key fails the boot instead of the first secret write.
+     * stays in the server's env file only — 0600, root-owned — and is never logged.
+     * Validated here so that a truncated key fails the boot instead of the first secret write.
      */
     SECRETS_KEK: KekSchema,
     /** Names the KEK version, stored beside every ciphertext (`key_id`) for rotation. */

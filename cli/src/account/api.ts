@@ -220,7 +220,7 @@ export interface CapacityWaitState {
    * user command ends it. Server owns the semantics.
    */
   kind?: string | null;
-  /** Validated numeric display fields (additive, server PR #243 §6.3). */
+  /** Validated numeric display fields (additive). */
   required?: number;
   available?: number;
   unit?: string;

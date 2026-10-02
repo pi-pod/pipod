@@ -49,7 +49,7 @@ data class MeResponse(
      * static backend omits the key entirely.
      *
      * Wire key `workstation` from `workstationSummary()`
-     * (`pi-pod-server` `src/server/billing/routes.ts`); absent under static.
+     * (hosted edition billing routes); absent under static.
      */
     val workstation: JsonObject? = null,
 ) {

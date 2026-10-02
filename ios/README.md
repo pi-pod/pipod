@@ -43,26 +43,26 @@ PiPod/
     SessionStore.swift signed-in state for the whole app
   DesignSystem/        brand palette, status tones, shared components
   Features/            one directory per screen area
-tools/remote-build.sh  build/run on the remote Mac
+tools/remote-build.sh  build/run on a remote Mac
 docs/manual-testing.md how each feature is exercised by hand
 ```
 
 ## Building
 
-Development happens on Linux, where there is no iOS toolchain, so builds run on a remote
-Mac using `tailscale ssh agent@mac-mini-m4`. Complete Tailscale auth-key enrollment in [manual testing](docs/manual-testing.md) first. `tools/remote-build.sh` wraps it:
+On a Mac, `xcodegen generate` (or open the committed project) and build the `PiPod` scheme.
+
+From Linux, where there is no iOS toolchain, `tools/remote-build.sh` builds on a Mac you
+reach over Tailscale SSH:
 
 ```bash
+export PIPOD_MAC_HOST=you@your-mac               # Tailscale SSH target
 export PIPOD_REMOTE_DIR=work/pipod-ios-<yours>   # your own directory on the Mac
-# Default: configured Agent iPhone; coordinate exclusive use.
+# Default device: the Mac's configured simulator, else one named "Agent iPhone".
 # Optional: PIPOD_SIM_NAME=pipod-<yours> for an explicitly owned new device.
 ./tools/remote-build.sh sync     # rsync + regenerate the Xcode project
 ./tools/remote-build.sh build
 ./tools/remote-build.sh run      # install + launch on your simulator
 ```
-
-On a Mac you can skip all of that: `xcodegen generate` (or open the committed project) and
-build the `PiPod` scheme.
 
 `sync` regenerates `PiPod.xcodeproj` every time. XcodeGen bakes the file list into the
 project, so a committed project that predates a new file would silently leave it out of

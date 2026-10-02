@@ -1,5 +1,5 @@
 /**
- * Safe operator retirement, rev5 manifest handshake (native PR #20, contract rev5 §11).
+ * Safe operator retirement, rev5 manifest handshake (contract rev5 §11).
  *
  * Fake hosts speak the rev5 routes (hold / archive?verify=1 / exact import); a
  * legacy mode omits them to prove fail-closed. Tracked on every scenario: zero

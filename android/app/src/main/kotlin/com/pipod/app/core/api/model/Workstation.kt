@@ -19,7 +19,7 @@ import kotlinx.serialization.json.doubleOrNull
  * launch a duplicate — see `FriendlyError.workstationMessage`.
  *
  * Everything below mirrors the server's own validator
- * (`pi-pod-server` `src/server/safe-errors.ts` `boatHostDemandDetail`) field for
+ * (`server/src/server/safe-errors.ts` `boatHostDemandDetail`) field for
  * field. A present-but-malformed field fails the whole parse, exactly as it
  * does there: a half-trusted detail is more dangerous than no detail, because
  * the client would then poll a path or print a number the server never sent.
@@ -234,8 +234,8 @@ data class WorkstationDemand(
         private val REASON = Regex("^[a-z][a-z0-9_]{0,63}$")
 
         /**
-         * `BOAT_HOST_DEMAND_REASONS` from `pi-pod-server`
-         * `src/server/safe-errors.ts`, byte for byte.
+         * `BOAT_HOST_DEMAND_REASONS` from
+         * `server/src/server/safe-errors.ts`, byte for byte.
          *
          * The server validates the reason against exactly this set before a
          * host-demand detail is allowed across the HTTP boundary, so requiring

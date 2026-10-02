@@ -133,7 +133,7 @@ data class Pod(
     /**
      * Whether the gateway currently holds a live session for this pod:
      * `connected`, `reconnecting`, `detached` or `asleep` (`podConnection` in
-     * `pi-pod-server` `src/server/pods/routes.ts`). Null on a payload that
+     * `server/src/server/pods/routes.ts`). Null on a payload that
      * predates the field.
      */
     val connection: String? = null,

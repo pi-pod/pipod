@@ -1,4 +1,4 @@
-- After a change to provisioning, the PTY, or session lifecycle, verify it against a live pod, with the maintainer workspace's `pi-pod-cli-manual-testing` skill when it is present. A documentation-only change does not need a live pod.
+- After a change to provisioning, the PTY, or session lifecycle, verify it against a live pod. A documentation-only change does not need a live pod.
 
 ## Classic runtime coupling
 

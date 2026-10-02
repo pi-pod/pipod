@@ -9,7 +9,7 @@
  * netns, image unpack), and its privileged suite runs on ephemeral GitHub
  * runners. Worse, issuing even one grant PUT to a production host flips its
  * persistent global managed_mode — forbidden. So this fixture re-implements
- * the exact native rules read from pi-pod-sandbox/src/core/{tenancy,
+ * the exact native rules read from sandbox/src/core/{tenancy,
  * manager}.ts at test time (cited inline), driven by the REAL server worker
  * (runCpuAllocator), REAL placement (placeSandboxHostForRequest), and REAL
  * client (SandboxClient) over HTTP:

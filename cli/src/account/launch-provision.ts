@@ -86,7 +86,7 @@ export async function watchProvisioning(
   const reported = new Set<string>();
   // Last announced capacity-wait reason: re-announce only when the reason changes, so a
   // 60-second wait narrates once instead of once per poll. Progress re-renders at most
-  // every 5s (server PR #243: bounded wait with validated reason/numbers/deadlineAt)
+  // every 5s (the server's bounded wait with validated reason/numbers/deadlineAt)
   // so a 60s wait is visibly alive, not stalled output.
   let announcedWaitReason: string | null = null;
   let lastWaitLogAt = 0;
@@ -158,7 +158,7 @@ export async function watchProvisioning(
       }
     }
     if (pod.ready) return pod;
-    // Bounded capacity wait (capacity contract §1 + server PR #243): the request is
+    // Bounded capacity wait (capacity contract §1): the request is
     // valid and entitled, holding one concurrency slot but no host reservation.
     // Older servers omit the field — that reads exactly like no wait and flows
     // through today's path. New servers send preparationPhase `waiting-for-capacity`
@@ -174,7 +174,7 @@ export async function watchProvisioning(
         lastWaitLogAt = now;
         lastWaitAttempts = wait.attempts;
         reportedWaiting = true;
-        // Contract copy (server PR #243): [launch] waiting for fleet
+        // Contract copy: [launch] waiting for fleet
         // capacity: <reason> (needs X, free Y) — up to Ns, with a
         // countdown. The trailing `waiting for capacity` keeps the legacy
         // copy greppable (older tooling/tests match it exactly once per reason).
@@ -211,7 +211,7 @@ export async function watchProvisioning(
       // Terminal wait states are FINAL for this operation: never transient (no blip
       // retry), never a duplicate launch — a new launch may be tried by hand. A wake
       // ends on an existing workspace, so its copy must never say "launch again".
-      // Typed expiry (server PR #243 stateReasonCode) reads as retry-later copy.
+      // Typed expiry (server stateReasonCode) reads as retry-later copy.
       if (wait.state === "expired" && (pod as ApiPod).stateReasonCode === "capacity_wait_expired") {
         throw new PiPodError(describeLaunchFailure(pod), {
           hint: CAPACITY_WAIT_EXPIRED_HINT,
@@ -510,7 +510,7 @@ export function describeCapacityAmounts(wait: {
 }
 
 /**
- * One-line wait copy from the server's validated wait view (PR #243):
+ * One-line wait copy from the server's validated wait view:
  * `<reason> (needs X, free Y) — up to Ns (~Ns left)`.
  * Never renders raw provider text — reason is the validated enum, numbers are
  * finite non-negative validated fields. Older servers omit the amount fields and
@@ -535,7 +535,7 @@ export function describeCapacityWaitLine(wait: {
 }
 
 /**
- * Typed capacity expiry (server PR #243 stateReasonCode `capacity_wait_expired`):
+ * Typed capacity expiry (server stateReasonCode `capacity_wait_expired`):
  * `launch failed: the fleet is still at capacity (waited Ns for <reason>); retry shortly`.
  * Falls back to the opaque stateReason when the code or wait view is absent
  * (older servers render exactly as before).
