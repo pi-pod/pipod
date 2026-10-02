@@ -489,7 +489,15 @@ export async function runProviderPodCommand(
     }
     throw e;
   }
-  if (command === "delete") await revokePodToken(pod.id);
+  if (command === "delete") {
+    await revokePodToken(pod.id);
+    // Its jobs were authorized by a token that no longer exists; a person can resume them.
+    await query(
+      `UPDATE jobs SET status = 'paused', next_run_at = NULL, updated_at = now()
+       WHERE created_from_pod = $1 AND status = 'active' AND archived_at IS NULL`,
+      [pod.id],
+    );
+  }
   const persisted = await tx(async (client) => {
     const result = await client.query(
       `UPDATE pods SET provider_state = $2, provider_state_changed_at = now(), state_reason = NULL,

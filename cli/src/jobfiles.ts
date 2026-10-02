@@ -302,8 +302,14 @@ export function parseJobFile(text: string, sourcePath: string, layer: JobLayer):
   let promptPath: string | undefined;
   if (promptFile !== undefined) {
     if (!promptFile.trim()) fail(source, "promptFile", "must not be empty");
-    promptPath = path.resolve(path.dirname(sourcePath), promptFile);
+    // A job file arrives with a checkout and its prompt is uploaded: it may name only a file
+    // beside it, never one elsewhere on this machine.
+    if (promptFile !== path.basename(promptFile) || promptFile === "." || promptFile === "..") {
+      fail(source, "promptFile", "must be a file name in the same directory as the job file");
+    }
+    promptPath = path.join(path.dirname(sourcePath), promptFile);
     if (!fs.existsSync(promptPath)) fail(source, "promptFile", `file not found: ${promptPath}`);
+    if (!fs.lstatSync(promptPath).isFile()) fail(source, "promptFile", "must be a regular file, not a symlink");
     resolvedPrompt = fs.readFileSync(promptPath, "utf8");
   }
   if (!resolvedPrompt.trim()) fail(source, promptFile !== undefined ? "promptFile" : "prompt", "prompt must not be empty");

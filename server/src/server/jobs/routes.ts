@@ -6,6 +6,8 @@ import { audit } from "../audit.js";
 import { query, tx, type Queryable } from "../db/index.js";
 import { badRequest, forbidden, conflict, notFound } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
+import { readLayer } from "../settings/merge.js";
+import { nestedPodsPolicy } from "../pods/lineage.js";
 import {
   assertJobScopeChange,
   assertJobTemplateScope,
@@ -190,7 +192,14 @@ export function registerJobRoutes(app: FastifyInstance): void {
     },
     async (req, reply) => {
       if (!req.auth.podId) requirePermission(req.auth, "jobs:write");
-      else if (req.body.scope === "org") throw forbidden("pod tokens may only create personal jobs");
+      else {
+        if (req.body.scope === "org") throw forbidden("pod tokens may only create personal jobs");
+        // A pod's job launches pods later on its behalf: the same policy as launching them now.
+        const policy = await readLayer("org_policy", req.auth.orgId, req.auth.orgId);
+        if (!nestedPodsPolicy(policy.config ?? {}).enabled) {
+          throw forbidden("org policy nestedPods.enabled is false: pods may not schedule jobs");
+        }
+      }
       const trigger = normalizeJobTrigger(req.body.trigger);
       parseModelRef(req.body.model);
       // Creation always lands active with a validated future occurrence, for user tokens

@@ -533,10 +533,23 @@ class LayerWriter {
   readonly written: string[] = [];
   readonly removed: string[] = [];
   readonly warnings: string[] = [];
-  constructor(readonly root: string) {}
+  /**
+   * `confined`: every directory between the root and a written file must be a real one. A
+   * project root is a checkout, and its author can make any of them a symlink elsewhere.
+   */
+  constructor(readonly root: string, private readonly confined = false) {}
 
   /** `null` content removes the file. Identical content is left untouched. */
   put(file: string, content: string | null): void {
+    if (this.confined) {
+      let ancestor = this.root;
+      for (const part of path.relative(this.root, path.dirname(file)).split(path.sep).filter(Boolean)) {
+        if (part === "..") throw new PiPodError(`${file} is outside ${this.root}`);
+        ancestor = path.join(ancestor, part);
+        const stat = refuseSymlink(ancestor);
+        if (stat && !stat.isDirectory()) throw new PiPodError(`${ancestor} must be a directory`);
+      }
+    }
     const stat = refuseSymlink(file);
     const relative = path.relative(this.root, file);
     if (content === null) {
@@ -632,7 +645,7 @@ export function writeBundleSource(args: {
     configPath = userPath;
     root = path.dirname(path.dirname(userPath));
   }
-  const writer = new LayerWriter(root);
+  const writer = new LayerWriter(root, kind === "project");
   const retired = nonBundleKeysFound(bundle.config);
   if (retired.length > 0) {
     writer.warnings.push(`the server bundle still carries non-bundle keys (${retired.join(", ")}) — they are dropped, not written`);
