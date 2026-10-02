@@ -281,8 +281,9 @@ public struct SessionView: View {
                     ForEach(rowCache.rows, id: \.id) { row in
                         transcriptRow(row, stream: stream)
                     }
-                    ForEach(stream.pendingInteractions) { interaction in
-                        approvalCard(interaction, stream: stream)
+                    ForEach(stream.openDialogs) { dialog in
+                        DialogCard(dialog: dialog) { stream.answer(dialog, with: $0) }
+                            .id(dialog.id)
                     }
                     if stream.workingVisible
                         || TranscriptPresentation.showsTypingIndicator(
@@ -399,46 +400,12 @@ public struct SessionView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
                 .accessibilityLabel("Loading conversation")
-        } else if stream.items.isEmpty, stream.pendingInteractions.isEmpty {
+        } else if stream.items.isEmpty, stream.openDialogs.isEmpty {
             ConversationEmptyState { suggestion in
                 draft = suggestion
                 composerFocused = true
             }
         }
-    }
-
-    private func approvalCard(
-        _ interaction: PendingInteraction, stream: SessionStream
-    ) -> some View {
-        // A card the reducer calls stale may still be answerable — only a
-        // resolution event truly retires a request — so the usual actions stay
-        // and Dismiss is added.
-        let stale = stream.isInteractionStale(interaction)
-        return ApprovalCard(
-            interaction: interaction,
-            isStale: stale,
-            onDismissStale: stale ? { _ = stream.removeInteraction(interaction.id) } : nil
-        ) { response in
-            let resolvableId = stream.resolvableId(for: interaction.id)
-            // Register the intent first: the racing `interaction_resolved` event
-            // usually beats this POST back, and it needs the answer to phrase a
-            // specific receipt instead of a generic one.
-            stream.beginLocalResolve(resolvableId, response: response)
-            do {
-                let outcome = try await api.resolveInteraction(
-                    id: resolvableId, response: response
-                )
-                stream.markInteractionResolved(
-                    resolvableId,
-                    deliveryPending: outcome.isDeliveryPending,
-                    response: response
-                )
-            } catch {
-                stream.cancelLocalResolve(resolvableId)
-                throw error
-            }
-        }
-        .id(interaction.id)
     }
 
     private func widgets(
@@ -492,7 +459,7 @@ public struct SessionView: View {
             || (stream.asleep != nil && !stream.isConnected) || !stream.isConnected {
             return nil
         }
-        if stream.isRunning, stream.items.isEmpty, stream.pendingInteractions.isEmpty {
+        if stream.isRunning, stream.items.isEmpty, stream.openDialogs.isEmpty {
             return "pi is working"
         }
         return nil
@@ -525,12 +492,6 @@ public struct SessionView: View {
         launchReport = router.consumeLaunchReport(for: podId)
         shouldFocusFreshComposer = router.consumeComposerFocus(for: podId)
         let created = SessionStream(podId: podId, fromSeq: fromSeq, sessionId: sessionId)
-        // Restored cards resolve through the gateway uuid from the pending
-        // listing; without this the inline Submit posts the pi request id, which
-        // the server rejects.
-        created.pendingInteractionsFetcher = { [api] in
-            try await api.interactions().items
-        }
         if let initialPod { created.setPodRecordForTesting(initialPod) }
         stream = created
         // The model picker is a value route, so the tab shell builds it and needs

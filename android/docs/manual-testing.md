@@ -30,6 +30,13 @@ sign-in screen rather than by launch argument:
 Not exercised: approvals (no default pod extension raises one), push notifications, image
 and file attachments, organization switching, a Release build against a public HTTPS server.
 
+Approvals were removed after this pass (2026-10-02). There is no Approvals inbox, tab or pod-list
+row, no approval badge or "Approval needed" banner, no `pipod://interaction/…` link and no REST
+resolve any more. A question an extension asks (`confirm`, `select`, `input`, `editor`) appears as
+a card at the end of its conversation and is answered over the session socket; the gateway re-sends
+it on every attach until some client answers. Older entries below that mention approvals describe
+the app before that change.
+
 ## Testing on a remote Mac
 
 Any local emulator works with plain `adb`. To offload to a Mac reached over Tailscale

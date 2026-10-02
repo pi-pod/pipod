@@ -53,11 +53,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.pipod.app.core.api.model.PendingInteraction
 import com.pipod.app.core.format.Format
 import com.pipod.app.core.format.MessageChrome
 import com.pipod.app.core.session.ChatAttachmentLimits
-import com.pipod.app.core.session.InteractionPresentation
 import com.pipod.app.core.session.StreamImageAttachment
 import com.pipod.app.core.session.StreamItem
 import com.pipod.app.core.session.StreamItemDelivery
@@ -85,7 +83,7 @@ import kotlinx.coroutines.launch
  * Every one of them is a pure function of its arguments: expansion lives on the
  * session stream, drafts live in the composer, and nothing here reaches for a
  * store. That is what lets a UI test build any row — a failed send, a nine-call
- * tool run, a stale approval — without a server.
+ * tool run, a question pi is waiting on — without a server.
  */
 
 /**
@@ -110,11 +108,6 @@ object TranscriptTestTags {
     fun tools(id: String) = "transcript-tools-$id"
 
     fun toolDetail(id: String) = "transcript-tool-detail-$id"
-
-    fun approvalCard(id: String) = "approval-card-$id"
-
-    const val APPROVAL_DETAILS = "approval-card-details"
-    const val APPROVAL_DISMISS = "approval-card-dismiss"
 }
 
 /**
@@ -847,124 +840,6 @@ private fun ToolDetailRow(item: StreamItem, isExpanded: Boolean, onExpandedChang
                 text = item.text,
                 style = MonospaceTextStyle,
                 modifier = Modifier.fillMaxWidth().padding(start = 22.dp, top = 4.dp),
-            )
-        }
-    }
-}
-
-/** Wording that belongs to an approval card whichever surface draws it. */
-object ApprovalCardDefaults {
-    /**
-     * Shown when the turn settled without an answer. The request may still be
-     * answerable server-side, so the usual actions stay and this only says pi
-     * moved on.
-     */
-    const val STALE_CAPTION: String =
-        "pi moved on without this answer — you can still respond or dismiss."
-}
-
-/**
- * An approval request inline in the transcript. The response controls are
- * passed in so the transcript does not depend on the interactions feature.
- */
-@Composable
-fun ApprovalCard(
-    interaction: PendingInteraction,
-    modifier: Modifier = Modifier,
-    isStale: Boolean = false,
-    onDismissStale: (() -> Unit)? = null,
-    controls: @Composable () -> Unit = {},
-) {
-    val presentation = remember(interaction) { InteractionPresentation(interaction) }
-    var showsDetails by rememberSaveable(interaction.id) { mutableStateOf(false) }
-    val colors = appColors
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(colors.notice.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-            .padding(14.dp)
-            // The request id travels as a test handle only: a 36-char UUID is
-            // noise in an announced label.
-            .testTag(TranscriptTestTags.approvalCard(interaction.id)),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(AppIcons.approval, contentDescription = null, tint = colors.noticeText)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = presentation.title,
-                style = MaterialTheme.typography.titleSmall,
-                color = colors.noticeText,
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        AppSelectableText(presentation.message, style = MaterialTheme.typography.bodyMedium)
-        if (isStale) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = ApprovalCardDefaults.STALE_CAPTION,
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.secondaryLabel,
-                // Its own node: folded into the surrounding text it would vanish
-                // as a findable element.
-                modifier = Modifier.clearAndSetSemantics {
-                    contentDescription = ApprovalCardDefaults.STALE_CAPTION
-                },
-            )
-        } else {
-            Spacer(Modifier.height(10.dp))
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = AppButtonDefaults.MinTouchTarget)
-                .clickable { showsDetails = !showsDetails }
-                .testTag(TranscriptTestTags.APPROVAL_DETAILS)
-                .clearAndSetSemantics {
-                    contentDescription = "Complete request details"
-                    role = Role.Button
-                    stateDescription = if (showsDetails) "Expanded" else "Collapsed"
-                    onClick {
-                        showsDetails = !showsDetails
-                        true
-                    }
-                },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = if (showsDetails) AppIcons.expand else AppIcons.chevron,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = "Complete request details",
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (showsDetails) {
-            AppSelectableText(
-                text = presentation.details,
-                style = MonospaceTextStyle,
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        controls()
-        if (isStale && onDismissStale != null) {
-            Spacer(Modifier.height(8.dp))
-            AppButton(
-                text = "Dismiss",
-                onClick = onDismissStale,
-                kind = AppButtonKind.Tinted,
-                semanticsLabel = if (presentation.title.trim().isEmpty()) {
-                    "Dismiss stale request"
-                } else {
-                    "Dismiss stale request for ${presentation.title.trim()}"
-                },
-                modifier = Modifier.testTag(TranscriptTestTags.APPROVAL_DISMISS),
             )
         }
     }

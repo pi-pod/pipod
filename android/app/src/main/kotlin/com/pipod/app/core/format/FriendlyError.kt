@@ -119,10 +119,6 @@ object FriendlyError {
         if (error.error.startsWith("HTTP 5")) {
             return "The server ran into a problem (${error.error}). Try again in a moment."
         }
-        if (error.detailCode == "pod_not_attached") {
-            return "The pod isn’t attached right now. The approval stays pending — " +
-                "start or attach the pod, then try again."
-        }
 
         capacitySentence(error.error, error.detailText)?.let { return it }
         FriendlyText.knownServerFailure(error.error)?.let { return it }

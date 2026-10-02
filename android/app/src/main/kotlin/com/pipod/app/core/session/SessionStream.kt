@@ -4,7 +4,6 @@ import com.pipod.app.core.api.ApiClient
 import com.pipod.app.core.api.model.ApiError
 import com.pipod.app.core.api.model.ConversationEventRecord
 import com.pipod.app.core.api.model.ConversationEventsPage
-import com.pipod.app.core.api.model.PendingInteraction
 import com.pipod.app.core.api.model.Pod
 import com.pipod.app.core.api.model.QueuedPromptReceipt
 import com.pipod.app.core.api.model.WorkstationDemand
@@ -29,7 +28,6 @@ import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -93,7 +91,8 @@ fun interface SessionTransportFactory {
  */
 data class SessionStreamState(
     val items: List<StreamItem> = emptyList(),
-    val pendingInteractions: List<PendingInteraction> = emptyList(),
+    /** Questions pi is waiting on, oldest first. */
+    val openDialogs: List<PiDialog> = emptyList(),
     val availableModels: List<ModelChoice> = emptyList(),
     val availableThinkingLevels: List<String> = emptyList(),
     val isConnected: Boolean = false,
@@ -176,14 +175,6 @@ class SessionStream(
     private val reconnectDelay: (attempt: Int) -> Duration = ::defaultReconnectDelay,
     scope: CoroutineScope? = null,
     /**
-     * Fetches the server's still-pending approvals so restored cards that only
-     * carry the pi request id can adopt the gateway uuid they resolve with.
-     * Wired from the [ApiClient] in production; tests inject a fake. A failure
-     * keeps the cards and retries on the next attach — only a submit surfaces
-     * an error.
-     */
-    var pendingInteractionsFetcher: (suspend () -> List<PendingInteraction>)? = null,
-    /**
      * True while the device has a network. Collected for as long as the stream
      * is attached, so "Offline" and the reattach on the online edge need no
      * cooperation from the screen. Defaults to whatever `AppContainer`
@@ -230,7 +221,7 @@ class SessionStream(
     // --- transcript and protocol state --------------------------------------
 
     private val transcript = mutableListOf<StreamItem>()
-    private val pending = mutableListOf<PendingInteraction>()
+    private val dialogs = mutableListOf<PiDialog>()
     private val availableModels = mutableListOf<ModelChoice>()
     private val availableThinkingLevels = mutableListOf<String>()
     private val expandedToolDetails = mutableSetOf<String>()
@@ -311,10 +302,8 @@ class SessionStream(
 
     /** The newest seq the server has reported, across hellos and replay. */
     private var serverWatermark: Long = 0
-    private var lastSettledSeq: Long = 0
     private var reconnectJob: Job? = null
     private var connectivityJob: Job? = null
-    private val resolvedSubscription: Job
 
     /**
      * Accumulated `!command` bash output per execution id, so a chunk and the
@@ -376,16 +365,6 @@ class SessionStream(
     private var lastGatewayRefusalMessage: String? = null
 
     init {
-        // Warms the durable receipt cache so a replayed `interaction_resolved`
-        // after a cold restart still finds the specific wording. Fire-and-forget:
-        // receipts are a convenience and must not delay attach.
-        this.scope.launch { InteractionReceiptStore.load() }
-        // UNDISPATCHED so the subscription exists the moment the constructor
-        // returns, as Dart's synchronous `listen` did: a resolution posted
-        // immediately afterwards must not be missed.
-        resolvedSubscription = this.scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            SessionNotifications.interactionResolved.stream.collect(::onInteractionResolvedNotification)
-        }
         remoteUi.responder = ::sendUiResponse
         remoteUi.onControl = ::applyRemoteUiControl
         // An extension-owned editor submits the same way pi's own does: the text
@@ -404,7 +383,7 @@ class SessionStream(
     val snapshot: SessionStreamState get() = _state.value
 
     val items: List<StreamItem> get() = _state.value.items
-    val pendingInteractions: List<PendingInteraction> get() = _state.value.pendingInteractions
+    val openDialogs: List<PiDialog> get() = _state.value.openDialogs
     /** The replay cursor a reconnect resumes from. */
     val lastSeq: Long get() = synchronized(lock) { seqCursor }
     val sessionId: String? get() = synchronized(lock) { streamSessionId }
@@ -786,7 +765,6 @@ class SessionStream(
         LiveSessionStreams.unregister(this)
         detach()
         remoteUi.dispose()
-        resolvedSubscription.cancel()
         if (ownsScope) scope.cancel()
     }
 
@@ -1294,369 +1272,31 @@ class SessionStream(
 
     fun isToolExpanded(key: String): Boolean = _state.value.isToolExpanded(key)
 
-    // --- approvals ----------------------------------------------------------
+    // --- dialogs ------------------------------------------------------------
 
     /**
-     * The gateway identifies one approval two ways: the durable uuid it mints
-     * (`interactionId` on `interaction` frames and `interaction_resolved`
-     * payloads, and the only id the resolve endpoints accept) and the pi request
-     * id inside the frame payload (`payload['id']`, carried by the durable
-     * `extension_ui_request` event and the ephemeral re-send). Both domains
-     * alias one card. Resolving with the request id is what the server rejects
-     * (`not_found` -> "validation failed"), so the surviving card always carries
-     * the uuid.
+     * Sends the answer and leaves a line in the transcript saying what it was.
+     * False while disconnected: the card stays, and pi keeps waiting.
      */
-    private val uuidByRequestId = mutableMapOf<String, String>()
-    private val requestIdByUuid = mutableMapOf<String, String>()
-
-    /**
-     * Every id (either domain) known to be resolved, by any surface. Restores
-     * for these ids create no card; resolutions for them emit no receipt.
-     */
-    private val resolvedInteractionIds = mutableSetOf<String>()
-
-    /**
-     * Ids (either domain) for which a transcript receipt was already emitted, so
-     * a replayed `interaction_resolved` after a local resolve stays silent.
-     */
-    private val receiptedInteractionIds = mutableSetOf<String>()
-
-    /**
-     * Intended answers registered via [beginLocalResolve] before the REST call
-     * returns, keyed by every alias of the approval. A racing
-     * `interaction_resolved` event consumes the entry to phrase the specific
-     * receipt; a REST failure clears it via [cancelLocalResolve].
-     */
-    private val pendingLocalResolves = mutableMapOf<String, JsonObject?>()
-
-    private var reconcileInFlight = false
-    private var reconcilePending = false
-
-    /**
-     * Registers the intended answer BEFORE awaiting the REST resolve so a racing
-     * `interaction_resolved` WebSocket event (which typically arrives before the
-     * POST returns) can phrase the specific "You confirmed …" receipt instead of
-     * the generic fallback. Pair with [markInteractionResolved] on success or
-     * [cancelLocalResolve] on failure.
-     */
-    fun beginLocalResolve(id: String, response: JsonObject?) = synchronized(lock) {
-        for (key in aliasGroup(id)) pendingLocalResolves[key] = response
-    }
-
-    /**
-     * Rolls back [beginLocalResolve] when the REST call fails: the card stays
-     * and no receipt is emitted.
-     */
-    fun cancelLocalResolve(id: String) = synchronized(lock) {
-        for (key in aliasGroup(id)) pendingLocalResolves.remove(key)
-        pendingLocalResolves.remove(id)
-        Unit
-    }
-
-    /**
-     * The id the resolve endpoints accept for [id]: the adopted gateway uuid
-     * when known, otherwise [id] unchanged. Restored cards carry the pi request
-     * id until [reconcilePendingWithServer] adopts the uuid; posting the request
-     * id is what the server rejects with "validation failed".
-     */
-    fun resolvableIdFor(id: String): String = synchronized(lock) {
-        uuidByRequestId[id]?.let { return it }
-        for (item in pending) {
-            val payloadId = payloadRequestId(item.payload)
-            if (payloadId == id && isUuid(item.id)) return item.id
-            if (item.id == id && isUuid(item.id)) return item.id
-        }
-        id
-    }
-
-    fun markInteractionResolved(
-        id: String,
-        deliveryPending: Boolean = false,
-        response: JsonObject? = null,
-    ) {
-        synchronized(lock) {
-            markResolvedLocked(id, deliveryPending, response)
-        }
-        SessionNotifications.interactionResolved.post(id = id, response = response)
-    }
-
-    private fun markResolvedLocked(id: String, deliveryPending: Boolean, response: JsonObject?) {
-        val group = aliasGroup(id)
-        // A racing `interaction_resolved` event already left the specific
-        // receipt via the beginLocalResolve intent: do not duplicate it.
-        if (group.any(receiptedInteractionIds::contains)) {
-            removePendingMatching(id)
-            recordResolvedFor(id)
-            for (key in group) pendingLocalResolves.remove(key)
-            pendingLocalResolves.remove(id)
-            if (deliveryPending) {
-                appendStatus("Response saved — it reaches the agent when the pod reconnects.")
-            }
-            publish()
-            return
-        }
-        val removed = removePendingMatching(id)
-        recordResolvedFor(id)
-        if (removed.isNotEmpty()) {
-            receiptedInteractionIds.addAll(aliasGroup(id))
-            for (victim in removed) {
-                receiptedInteractionIds.add(victim.id)
-                payloadRequestId(victim.payload)?.let(receiptedInteractionIds::add)
-            }
-            val receipt = interactionReceiptText(removed.first(), response)
-            appendStatus(receipt)
-            persistInteractionReceipt(receiptKeys(group, removed), receipt)
-        }
-        for (key in group) pendingLocalResolves.remove(key)
-        pendingLocalResolves.remove(id)
-        for (victim in removed) {
-            for (key in aliasGroup(victim.id)) pendingLocalResolves.remove(key)
-            payloadRequestId(victim.payload)?.let(pendingLocalResolves::remove)
-        }
-        if (deliveryPending) {
-            appendStatus("Response saved — it reaches the agent when the pod reconnects.")
-        }
-        publish()
-    }
-
-    fun removeInteraction(id: String): Boolean = synchronized(lock) {
-        if (pending.none { it.id == id }) return false
-        pending.removeAll { it.id == id }
-        scrollRevision += 1
+    fun answer(dialog: PiDialog, response: JsonObject): Boolean = synchronized(lock) {
+        val transport = socket
+        if (!isConnected || transport == null || !transport.uiResponse(response)) return false
+        closeDialog(dialog.id)
+        appendStatus(dialog.receipt(response))
         publish()
         true
     }
 
-    /**
-     * Best-effort stale detection for approvals the turn left behind: when the
-     * agent settled after the request without an answer, the row is moot. The
-     * server still returns such rows today, so the list should treat them as
-     * "No longer needed" rather than actionable. This heuristic never marks a
-     * turn that is still blocked (no settle after the request) as stale.
-     */
-    fun isInteractionStale(interaction: PendingInteraction): Boolean = synchronized(lock) {
-        interaction.seq > 0 && lastSettledSeq > interaction.seq
-    }
-
-    /**
-     * Adopts gateway uuids from a `GET /v1/interactions?pending=true` listing for
-     * restored cards that only carry the pi request id. Matches rows by pod id +
-     * `payload.id`, falling back to kind + title (+ seq when both carry one).
-     * Keeps the request-id alias so either domain still resolves the same card.
-     * Returns how many cards adopted a uuid.
-     */
-    fun adoptUuids(rows: List<PendingInteraction>): Int = synchronized(lock) {
-        val candidates = rows.filter { it.id.isNotEmpty() && (it.podId.isEmpty() || it.podId == podId) }
-        if (candidates.isEmpty()) return 0
-        var adopted = 0
-        for (index in pending.indices) {
-            val local = pending[index]
-            if (isUuid(local.id)) continue
-            if (resolvedInteractionIds.contains(local.id)) continue
-            val localRequest = canonicalRequestId(local)
-            var match: PendingInteraction? = null
-            if (localRequest != null) {
-                match = candidates.firstOrNull { isUuid(it.id) && payloadRequestId(it.payload) == localRequest }
-            }
-            if (match == null) {
-                val localTitle = interactionTitle(local).trim()
-                for (row in candidates) {
-                    if (!isUuid(row.id)) continue
-                    if (pending.any { it.id == row.id }) continue
-                    if (row.kind != local.kind && row.kind != "extension_ui" && local.kind != "extension_ui") continue
-                    val rowTitle = interactionTitle(row).trim()
-                    val titlesMatch = localTitle.isNotEmpty() && rowTitle == localTitle
-                    val seqMatch = local.seq != 0L && row.seq != 0L && row.seq == local.seq
-                    if (!titlesMatch && !seqMatch) continue
-                    // A bare seq match with empty titles is too weak across kinds.
-                    if (!titlesMatch && localTitle.isEmpty() && rowTitle.isEmpty()) continue
-                    match = row
-                    break
-                }
-            }
-            val resolved = match ?: continue
-            val uuid = resolved.id
-            val linkRequest = localRequest ?: payloadRequestId(local.payload) ?: local.id
-            if (linkRequest != uuid) linkAlias(uuid, linkRequest)
-            payloadRequestId(local.payload)?.takeIf { it != uuid }?.let { linkAlias(uuid, it) }
-            payloadRequestId(resolved.payload)?.takeIf { it != uuid }?.let { linkAlias(uuid, it) }
-            pending[index] = PendingInteraction(
-                id = uuid,
-                sessionId = local.sessionId.ifEmpty { resolved.sessionId },
-                podId = local.podId.ifEmpty { resolved.podId },
-                podName = resolved.podName.ifEmpty { local.podName },
-                seq = if (resolved.seq != 0L) resolved.seq else local.seq,
-                kind = local.kind,
-                payload = resolved.payload.takeIf { it != JsonNull } ?: local.payload,
-                createdAt = resolved.createdAt.ifEmpty { local.createdAt },
-            )
-            adopted += 1
-        }
-        if (adopted > 0) {
-            scrollRevision += 1
-            publish()
-        }
-        adopted
-    }
-
-    /**
-     * Fetches the server's pending approvals and adopts uuids for restored
-     * cards. Failures keep the cards for a retry on the next attach; only a
-     * submit surfaces an error.
-     */
-    suspend fun reconcilePendingWithServer() {
-        val fetcher = synchronized(lock) {
-            val candidate = pendingInteractionsFetcher
-            when {
-                candidate == null || pending.isEmpty() -> null
-                pending.none { !isUuid(it.id) } -> null
-                reconcileInFlight -> {
-                    reconcilePending = true
-                    null
-                }
-
-                else -> {
-                    reconcileInFlight = true
-                    candidate
-                }
-            }
-        } ?: return
-        try {
-            adoptUuids(fetcher())
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Throwable) {
-            // Keep the cards; the next attach retries. Submits surface errors.
-        } finally {
-            val retry = synchronized(lock) {
-                reconcileInFlight = false
-                if (reconcilePending) {
-                    reconcilePending = false
-                    pending.any { !isUuid(it.id) }
-                } else {
-                    false
-                }
-            }
-            if (retry) reconcilePendingWithServer()
-        }
-    }
-
-    /**
-     * Approvals-tab (REST + notification) resolutions while this session is
-     * open. Records the id and its aliases so later replay receipts are
-     * suppressed and restores cannot re-create the card. When the resolver
-     * carried the answer, the live transcript phrases the same specific receipt
-     * an inline resolve would have left, exactly once. A notification without an
-     * answer (older callers, replay fan-out) stays silent: the resolver owns the
-     * single receipt.
-     */
-    private fun onInteractionResolvedNotification(event: InteractionResolvedEvent) {
-        synchronized(lock) { applyResolvedNotificationLocked(event) }
-    }
-
-    private fun applyResolvedNotificationLocked(event: InteractionResolvedEvent) {
-        val id = event.id
-        val response = event.response
-        if (response == null) {
-            removePendingMatching(id)
-            recordResolvedFor(id)
-            publish()
-            return
-        }
-        val group = aliasGroup(id)
-        if (group.any(receiptedInteractionIds::contains) || resolvedInteractionIds.contains(id)) {
-            removePendingMatching(id)
-            recordResolvedFor(id)
-            publish()
-            return
-        }
-        val removed = removePendingMatching(id)
-        recordResolvedFor(id)
-        if (removed.isEmpty()) {
-            publish()
-            return
-        }
-        receiptedInteractionIds.addAll(aliasGroup(id))
-        for (victim in removed) {
-            receiptedInteractionIds.add(victim.id)
-            payloadRequestId(victim.payload)?.let(receiptedInteractionIds::add)
-        }
-        // The notification carried the answer, so this is the specific wording:
-        // persist it for later replays.
-        val receipt = interactionReceiptText(removed.first(), response)
-        appendStatus(receipt)
-        persistInteractionReceipt(receiptKeys(group, removed), receipt)
-        for (key in group) pendingLocalResolves.remove(key)
-        for (victim in removed) {
-            pendingLocalResolves.remove(victim.id)
-            payloadRequestId(victim.payload)?.let(pendingLocalResolves::remove)
-        }
-        publish()
-    }
-
-    private fun linkAlias(uuid: String, requestId: String) {
-        if (uuid == requestId) return
-        uuidByRequestId[requestId] = uuid
-        requestIdByUuid[uuid] = requestId
-    }
-
-    /** An id plus every id known to name the same approval. */
-    private fun aliasGroup(id: String): Set<String> {
-        val group = mutableSetOf(id)
-        uuidByRequestId[id]?.let(group::add)
-        requestIdByUuid[id]?.let(group::add)
-        for (item in pending) {
-            if (item.id == id) continue
-            val payloadId = payloadRequestId(item.payload)
-            if (payloadId == id || group.contains(item.id)) {
-                group.add(item.id)
-                payloadId?.let(group::add)
-            }
-        }
-        return group
-    }
-
-    private fun pendingIndexFor(id: String): Int {
-        val group = aliasGroup(id)
-        return pending.indexOfFirst {
-            group.contains(it.id) || group.contains(payloadRequestId(it.payload))
-        }
-    }
-
-    /**
-     * Seq-ordered fallback for resolutions that name an unlinked uuid (cold
-     * replays carry no `interaction` frames). Removes the oldest pending card
-     * raised before [resolveSeq]; durable cards (seq != 0) sort before ephemeral
-     * ones. Returns the removed card, if any.
-     */
-    private fun removeOldestPendingBefore(resolveSeq: Long?): List<PendingInteraction> {
-        if (pending.isEmpty()) return emptyList()
-        val ordered = pending.sortedBy { if (it.seq == 0L) EPHEMERAL_SORT_KEY else it.seq }
-        val victim = ordered.firstOrNull { resolveSeq == null || it.seq == 0L || it.seq < resolveSeq }
-        // No card predates the resolution: nothing belongs to this uuid.
-            ?: return emptyList()
-        pending.remove(victim)
+    /** A dialog pi raised. Anything that is not one is ignored. */
+    private fun showDialog(payload: JsonObject) {
+        val dialog = PiDialog.from(payload) ?: return
+        if (dialogs.any { it.id == dialog.id }) return
+        dialogs += dialog
         scrollRevision += 1
-        return listOf(victim)
     }
 
-    /**
-     * Removes every pending card naming [id] in either domain. Returns the
-     * removed cards, oldest first.
-     */
-    private fun removePendingMatching(id: String): List<PendingInteraction> {
-        val group = aliasGroup(id)
-        val removed = pending.filter {
-            group.contains(it.id) || group.contains(payloadRequestId(it.payload))
-        }
-        if (removed.isEmpty()) return emptyList()
-        pending.removeAll(removed)
-        scrollRevision += 1
-        return removed
-    }
-
-    private fun recordResolvedFor(id: String) {
-        resolvedInteractionIds.addAll(aliasGroup(id))
+    private fun closeDialog(id: String) {
+        if (dialogs.removeAll { it.id == id }) scrollRevision += 1
     }
 
     // --- protocol handling --------------------------------------------------
@@ -1825,12 +1465,10 @@ class SessionStream(
 
             is SessionServerMessage.Ephemeral -> {
                 if (message.kind == "extension_ui_request") {
-                    // Remote-UI surfaces own their frames; anything else is an
-                    // approval the gateway is re-sending for this attach.
-                    // Restoring it here brings the inline card back after backing
-                    // out of the session.
+                    // Remote-UI surfaces own their frames; anything else is a
+                    // dialog pi is waiting on, live or re-sent for this attach.
                     if (!remoteUi.applyExtensionRequest(message.payload)) {
-                        restoreEphemeralInteraction(message.payload)
+                        showDialog(message.payload)
                     }
                     publish()
                     return
@@ -1868,13 +1506,10 @@ class SessionStream(
                 }
             }
 
-            is SessionServerMessage.Interaction -> addOrMergeInteraction(
-                interactionId = message.interactionId,
-                seq = message.seq,
-                kind = message.kind,
-                ts = message.ts,
-                payload = message.payload,
-            )
+            is SessionServerMessage.DialogClosed -> {
+                closeDialog(message.id)
+                publish()
+            }
 
             is SessionServerMessage.ReplayGap -> {
                 val skipped = if (message.toSeq >= message.fromSeq) message.toSeq - message.fromSeq + 1 else 0
@@ -1954,9 +1589,6 @@ class SessionStream(
     private fun handleHello(message: SessionServerMessage.Hello) {
         val state = message.state
         if (streamSessionId != null && streamSessionId != message.sessionId) {
-            pending.clear()
-            uuidByRequestId.clear()
-            requestIdByUuid.clear()
             // Keep the in-progress assistant bubble and tool cards. A replacement
             // gateway session is a transport boundary, not a new turn — live
             // message_update / tool_execution_update frames must keep painting
@@ -2021,15 +1653,14 @@ class SessionStream(
         if (pendingThinkingSwitch != null && snapshotThinking != null && snapshotThinking == pendingThinkingSwitch) {
             pendingThinkingSwitch = null
         }
-        restoreSnapshotInteractions(state)
+        // The gateway re-sends every dialog still open right after hello, so
+        // anything answered elsewhere while detached is gone from this list.
+        dialogs.clear()
         socket?.requestModels()
         // A pod this app just launched first switches to the remembered model, which needs the
         // catalog: its parked messages wait for that (see [startOnRememberedModel]).
         if (ModelMemory.startingModel(podId) == null) flushQueuedOffline()
         scope.launch { refreshPodRecord() }
-        // Restored cards that only carry the pi request id cannot resolve until
-        // they adopt the gateway uuid from the pending listing.
-        scope.launch { reconcilePendingWithServer() }
     }
 
     private fun handleModels(message: SessionServerMessage.Models) {
@@ -2124,7 +1755,6 @@ class SessionStream(
             "agent_settled" -> {
                 isStreaming = false
                 awaitingReply = false
-                if (seq > lastSettledSeq) lastSettledSeq = seq
                 // The agent turn boundary says nothing about independent `!`
                 // bash (`bash:<id>`): those executions are not agent tools and
                 // outlive the turn, so their updates and end frames must keep
@@ -2197,20 +1827,6 @@ class SessionStream(
 
             "session_info_changed" -> Unit
 
-            "extension_ui_request" ->
-                restoreInteractionFromEvent(seq = seq, timestamp = timestamp, payload = payload)
-
-            "interaction_resolved" -> resolveInteractionFromEvent(payload, seq = seq)
-
-            "extension_ui_response" -> {
-                val answered = payload.string("id")
-                if (!answered.isNullOrEmpty()) {
-                    // A response answers the matching request; the resolved event
-                    // that follows carries the transcript receipt.
-                    removePendingMatching(answered)
-                }
-            }
-
             "session_ended" -> {
                 val endedReason = reason ?: payload.string("reason")
                 val endedKind = payload.string("kind")
@@ -2235,259 +1851,6 @@ class SessionStream(
     private fun updateRunningState() {
         isRunning = isStreaming || isCompacting || awaitingReply
         if (!isRunning) isInterrupting = false
-    }
-
-    /**
-     * Live `interaction` frame: the same approval the durable
-     * `extension_ui_request` event (or an ephemeral re-send) may already have
-     * announced under its pi request id. Merge so one approval is one card, and
-     * the surviving card carries the resolvable uuid.
-     */
-    private fun addOrMergeInteraction(
-        interactionId: String,
-        seq: Long,
-        kind: String,
-        ts: String?,
-        payload: JsonObject,
-    ) {
-        if (resolvedInteractionIds.contains(interactionId)) return
-        val requestId = payloadRequestId(payload)
-        if (requestId != null) {
-            if (resolvedInteractionIds.contains(requestId)) return
-            linkAlias(interactionId, requestId)
-        }
-        val index = pendingIndexFor(interactionId)
-        if (index >= 0) {
-            val existing = pending[index]
-            pending[index] = PendingInteraction(
-                id = interactionId,
-                sessionId = existing.sessionId,
-                podId = existing.podId,
-                podName = existing.podName,
-                seq = if (seq != 0L) seq else existing.seq,
-                kind = kind,
-                payload = payload,
-                createdAt = ts ?: existing.createdAt,
-            )
-            scrollRevision += 1
-            SessionNotifications.interactionPending.post(interactionId)
-            return
-        }
-        pending += PendingInteraction(
-            id = interactionId,
-            sessionId = streamSessionId ?: "",
-            podId = podId,
-            podName = "",
-            seq = seq,
-            kind = kind,
-            payload = payload,
-            createdAt = ts ?: "",
-        )
-        scrollRevision += 1
-        SessionNotifications.interactionPending.post(interactionId)
-    }
-
-    /**
-     * Best-effort restore of a gateway snapshot that carries its outstanding
-     * approvals (future servers may include `pendingInteractions`). Entries that
-     * do not decode are ignored so a new server shape can never wedge an old
-     * attach.
-     */
-    private fun restoreSnapshotInteractions(state: JsonObject?) {
-        val raw = state?.get("pendingInteractions") as? JsonArray ?: return
-        for (entry in raw) {
-            val row = entry as? JsonObject ?: continue
-            val id = row.string("id")?.takeIf { it.isNotEmpty() } ?: continue
-            if (resolvedInteractionIds.contains(id)) continue
-            val payload = row["payload"]
-            val requestId = payloadRequestId(payload)
-            if (requestId != null) {
-                if (resolvedInteractionIds.contains(requestId)) continue
-                linkAlias(id, requestId)
-            }
-            if (pendingIndexFor(id) >= 0) continue
-            pending += PendingInteraction(
-                id = id,
-                sessionId = streamSessionId ?: "",
-                podId = podId,
-                podName = "",
-                seq = row.integer("seq") ?: 0,
-                kind = row.string("kind") ?: "extension_ui",
-                payload = payload ?: JsonObject(emptyMap()),
-                createdAt = row.string("createdAt") ?: "",
-            )
-        }
-        if (raw.isNotEmpty()) scrollRevision += 1
-    }
-
-    /**
-     * An ephemeral `extension_ui_request` that is not remote-UI traffic is an
-     * approval the gateway re-sends on every attach. It carries the pi request
-     * id (not the REST uuid), so it restores the inline card with that id;
-     * [reconcilePendingWithServer] later adopts the uuid the resolve endpoint
-     * requires.
-     */
-    private fun restoreEphemeralInteraction(payload: JsonObject) {
-        val method = payload.string("method") ?: return
-        if (!isDialogMethod(method)) return
-        val requestId = payloadRequestId(payload)
-        val id = requestId ?: "ephemeral:$method:${payload.string("title") ?: ""}"
-        if (resolvedInteractionIds.contains(id)) return
-        if (requestId != null) {
-            val uuid = uuidByRequestId[requestId]
-            if (uuid != null) {
-                if (resolvedInteractionIds.contains(uuid)) return
-                // The uuid card already names this approval; the re-send adds nothing.
-                if (pendingIndexFor(uuid) >= 0) return
-            }
-        }
-        if (pendingIndexFor(id) >= 0) return
-        pending += PendingInteraction(
-            id = id,
-            sessionId = streamSessionId ?: "",
-            podId = podId,
-            podName = "",
-            seq = 0,
-            kind = method,
-            payload = payload,
-            createdAt = "",
-        )
-        scrollRevision += 1
-        scope.launch { reconcilePendingWithServer() }
-    }
-
-    /**
-     * A durable replayed `extension_ui_request` (dialog method) restores the
-     * inline card when the live `interaction` frame was missed while detached.
-     * Fire-and-forget methods (notify/setStatus/…) are never cards.
-     */
-    private fun restoreInteractionFromEvent(seq: Long, timestamp: Instant?, payload: JsonObject) {
-        val methodName = payload.string("method") ?: return
-        if (!isDialogMethod(methodName)) return
-        val requestId = payloadRequestId(payload)
-        val id = requestId ?: "event:$seq"
-        if (resolvedInteractionIds.contains(id)) return
-        if (requestId != null) {
-            val uuid = uuidByRequestId[requestId]
-            if (uuid != null) {
-                if (resolvedInteractionIds.contains(uuid)) return
-                // The uuid card already names this approval; the replay adds nothing.
-                if (pendingIndexFor(uuid) >= 0) return
-            }
-        }
-        if (pendingIndexFor(id) >= 0) return
-        // The same approval may already be present under its REST uuid with the
-        // same sequence; keep one card.
-        if (seq != 0L && pending.any { it.seq == seq }) return
-        pending += PendingInteraction(
-            id = id,
-            sessionId = streamSessionId ?: "",
-            podId = podId,
-            podName = "",
-            seq = seq,
-            kind = methodName,
-            payload = payload,
-            createdAt = timestamp?.toString() ?: "",
-        )
-        scrollRevision += 1
-        scope.launch { reconcilePendingWithServer() }
-    }
-
-    private fun isDialogMethod(method: String): Boolean =
-        method == "select" || method == "confirm" || method == "input" || method == "editor"
-
-    /**
-     * A replayed `interaction_resolved` clears the card and leaves the same
-     * transcript receipt as a local resolve. When the card was already removed
-     * (resolved from the Approvals tab before reopening), there is nothing to do
-     * and no duplicate receipt is emitted. When the app registered the intended
-     * answer via [beginLocalResolve] before its REST call returned, the racing
-     * event phrases that specific receipt instead of the generic fallback,
-     * exactly once.
-     */
-    private fun resolveInteractionFromEvent(payload: JsonObject, seq: Long? = null) {
-        val raw = (payload.string("interactionId") ?: payload.string("id"))?.takeIf { it.isNotEmpty() } ?: return
-        // The payload names the uuid; the card may sit under the request id.
-        val requestId = payloadRequestId(payload)
-        if (requestId != null && requestId != raw) linkAlias(raw, requestId)
-        val group = aliasGroup(raw)
-        // Already handled elsewhere (tab/inline resolve or an earlier delivery):
-        // nothing may be claimed for this uuid, especially not an unrelated card.
-        val alreadyKnown = resolvedInteractionIds.contains(raw)
-        resolvedInteractionIds.addAll(group)
-        var removed = removePendingMatching(raw)
-        if (removed.isEmpty() && alreadyKnown) return
-        if (removed.isEmpty()) {
-            // Cold replay carries no `interaction` frames, so no alias links the
-            // uuid to its request-id card. Approvals block the turn, so in seq
-            // order the oldest still-pending card predating this resolution is it.
-            removed = removeOldestPendingBefore(seq)
-            for (victim in removed) {
-                resolvedInteractionIds.add(victim.id)
-                payloadRequestId(victim.payload)?.let {
-                    resolvedInteractionIds.add(it)
-                    linkAlias(raw, it)
-                }
-            }
-        }
-        if (removed.isEmpty()) return
-        // A local resolve already left its "You confirmed …" receipt; a replay of
-        // that resolution removes any lingering card silently and emits nothing.
-        if (group.any(receiptedInteractionIds::contains)) return
-
-        var localResponse: JsonObject? = null
-        var hasLocal = false
-        for (key in group) {
-            if (pendingLocalResolves.containsKey(key)) {
-                hasLocal = true
-                localResponse = pendingLocalResolves[key]
-                break
-            }
-        }
-        if (!hasLocal) {
-            for (victim in removed) {
-                if (pendingLocalResolves.containsKey(victim.id)) {
-                    hasLocal = true
-                    localResponse = pendingLocalResolves[victim.id]
-                    break
-                }
-                val victimRequest = payloadRequestId(victim.payload)
-                if (victimRequest != null && pendingLocalResolves.containsKey(victimRequest)) {
-                    hasLocal = true
-                    localResponse = pendingLocalResolves[victimRequest]
-                    break
-                }
-            }
-        }
-        if (hasLocal) {
-            val receipt = interactionReceiptText(removed.first(), localResponse)
-            appendStatus(receipt)
-            persistInteractionReceipt(receiptKeys(group, removed), receipt)
-        } else {
-            // The replayed event carries no answer, only the fact of resolution.
-            // A receipt stored by the earlier resolve (this launch or a previous
-            // one) restores the specific wording; otherwise leave a generic
-            // receipt, never a guessed choice.
-            val stored = storedInteractionReceipt(group, removed)
-            if (stored != null) {
-                appendStatus(stored)
-            } else {
-                val title = InteractionPresentation(removed.first()).title.trim()
-                appendStatus(if (title.isEmpty()) "Resolved." else "Resolved $title.")
-            }
-        }
-        receiptedInteractionIds.addAll(group)
-        for (victim in removed) {
-            receiptedInteractionIds.add(victim.id)
-            payloadRequestId(victim.payload)?.let(receiptedInteractionIds::add)
-        }
-        for (key in group) pendingLocalResolves.remove(key)
-        for (victim in removed) {
-            pendingLocalResolves.remove(victim.id)
-            payloadRequestId(victim.payload)?.let(pendingLocalResolves::remove)
-        }
-        scrollRevision += 1
-        SessionNotifications.interactionResolved.post(id = raw, response = if (hasLocal) localResponse else null)
     }
 
     private fun flushQueuedOffline() {
@@ -2698,88 +2061,6 @@ class SessionStream(
         publish()
     }
 
-    // --- receipts -----------------------------------------------------------
-
-    /**
-     * Transcript receipt for a resolved approval, mirroring the "Model switched
-     * to X." status rows. Secret-looking freeform input is never echoed; long
-     * values are truncated to one line.
-     */
-    private fun interactionReceiptText(interaction: PendingInteraction, response: JsonObject?): String {
-        val presentation = InteractionPresentation(interaction)
-        val title = presentation.title.trim()
-        fun withTitle(action: String) = if (title.isEmpty()) "$action." else "$action $title."
-        val answer = response ?: JsonObject(emptyMap())
-        if ((answer["cancelled"] as? JsonPrimitive)?.booleanOrNull == true) return withTitle("You cancelled")
-        when (val style = presentation.responseStyle) {
-            is InteractionResponseStyle.Confirmation -> {
-                val confirmed = (answer[style.key] as? JsonPrimitive)?.booleanOrNull == true
-                val verb = if (style.key == "approved") {
-                    if (confirmed) "You approved" else "You denied"
-                } else {
-                    if (confirmed) "You confirmed" else "You declined"
-                }
-                return withTitle(verb)
-            }
-
-            is InteractionResponseStyle.Selection -> {
-                val raw = answer.string("value")?.trim()?.takeIf { it.isNotEmpty() }
-                val choice = raw?.let { receiptTruncate(it, 80) } ?: return withTitle("You answered")
-                return if (title.isEmpty()) "You chose $choice." else "You chose $choice for $title."
-            }
-
-            is InteractionResponseStyle.Input -> {
-                val value = answer.string("value")?.trim()?.takeIf { it.isNotEmpty() }
-                    ?: return withTitle("You answered")
-                // Never echo credentials or assignments back into the transcript.
-                if (redactingSecrets(value) != value) return withTitle("You answered")
-                return "You answered ${receiptTruncate(value, 80)}."
-            }
-
-            InteractionResponseStyle.Unsupported -> return withTitle("Resolved")
-        }
-    }
-
-    /**
-     * Persists the phrased [receipt] under every id naming the approval (gateway
-     * uuid and pi request id alike) so a reattach or cold restart replays the
-     * same specific wording instead of the generic fallback. Only specific
-     * receipts are stored here; the generic "Resolved …" fallback must never
-     * overwrite them.
-     */
-    private fun persistInteractionReceipt(ids: Set<String>, receipt: String) {
-        if (receipt.isEmpty()) return
-        for (id in ids) InteractionReceiptStore.writeCached(id, receipt)
-    }
-
-    /**
-     * Every id that may name the resolved approval on a later replay: the alias
-     * group plus the removed cards' own ids and payload request ids.
-     */
-    private fun receiptKeys(group: Set<String>, removed: List<PendingInteraction>): Set<String> {
-        val keys = group.toMutableSet()
-        for (victim in removed) {
-            if (victim.id.isNotEmpty()) keys.add(victim.id)
-            payloadRequestId(victim.payload)?.let(keys::add)
-        }
-        return keys
-    }
-
-    /** A receipt stored by an earlier resolve of one of these ids, if any. */
-    private fun storedInteractionReceipt(group: Set<String>, removed: List<PendingInteraction>): String? {
-        for (id in receiptKeys(group, removed)) {
-            val stored = InteractionReceiptStore.readCached(id)
-            if (!stored.isNullOrEmpty()) return stored
-        }
-        return null
-    }
-
-    private fun receiptTruncate(value: String, limit: Int): String {
-        val singleLine = value.replace(WHITESPACE, " ").trim()
-        if (singleLine.length <= limit) return singleLine
-        return singleLine.substring(0, limit).trimEnd() + "…"
-    }
-
     // --- session end and pod record -----------------------------------------
 
     private fun applySessionEnd(
@@ -2970,7 +2251,7 @@ class SessionStream(
     private fun publish() {
         _state.value = SessionStreamState(
             items = transcript.toList(),
-            pendingInteractions = pending.toList(),
+            openDialogs = dialogs.toList(),
             availableModels = availableModels.toList(),
             availableThinkingLevels = availableThinkingLevels.toList(),
             isConnected = isConnected,
@@ -3020,9 +2301,6 @@ class SessionStream(
          */
         const val EPHEMERAL_SEQ: Long = 9007199254740991L
 
-        /** Durable cards sort before ephemeral ones when a resolution has no alias. */
-        private const val EPHEMERAL_SORT_KEY: Long = 1L shl 62
-
         private const val MAX_HISTORY_PAGES = 25
 
         private val ARCHIVED_REASONS =
@@ -3062,8 +2340,6 @@ class SessionStream(
             return combined.substring(combined.length - BASH_OUTPUT_MAX_CHARS)
         }
 
-        private val WHITESPACE = Regex("\\s+")
-
         private val PRETTY_JSON = Json {
             prettyPrint = true
             prettyPrintIndent = "  "
@@ -3077,42 +2353,6 @@ class SessionStream(
                 index += 1
             }
             return (if (seconds > 30) 30 else seconds).seconds
-        }
-
-        /**
-         * Whether [id] looks like the gateway uuid the resolve endpoints accept
-         * (as opposed to a pi request id or a synthetic `ephemeral:`/`event:` id
-         * a restored card carries before `reconcilePendingWithServer` adopts it).
-         */
-        fun isGatewayUuid(id: String): Boolean = isUuid(id)
-
-        private val UUID_PATTERN = Regex(
-            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
-        )
-
-        private fun isUuid(id: String): Boolean = UUID_PATTERN.matches(id)
-
-        internal fun payloadRequestId(payload: JsonElement?): String? =
-            (payload as? JsonObject)?.string("id")?.takeIf { it.isNotEmpty() }
-
-        /**
-         * The pi request id naming [interaction], or null when it carries none.
-         * Restored cards keep the request id in `payload['id']`; the id itself is
-         * the request id when it is not a gateway uuid and not a synthetic
-         * `ephemeral:`/`event:` fallback.
-         */
-        private fun canonicalRequestId(interaction: PendingInteraction): String? {
-            payloadRequestId(interaction.payload)?.let { return it }
-            val id = interaction.id
-            if (isUuid(id)) return null
-            if (id.startsWith("ephemeral:") || id.startsWith("event:")) return null
-            return id.ifEmpty { null }
-        }
-
-        private fun interactionTitle(interaction: PendingInteraction): String = try {
-            InteractionPresentation(interaction).title
-        } catch (_: Throwable) {
-            (interaction.payload as? JsonObject)?.string("title") ?: ""
         }
 
         /**

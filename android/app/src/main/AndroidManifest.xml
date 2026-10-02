@@ -47,15 +47,13 @@
                 <data android:scheme="pipod" android:host="auth" android:path="/callback" />
             </intent-filter>
 
-            <!-- In-app deep links: pipod://pod/<id>, pipod://interaction/<id>,
-                 pipod://job/<id> — the three hosts `DeepLinkDestination` routes
-                 and the only ones the server and the approval banners emit. -->
+            <!-- In-app deep links: pipod://pod/<id> and pipod://job/<id>, the
+                 two hosts `DeepLinkDestination` routes. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pipod" android:host="pod" />
-                <data android:scheme="pipod" android:host="interaction" />
                 <data android:scheme="pipod" android:host="job" />
             </intent-filter>
         </activity>

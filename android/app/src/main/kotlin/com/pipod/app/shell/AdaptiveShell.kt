@@ -30,7 +30,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.pipod.app.ui.AppBadge
 import com.pipod.app.ui.AppIcons
 import com.pipod.app.ui.LocalAppToastHost
 import com.pipod.app.ui.isCompactWidth
@@ -76,7 +75,6 @@ fun AdaptiveShell(
     destination: AppDestination,
     onSelect: (AppDestination) -> Unit,
     modifier: Modifier = Modifier,
-    approvalCount: Int = 0,
     fullScreen: Boolean = false,
     /**
      * True only at a tab's root, where back would leave the app. A detail
@@ -91,16 +89,6 @@ fun AdaptiveShell(
         return
     }
 
-    // Only pods carries a badge: approvals are the one thing waiting on the
-    // reader. Jobs had one for drafts, a status the server never emits.
-    val counts = remember(approvalCount) {
-        mapOf(
-            AppDestination.Pods to approvalCount,
-            AppDestination.Jobs to 0,
-            AppDestination.Settings to 0,
-        )
-    }
-
     BackTwiceToExit(enabled = confirmsExit)
 
     if (isCompactWidth()) {
@@ -109,17 +97,14 @@ fun AdaptiveShell(
             bottomBar = {
                 NavigationBar(modifier = Modifier.testTag("app-tab-bar")) {
                     AppDestination.entries.forEach { entry ->
-                        val count = counts.getValue(entry)
                         NavigationBarItem(
                             selected = entry == destination,
                             onClick = { onSelect(entry) },
-                            icon = { DestinationIcon(entry, entry == destination, count) },
+                            icon = { DestinationIcon(entry, entry == destination) },
                             label = { Text(entry.label) },
                             modifier = Modifier
                                 .testTag("app-tab-${entry.name.lowercase()}")
-                                .semantics {
-                                    contentDescription = describe(entry, count)
-                                },
+                                .semantics { contentDescription = entry.label },
                         )
                     }
                 }
@@ -135,15 +120,14 @@ fun AdaptiveShell(
             header = { BrandMark() },
         ) {
             AppDestination.entries.forEach { entry ->
-                val count = counts.getValue(entry)
                 NavigationRailItem(
                     selected = entry == destination,
                     onClick = { onSelect(entry) },
-                    icon = { DestinationIcon(entry, entry == destination, count) },
+                    icon = { DestinationIcon(entry, entry == destination) },
                     label = { Text(entry.label) },
                     modifier = Modifier
                         .testTag("app-tab-${entry.name.lowercase()}")
-                        .semantics { contentDescription = describe(entry, count) },
+                        .semantics { contentDescription = entry.label },
                 )
             }
         }
@@ -152,24 +136,9 @@ fun AdaptiveShell(
     }
 }
 
-/**
- * The badge count belongs on the tab's own node, not beside it.
- *
- * A separate label node would make the tab read twice to a screen reader — once
- * as a button and once as loose text — so the count is folded into the
- * destination's content description instead.
- */
-private fun describe(destination: AppDestination, count: Int): String =
-    if (count > 0) "${destination.label}, $count pending" else destination.label
-
 @Composable
-private fun DestinationIcon(destination: AppDestination, selected: Boolean, count: Int) {
-    val icon = if (selected) destination.selectedIcon else destination.icon
-    if (count > 0) {
-        AppBadge(count = count) { Icon(icon, contentDescription = null) }
-    } else {
-        Icon(icon, contentDescription = null)
-    }
+private fun DestinationIcon(destination: AppDestination, selected: Boolean) {
+    Icon(if (selected) destination.selectedIcon else destination.icon, contentDescription = null)
 }
 
 @Composable

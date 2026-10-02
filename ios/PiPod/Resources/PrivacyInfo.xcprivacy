@@ -15,9 +15,9 @@
 	<array>
 		<dict>
 			<!--
-			  UserDefaults holds the composer draft per pod, the interaction
-			  receipts a resolved approval leaves behind, and (Debug builds only)
-			  the development server override. All of it is this app's own
+			  UserDefaults holds the composer draft per pod, the remembered
+			  server and model choices, and (Debug builds only) the development
+			  server override. All of it is this app's own
 			  preferences, read and written by this app alone.
 			-->
 			<key>NSPrivacyAccessedAPIType</key>

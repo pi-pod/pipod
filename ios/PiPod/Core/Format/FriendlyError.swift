@@ -188,12 +188,6 @@ public enum FriendlyError {
         if error.error.hasPrefix("HTTP 5") {
             return "The server ran into a problem (\(error.error)). Try again in a moment."
         }
-        if error.detailCode == "pod_not_attached" {
-            return """
-                The pod isn’t attached right now. The approval stays pending — start or \
-                attach the pod, then try again.
-                """
-        }
 
         if let capacity = capacitySentence(error.error, detail: error.detailText) {
             return capacity

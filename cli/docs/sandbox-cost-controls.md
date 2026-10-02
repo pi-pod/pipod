@@ -15,7 +15,7 @@ Product policy (the server enforces; this client only presents it):
   extra slot. The server's configured value is authoritative — when the client names a cap
   number it always quotes the server's refusal, never a local constant.
 - **Retention:** 15 minutes of genuine inactivity stops a pod (waiting on a model,
-  approval, network, or detached build is not idle); 60 stopped minutes archives it.
+  dialog, network, or detached build is not idle); 60 stopped minutes archives it.
   Archive uploads and verifies before local disk is released. (Durations are the
   platform defaults; an organization policy may set its own — clients never hardcode
   them into refusal copy.)

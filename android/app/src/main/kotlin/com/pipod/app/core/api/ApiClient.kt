@@ -17,13 +17,11 @@ import com.pipod.app.core.api.model.ModelCredentialsResponse
 import com.pipod.app.core.api.model.PlanChangeConfirmResult
 import com.pipod.app.core.api.model.PlanChangeQuote
 import com.pipod.app.core.api.model.PlanKey
-import com.pipod.app.core.api.model.PendingInteraction
 import com.pipod.app.core.api.model.Pod
 import com.pipod.app.core.api.model.PodTemplate
 import com.pipod.app.core.api.model.PodsPage
 import com.pipod.app.core.api.model.QueuedPromptReceipt
 import com.pipod.app.core.api.model.RefreshResponse
-import com.pipod.app.core.api.model.ResolveOutcome
 import com.pipod.app.core.api.model.SecretMeta
 import com.pipod.app.core.api.model.SessionEventRecord
 import com.pipod.app.core.api.model.SessionEventsPage
@@ -520,44 +518,6 @@ class ApiClient(
         ).jsonObject,
     )
 
-    // --- interactions -------------------------------------------------------
-
-    /**
-     * Approvals waiting for an answer.
-     *
-     * Paged the same way [pods] is, on `created_at`. Capping silently at the
-     * route's default was worse here than a truncated list: an unanswered
-     * approval blocks the agent's turn, and one that never appears in the inbox
-     * is a pod that looks hung for no reason anyone can see.
-     */
-    suspend fun interactions(pendingOnly: Boolean = true): DecodedList<PendingInteraction> = pageThrough(
-        path = "interactions",
-        key = "interactions",
-        resourceName = "interaction",
-        query = mapOf("pending" to if (pendingOnly) "true" else "false"),
-        // This route returns the database column names unchanged.
-        cursorOf = { row -> row.text("created_at") },
-        idOf = { it.id },
-        decode = { ApiJson.decodeFromJsonElement(PendingInteraction.serializer(), it) },
-    )
-
-    /**
-     * Answers a pending interaction.
-     *
-     * Null is a valid interaction answer, so the `response` key is always
-     * present even when the value is JSON null.
-     */
-    suspend fun resolveInteraction(id: String, response: JsonElement): ResolveOutcome {
-        val data = request(
-            "POST",
-            "interactions/$id/resolve",
-            body = buildJsonObject { put("response", extensionUiResponse(response)) },
-        )
-        return runCatching {
-            ApiJson.decodeFromJsonElement(ResolveOutcome.serializer(), data.jsonObject)
-        }.getOrElse { ResolveOutcome(resolved = true) }
-    }
-
     // --- jobs ---------------------------------------------------------------
 
     /**
@@ -924,39 +884,6 @@ class ApiClient(
         }
 
     companion object {
-        /**
-         * The frame kind the agent's extension-UI RPC waits on.
-         *
-         * The server's `deliverResolution` forwards the resolution map to
-         * `rpc.respondExtensionUi` **unchanged**, and the agent releases its
-         * prompt only on a frame carrying this discriminator. Without it the
-         * REST call still returns 200 and an `interaction_resolved` event still
-         * arrives, so the card clears and the turn then hangs until the
-         * agent's own 120s ask timeout — a failure that looks like success at
-         * every layer the app can see. The Flutter client omits it; that is a
-         * bug and is deliberately not carried over.
-         *
-         * `id` is supplied by the server from the pending request, so the
-         * client does not send one.
-         */
-        internal const val EXTENSION_UI_RESPONSE = "extension_ui_response"
-
-        /**
-         * Adds the discriminator to a structured answer.
-         *
-         * Only an object answer is normalised. A literal `null` ("no value") and
-         * a bare scalar are answers in their own right whose shape the agent
-         * defines, and wrapping them would change what was answered.
-         */
-        internal fun extensionUiResponse(response: JsonElement): JsonElement {
-            val answer = response as? JsonObject ?: return response
-            if (answer.containsKey("type")) return answer
-            return buildJsonObject {
-                answer.forEach { (key, value) -> put(key, value) }
-                put("type", EXTENSION_UI_RESPONSE)
-            }
-        }
-
         /** The server's maximum for both paged list routes. */
         internal const val LIST_PAGE_SIZE = 200
 

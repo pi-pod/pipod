@@ -299,7 +299,7 @@ class RemoteUiStore(
 
     /**
      * Consumes an `extension_ui_request` ephemeral payload. Returns false when it
-     * is not remote-UI traffic, leaving it to the ordinary interaction path.
+     * is not remote-UI traffic, leaving it to the dialog path.
      */
     fun applyExtensionRequest(payload: JsonObject): Boolean = synchronized<Boolean>(lock) {
         val json = remoteUiFrameJsonFromExtensionRequest(payload) ?: return false

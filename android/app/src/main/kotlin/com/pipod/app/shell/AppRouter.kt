@@ -18,16 +18,6 @@ object Routes {
 
     const val PODS = "pods"
 
-    /**
-     * The approvals inbox, optionally naming the one request a notification
-     * was about. The id is a query argument rather than a path segment because
-     * the destination is the inbox either way — the row may already have been
-     * answered, and then the inbox is exactly where the reader should land.
-     */
-    const val APPROVALS = "pods/approvals?interactionId={interactionId}"
-
-    /** The inbox as a location: the pattern above without its placeholder. */
-    const val APPROVALS_PATH = "pods/approvals"
     const val LAUNCH = "pods/launch?retry={retry}&templateId={templateId}"
     const val POD_DETAIL = "pods/{podId}"
     const val SESSION = "pods/{podId}/session?fromSeq={fromSeq}&sessionId={sessionId}"
@@ -41,13 +31,6 @@ object Routes {
     const val NOT_FOUND = "not-found"
 
     fun podDetail(podId: String) = "pods/$podId"
-
-    fun approvals(interactionId: String? = null): String =
-        if (interactionId.isNullOrEmpty()) {
-            APPROVALS_PATH
-        } else {
-            "$APPROVALS_PATH?interactionId=$interactionId"
-        }
 
     /**
      * The launch flow.

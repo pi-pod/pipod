@@ -29,9 +29,7 @@ interface NotificationSettingsService {
 /**
  * Optional remote push token.
  *
- * Absent until a Firebase project is wired to this app. The controller still
- * polls pending approvals and raises a local banner, so a pending approval is
- * visible either way.
+ * Absent until a Firebase project is wired to this app.
  */
 interface PushTokenSource {
     suspend fun currentToken(): String?
@@ -46,15 +44,14 @@ object NoPushTokenSource : PushTokenSource {
 }
 
 /**
- * In-process push: the shell already polls pending interactions for its badge,
- * so a rise in that count is what raises an OS-local banner. Remote
- * registration is attempted whenever [tokenSource] can produce a token.
+ * Notification permission, and remote registration whenever [tokenSource] can
+ * produce a token.
  *
  * Port of `pi-pod-flutter/lib/core/push/push_controller.dart`.
  */
 class PushController(
     private val api: ApiClient,
-    private val notifier: LocalNotifier,
+    private val permission: NotificationPermission,
     private val tokenSource: PushTokenSource = NoPushTokenSource,
     private val environment: String = "production",
     /** Asks the OS for permission. The activity owns the launcher that does it. */
@@ -62,75 +59,16 @@ class PushController(
     private val openSettings: suspend () -> Unit = {},
 ) : NotificationSettingsService {
 
-    private var lastPending = 0
-    private var lastByPod: Map<String, Int> = emptyMap()
-    private var seenFirst = false
     private var authorization = NotificationAuthorization.NotDetermined
 
     override var registrationError: String? = null
         private set
 
-    /** The pod whose session is on screen; its approvals need no banner. */
-    var visiblePodId: String? = null
-
-    /**
-     * Called whenever the signed-in store learns a new pending-approval count.
-     * The first observation is silent so a cold start does not replay history.
-     *
-     * [byPod] is where the pending approvals sit, when the observation carried
-     * it. Null means the caller reported only a total and the split from the
-     * last full poll stands.
-     */
-    suspend fun onPendingCount(count: Int, byPod: Map<String, Int>? = null) {
-        val rose = seenFirst && count > lastPending
-        // The OS is asked at the moment of the decision, not remembered from
-        // whenever `refresh()` last ran. The cached answer started at
-        // NotDetermined and only the settings screen ever moved it, so on a
-        // device where permission was granted — at install, below API 33, or in
-        // system settings — no banner ever fired unless the person had opened
-        // Settings in this launch.
-        if (rose && permitted() && !belongsToVisiblePod(byPod)) {
-            notifier.show(
-                title = "Approval needed",
-                body = if (count == 1) "1 request is waiting" else "$count requests are waiting",
-                payload = "pipod://interaction/inbox",
-            )
-        }
-        seenFirst = true
-        lastPending = count
-        if (byPod != null) lastByPod = byPod
-    }
-
-    /**
-     * Whether the rise is entirely the pod already on screen.
-     *
-     * Its approval is rendered inline in the conversation the person is looking
-     * at; a banner over the top of it says nothing they cannot already see. A
-     * rise that cannot be attributed — no breakdown, or a pod that is not the
-     * visible one — is announced.
-     */
-    private fun belongsToVisiblePod(byPod: Map<String, Int>?): Boolean {
-        val visible = visiblePodId ?: return false
-        if (byPod == null) return false
-        val risen = byPod.filter { (podId, pending) -> pending > (lastByPod[podId] ?: 0) }
-        return risen.isNotEmpty() && risen.keys.all { it == visible }
-    }
-
-    private fun permitted(): Boolean {
-        val allowed = notifier.isPermitted()
-        authorization = when {
-            allowed -> NotificationAuthorization.Authorized
-            authorization == NotificationAuthorization.NotDetermined -> NotificationAuthorization.NotDetermined
-            else -> NotificationAuthorization.Denied
-        }
-        return allowed
-    }
-
     override suspend fun refresh(): NotificationAuthorization {
         // The OS is authoritative: permission can be revoked in system settings
         // while the app is backgrounded, and a cached "authorized" would then
-        // silently drop every banner.
-        if (notifier.isPermitted()) {
+        // be a lie on the settings screen.
+        if (permission.isGranted()) {
             authorization = NotificationAuthorization.Authorized
         } else if (authorization == NotificationAuthorization.Authorized) {
             authorization = NotificationAuthorization.Denied

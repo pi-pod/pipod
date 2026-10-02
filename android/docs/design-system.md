@@ -16,7 +16,7 @@ Three rules that hold everywhere:
    `MaterialTheme.colorScheme` from a screen. `notice` is the glyph and fill
    tint; **text** in that role uses `noticeText`, which is hand-pinned in both
    themes to clear 4.5:1 on `card`, `background`, `noticeFill` and the 12%
-   approval wash (`AppColorsContrastRound2Test` measures all eight pairings —
+   dialog-card wash (`AppColorsContrastRound2Test` measures all eight pairings —
    Material's raw tertiary reads 3.3:1 to 4.3:1 on them).
 2. **One node per control.** Pass `semanticsLabel` to the widget instead of
    wrapping it in `Modifier.semantics { … }`. A wrapper exposes the control
@@ -132,8 +132,8 @@ Use `MonospaceTextStyle` from `ui.theme` as the `style`.
 `check`, `warning`, `warningOutline`, `error`, `errorOutline`, `info`,
 `unknown`, `copy`, `offline`, `syncing`, `syncProblem`, `lost`, `dot`,
 `dotOutline`, `running`, `asleep`, `asleepOutline`, `archived`, `unavailable`,
-`resources`, `environment`, `secret`, `person`, `conversation`, `approval`,
-`approvalGranted`, `inspect`, `attach`, `suggestion`.
+`resources`, `environment`, `secret`, `person`, `conversation`, `question`,
+`inspect`, `attach`, `suggestion`.
 
 Ask for the meaning. Do not reach into `Icons.*` from a screen.
 

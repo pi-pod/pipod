@@ -2,7 +2,6 @@ import { tx, type Queryable } from "../db/index.js";
 import { conflict } from "../httperrors.js";
 
 export interface PurgedPodSessionDataCounts {
-  pendingInteractions: number;
   sessionEvents: number;
   sessions: number;
   queuedPrompts: number;
@@ -29,11 +28,6 @@ export async function purgePodSessionDataIn(
       code: "launch_recovery_required",
     });
   }
-  const pendingInteractions = await client.query(
-    `DELETE FROM pending_interactions pi USING sessions s
-      WHERE pi.session_id = s.id AND s.pod_id = $1`,
-    [podId],
-  );
   const sessionEvents = await client.query(
     `DELETE FROM session_events e USING sessions s
       WHERE e.session_id = s.id AND s.pod_id = $1`,
@@ -43,7 +37,6 @@ export async function purgePodSessionDataIn(
   const queuedPrompts = await client.query(`DELETE FROM queued_prompts WHERE pod_id = $1`, [podId]);
   const forkSeeds = await client.query(`DELETE FROM pod_fork_seeds WHERE pod_id = $1`, [podId]);
   return {
-    pendingInteractions: pendingInteractions.rowCount ?? 0,
     sessionEvents: sessionEvents.rowCount ?? 0,
     sessions: sessions.rowCount ?? 0,
     queuedPrompts: queuedPrompts.rowCount ?? 0,

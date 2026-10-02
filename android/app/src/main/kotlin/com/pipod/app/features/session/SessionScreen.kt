@@ -53,14 +53,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.pipod.app.core.api.model.PendingInteraction
+import com.pipod.app.core.session.PiDialog
+import kotlinx.serialization.json.JsonObject
 import com.pipod.app.core.api.model.Pod
 import com.pipod.app.core.format.FriendlyError
 import com.pipod.app.core.format.MessageChrome
 import com.pipod.app.features.common.WorkstationWaitCard
 import com.pipod.app.core.format.TranscriptPresentation
 import com.pipod.app.core.format.TranscriptRow
-import com.pipod.app.core.push.PushController
 import com.pipod.app.core.session.RemoteUiPlacement
 import com.pipod.app.core.session.RemoteUiRole
 import com.pipod.app.core.session.RemoteUiSurface
@@ -104,8 +104,8 @@ data class SessionScreenActions(
     val onRetryWorkstation: () -> Unit = {},
     val isToolExpanded: (String) -> Boolean = { false },
     val onToolExpandedChanged: (String, Boolean) -> Unit = { _, _ -> },
-    val onDismissStaleInteraction: (String) -> Unit = {},
-    val isInteractionStale: (PendingInteraction) -> Boolean = { false },
+    /** Sends an answer to a dialog pi is waiting on; false while disconnected. */
+    val onAnswerDialog: (PiDialog, JsonObject) -> Boolean = { _, _ -> false },
     val onOpenPodDetails: (Pod) -> Unit = {},
     val onOpenModelPicker: () -> Unit = {},
     val onNavigateBack: (() -> Unit)? = null,
@@ -130,40 +130,18 @@ fun SessionScreen(
     onOpenPodDetails: (Pod) -> Unit = {},
     onOpenModelPicker: (SessionStream) -> Unit = {},
     onNavigateBack: (() -> Unit)? = null,
-    push: PushController? = null,
-    approvalControls: @Composable (PendingInteraction) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val podId = state.livePod.id
 
     // The socket is torn down in the background; coming back should not cost the
     // user a three-second stare at a dead screen.
-    //
-    // The same observer reports which pod is on screen, so an approval raised by
-    // the conversation the reader is looking at does not also arrive as a
-    // notification. It is cleared on pause and on dispose — a stale id there
-    // would silence the banners for a pod nobody is watching.
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, viewModel, push, podId) {
+    DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    viewModel.onForeground()
-                    push?.visiblePodId = podId
-                }
-
-                Lifecycle.Event.ON_PAUSE -> {
-                    if (push?.visiblePodId == podId) push.visiblePodId = null
-                }
-
-                else -> Unit
-            }
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.onForeground()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            if (push?.visiblePodId == podId) push.visiblePodId = null
-        }
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val pickImages = rememberAttachmentPicker(
@@ -189,14 +167,12 @@ fun SessionScreen(
             onRetryWorkstation = viewModel::retryWorkstationWait,
             isToolExpanded = viewModel.stream::isToolExpanded,
             onToolExpandedChanged = viewModel::setToolExpanded,
-            onDismissStaleInteraction = viewModel::dismissStaleInteraction,
-            isInteractionStale = viewModel.stream::isInteractionStale,
+            onAnswerDialog = viewModel::answer,
             onOpenPodDetails = onOpenPodDetails,
             onOpenModelPicker = { onOpenModelPicker(viewModel.stream) },
             onNavigateBack = onNavigateBack,
         ),
         modifier = modifier,
-        approvalControls = approvalControls,
     )
 }
 
@@ -207,9 +183,6 @@ fun SessionScreen(
  * user's way.
  *
  * Ported from `pi-pod-flutter/lib/features/session/session_view.dart`.
- *
- * @param approvalControls built by the caller so the transcript does not depend
- *   on the interactions feature; both are wired at the router.
  */
 @Composable
 fun SessionScreen(
@@ -217,7 +190,6 @@ fun SessionScreen(
     actions: SessionScreenActions,
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
-    approvalControls: @Composable (PendingInteraction) -> Unit = {},
 ) {
     val subtitle = state.statusSubtitle
     val pod = state.livePod
@@ -346,7 +318,6 @@ fun SessionScreen(
                         listState = listState,
                         viewportWidth = viewportWidth,
                         onChooseSuggestion = chooseSuggestion,
-                        approvalControls = approvalControls,
                     )
                     if (!followsLatest) {
                         JumpToLatestButton(
@@ -432,7 +403,6 @@ private fun Transcript(
     listState: LazyListState,
     viewportWidth: Dp,
     onChooseSuggestion: (String) -> Unit,
-    approvalControls: @Composable (PendingInteraction) -> Unit,
 ) {
     val session = state.stream
     // Grouping must never blank the conversation: show what arrived as plain
@@ -482,7 +452,7 @@ private fun Transcript(
             // A failed launch's banner says why; inviting a first message would be a lie.
             session.podRecord?.didFail == true -> Unit
 
-            session.items.isEmpty() && session.pendingInteractions.isEmpty() ->
+            session.items.isEmpty() && session.openDialogs.isEmpty() ->
                 item(key = "empty-conversation") {
                     ConversationEmptyState(onChooseSuggestion = onChooseSuggestion)
                 }
@@ -510,25 +480,12 @@ private fun Transcript(
         }
 
         items(
-            count = session.pendingInteractions.size,
-            key = { index -> "approval-${session.pendingInteractions[index].id}" },
+            count = session.openDialogs.size,
+            key = { index -> "dialog-${session.openDialogs[index].id}" },
         ) { index ->
-            val interaction = session.pendingInteractions[index]
-            // A card the stream thinks is stale may still be answerable: only a
-            // resolution event truly retires a request. Keep the usual actions
-            // and add Dismiss, with a caption saying pi moved on.
-            val stale = actions.isInteractionStale(interaction)
+            val dialog = session.openDialogs[index]
             Box(Modifier.padding(vertical = 6.dp)) {
-                ApprovalCard(
-                    interaction = interaction,
-                    isStale = stale,
-                    onDismissStale = if (stale) {
-                        { actions.onDismissStaleInteraction(interaction.id) }
-                    } else {
-                        null
-                    },
-                    controls = { approvalControls(interaction) },
-                )
+                DialogCard(dialog = dialog, onAnswer = { actions.onAnswerDialog(dialog, it) })
             }
         }
 

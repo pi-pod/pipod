@@ -1,14 +1,13 @@
 import Foundation
 
 /// Somewhere in the app a `pipod://` URL or a notification payload asked for: a
-/// pod session (optionally resumed at `fromSeq`), a pending interaction, or a job
-/// that never spawned a pod.
+/// pod session (optionally resumed at `fromSeq`), or a job that never spawned a
+/// pod.
 public struct DeepLinkDestination: Hashable, Sendable {
     public let podId: String?
     public let orgId: String?
     public let sessionId: String?
     public let fromSeq: Int?
-    public let interactionId: String?
     public let jobId: String?
 
     public init(
@@ -16,22 +15,20 @@ public struct DeepLinkDestination: Hashable, Sendable {
         orgId: String? = nil,
         sessionId: String? = nil,
         fromSeq: Int? = nil,
-        interactionId: String? = nil,
         jobId: String? = nil
     ) {
         self.podId = podId
         self.orgId = orgId
         self.sessionId = sessionId
         self.fromSeq = fromSeq
-        self.interactionId = interactionId
         self.jobId = jobId
     }
 
     public var isEmpty: Bool {
-        (podId ?? "").isEmpty && interactionId == nil && jobId == nil
+        (podId ?? "").isEmpty && jobId == nil
     }
 
-    /// `pipod://pod/<id>`, `pipod://interaction/<id>`, `pipod://job/<id>`, plus
+    /// `pipod://pod/<id>`, `pipod://job/<id>`, plus
     /// the triple-slash spelling and in-app http(s) paths.
     public static func from(url: URL) -> DeepLinkDestination? {
         let scheme = url.scheme?.lowercased() ?? ""
@@ -73,8 +70,6 @@ public struct DeepLinkDestination: Hashable, Sendable {
                 sessionId: routable(parameter("sessionId", "session_id")),
                 fromSeq: parameter("fromSeq", "from_seq").flatMap(Int.init)
             )
-        case "interaction":
-            return DeepLinkDestination(interactionId: id)
         case "job":
             return DeepLinkDestination(jobId: id)
         default:
@@ -125,9 +120,6 @@ public struct DeepLinkDestination: Hashable, Sendable {
         if parts.count >= 2, parts[0] == "jobs", isRoutableId(parts[1]) {
             return DeepLinkDestination(jobId: parts[1])
         }
-        if parts.count >= 2, parts[0] == "pods", parts[1] == "approvals" {
-            return DeepLinkDestination(interactionId: "inbox")
-        }
         return nil
     }
 
@@ -140,9 +132,8 @@ public struct DeepLinkDestination: Hashable, Sendable {
         // A push payload is no more trusted than a URL: the ids in it address
         // the same screens and the same requests.
         let podId = routable(string("pod_id"))
-        let interactionId = routable(string("interaction_id"))
         let jobId = routable(string("job_id"))
-        if podId == nil, interactionId == nil, jobId == nil { return nil }
+        if podId == nil, jobId == nil { return nil }
 
         let seq: Int?
         switch payload["seq"] {
@@ -157,7 +148,6 @@ public struct DeepLinkDestination: Hashable, Sendable {
             orgId: string("org_id"),
             sessionId: routable(string("session_id")),
             fromSeq: seq,
-            interactionId: interactionId,
             jobId: jobId
         )
     }

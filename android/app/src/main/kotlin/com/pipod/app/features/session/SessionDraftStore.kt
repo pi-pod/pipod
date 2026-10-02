@@ -64,9 +64,8 @@ class SharedPreferencesSessionDraftStore(context: Context) : SessionDraftStore {
     }
 
     override fun clearAll() {
-        // The whole file: it holds nothing but drafts, keyed per pod and per
-        // approval, and enumerating them would miss any the app no longer knows
-        // a pod for.
+        // The whole file: it holds nothing but drafts, and enumerating them would
+        // miss any the app no longer knows a pod for.
         runCatching { preferences?.edit()?.clear()?.apply() }
     }
 }

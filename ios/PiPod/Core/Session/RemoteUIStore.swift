@@ -295,7 +295,7 @@ public final class RemoteUIStore {
     }
 
     /// Consumes an `extension_ui_request` ephemeral payload. Returns false when
-    /// it is not remote-UI traffic, leaving it to the ordinary approval path.
+    /// it is not remote-UI traffic, leaving it to the dialog path.
     @discardableResult
     public func applyExtensionRequest(_ payload: JSONValue) -> Bool {
         guard let encoded = RemoteUICodec.encodedFrame(in: payload) else { return false }
@@ -305,7 +305,7 @@ public final class RemoteUIStore {
               let frame = RemoteUIFrame.from(json: json)
         else {
             // The prefix says this is remote-UI traffic whatever the body turned
-            // out to be, so it must not fall through to the approval path and
+            // out to be, so it must not fall through to the dialog path and
             // render as a card of raw base64. The waiting component is told the
             // request was cancelled instead — the reference client's answer.
             if let requestID { respondCancelled(requestID: requestID) }

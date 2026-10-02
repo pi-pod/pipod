@@ -29,8 +29,8 @@ Three rules that hold across both:
 
 | Composable | Signature |
 | --- | --- |
-| `PodListScreen` | `(viewModel: PodListViewModel, onOpenPod: (Pod) -> Unit, onOpenApprovals: () -> Unit, onLaunchNewPod: () -> Unit, modifier = Modifier, pendingApprovalsCount: Int = 0)` |
-| `PodListScreen` | `(state: PodListState, onRefresh, onSearchChange: (String) -> Unit, onApplyFilter: (PodFilter) -> Unit, onClearFilters, onShowAllStatuses, onOpenPod: (Pod) -> Unit, onOpenApprovals, onLaunchNewPod, modifier = Modifier, pendingApprovalsCount: Int = 0, isRefreshing: Boolean = false)` |
+| `PodListScreen` | `(viewModel: PodListViewModel, onOpenPod: (Pod) -> Unit, onLaunchNewPod: () -> Unit, modifier = Modifier)` |
+| `PodListScreen` | `(state: PodListState, onRefresh, onSearchChange: (String) -> Unit, onApplyFilter: (PodFilter) -> Unit, onClearFilters, onShowAllStatuses, onOpenPod: (Pod) -> Unit, onLaunchNewPod, modifier = Modifier: Int = 0, isRefreshing: Boolean = false)` |
 | `PodDetailScreen` | `(viewModel: PodDetailViewModel, onBack, onOpenSession, onEditAndRetry: (templateId: String?) -> Unit, onOpenHostPod: (hostPodId: String) -> Unit, onBackToPods, modifier = Modifier, showsOpenSession: Boolean = false)` |
 | `PodDetailScreen` | `(state: PodDetailState, onBack, onRefresh, onRunCommand: (String) -> Unit, onCancelWait, onDelete, onOpenSession, onEditAndRetry, onOpenHostPod: (String) -> Unit, onBackToPods, modifier = Modifier, showsOpenSession = false, dialogs = rememberAppDialogHostState(), toastHostState = rememberAppToastHostState())` |
 | `LaunchPodScreen` | `(viewModel: LaunchPodViewModel, onLaunched: (Pod) -> Unit, onCancel, modifier = Modifier)` |
@@ -91,7 +91,7 @@ location/owner decisions are computed once per (pods, filter, reader) rather
 than once per read.
 
 Above the rows, in order: the personal-workstation card when a refresh found the
-reader's own machine not ready, the account row, then the approvals row. The
+reader's own machine not ready, then the account row. The
 workstation card offers Cancel while it is waiting and Try again once it is over
 — never both, because a running wait is already re-issuing the request. While it
 is up, neither the first-load spinner nor the "No pods yet" column is drawn.
@@ -112,7 +112,6 @@ is up, neither the first-load spinner nor the "No pods yet" column is drawn.
 | `Clear pod filters from empty result` | The no-matches empty-state action. |
 | `Show <breakdown>` | Discloses hidden statuses, e.g. `Show 1 archived`. Appears under the list and, when a filter is also on, as the no-matches footer. |
 | `Open pod <name>, <status>, <location>[, <provider>][, <project>], <activity>[, Owned by another organization member][, <reason>]` | One pod row. `<provider>` is included only when it differs from `<location>`; `<activity>` is `last used 3m ago` or `no activity yet`. |
-| `Open pending approvals, N pending` | The approvals row above the list. |
 | `Filter status` / `Filter project` / `Filter environment` | The filter sheet's three pickers. |
 | `Only my pods filter` | The filter sheet's switch row. |
 | `Cancel pod filters` / `Apply pod filters` | The filter sheet's actions. |
@@ -257,7 +256,7 @@ model is holding it.
 
 | Object | Tags |
 | --- | --- |
-| `PodListTestTags` | `pod-list-screen`, `pod-list-header`, `pod-list-filter`, `pod-filter-sheet`, `pod-list-approvals`, `pod-list-disclose-hidden`, `podRow(id)` → `pod-row-<id>` |
+| `PodListTestTags` | `pod-list-screen`, `pod-list-header`, `pod-list-filter`, `pod-filter-sheet`, `pod-list-disclose-hidden`, `podRow(id)` → `pod-row-<id>` |
 | `PodDetailTestTags` | `pod-detail-screen`, `pod-detail-marker`, `pod-detail-actions`, `pod-detail-status`, `pod-detail-info`, `pod-detail-launch-report`, `pod-detail-launch-report-toggle`, `pod-detail-failure`, `pod-detail-open-session`, `pod-detail-cancel-wait`, `pod-detail-edit-retry`, `pod-detail-restore`, `pod-detail-error`, `pod-detail-not-found` |
 | `LaunchPodTestTags` | `launch-pod-screen`, `launch-pod-cancel`, `launch-pod-launch`, `launch-pod-error`, `launch-pod-launching`, `launch-pod-retry-templates`, and `ENVIRONMENT_PICKER` = `app-option-picker-Environment` (set by `AppOptionPicker` itself) |
 | `ModelPickerTestTags` | `model-picker-button`, `model-picker-screen`, `model-picker-done`, `model-picker-provider-row`, `model-picker-models`, `model-picker-thinking`, `model-picker-error`, `model-picker-offline`, `provider-picker-screen`, `provider-picker-list` |
@@ -316,17 +315,13 @@ val environments = ApiTemplateRepository(container.api)
 PodListScreen(
     viewModel = viewModel { PodListViewModel(pods, currentUserId = me?.user?.id) },
     onOpenPod = { router.push(Routes.podDetail(it.id)) },
-    onOpenApprovals = { router.push(Routes.APPROVALS) },
     onLaunchNewPod = { router.push(Routes.LAUNCH) },
-    pendingApprovalsCount = approvals,
 )
 ```
 
 - `currentUserId` comes from `ApiClient.me().user.id`. Until the shell supplies
   it, `onlyMine` and the "Owned by another organization member" row stay off —
   which is the same thing the Flutter client does before `me` resolves.
-- `pendingApprovalsCount` is the count the shell already computes for the tab
-  badge.
 - `PodDetailScreen`'s `onEditAndRetry(templateId)` builds
   `/pods/launch?retry=1[&templateId=…]`; `LaunchPodViewModel` then takes
   `initialTemplateId` and `isRetry` from those query parameters. Retry mode

@@ -40,19 +40,6 @@ export async function runRetention(deps: WorkerDeps): Promise<void> {
 }
 
 async function expireAdjacentTables(days: number, deps: WorkerDeps): Promise<void> {
-  // Approval payloads carry the same transcript content as session_events.
-  const resolved = await query(
-    `DELETE FROM pending_interactions
-      WHERE created_at < now() - make_interval(days => $1)
-        AND (resolved_at IS NOT NULL OR delivered_at IS NOT NULL)`,
-    [days],
-  );
-  // Unresolved-but-ancient rows: also delete — their session is long gone.
-  const stale = await query(
-    `DELETE FROM pending_interactions
-      WHERE created_at < now() - make_interval(days => $1)`,
-    [days],
-  );
   const prompts = await query(
     `DELETE FROM queued_prompts
       WHERE status IN ('delivered', 'failed', 'unknown')
@@ -63,20 +50,13 @@ async function expireAdjacentTables(days: number, deps: WorkerDeps): Promise<voi
   const sessions = await query(
     `DELETE FROM sessions s
       WHERE s.ended_at < now() - make_interval(days => $1)
-        AND NOT EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = s.id)
-        AND NOT EXISTS (SELECT 1 FROM pending_interactions pi WHERE pi.session_id = s.id)`,
+        AND NOT EXISTS (SELECT 1 FROM session_events e WHERE e.session_id = s.id)`,
     [days],
   );
-  const dropped =
-    (resolved.rowCount ?? 0) +
-    (stale.rowCount ?? 0) +
-    (prompts.rowCount ?? 0) +
-    (sessions.rowCount ?? 0);
+  const dropped = (prompts.rowCount ?? 0) + (sessions.rowCount ?? 0);
   if (dropped > 0) {
     deps.log.info(
-      `retention expired ${resolved.rowCount ?? 0} resolved interactions, ` +
-        `${stale.rowCount ?? 0} stale interactions, ${prompts.rowCount ?? 0} queued prompts, ` +
-        `${sessions.rowCount ?? 0} session rows`,
+      `retention expired ${prompts.rowCount ?? 0} queued prompts, ${sessions.rowCount ?? 0} session rows`,
     );
   }
 }

@@ -1,13 +1,12 @@
 # Chat screens
 
-The conversation surface and the approvals inbox: `com.pipod.app.features.session`
-and `com.pipod.app.features.interactions`. Ported 1:1 from
-`pi-pod-flutter/lib/features/session/` and `lib/features/interactions/`.
+The conversation surface: `com.pipod.app.features.session`. Ported from
+`pi-pod-flutter/lib/features/session/`.
 
 Everything here renders `com.pipod.app.core.session` — see
 [`session-core.md`](session-core.md) — through the widget vocabulary in
 [`design-system.md`](design-system.md). Nothing in this layer parses a payload,
-formats a timestamp or decides what an approval means; it draws what those two
+formats a timestamp or decides what a dialog means; it draws what those two
 already decided.
 
 Two conventions hold across every screen below.
@@ -53,10 +52,8 @@ fun SessionRoute(
 )
 ```
 
-It builds the `SessionViewModel` through `SessionViewModel.create(...)`, wires
-the inline approval controls to `InteractionResponseControls` (with
-`guardUnsentDraft` **off** — see [Approvals](#approvals)), and renders one of
-three things: a spinner, a load failure, or `SessionScreen`.
+It builds the `SessionViewModel` through `SessionViewModel.create(...)` and
+renders one of three things: a spinner, a load failure, or `SessionScreen`.
 
 | | |
 | --- | --- |
@@ -79,7 +76,6 @@ fun SessionScreen(
     onOpenPodDetails: (Pod) -> Unit = {},
     onOpenModelPicker: (SessionStream) -> Unit = {},
     onNavigateBack: (() -> Unit)? = null,
-    approvalControls: @Composable (PendingInteraction) -> Unit = {},
 )
 
 @Composable
@@ -88,7 +84,6 @@ fun SessionScreen(
     actions: SessionScreenActions,
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
-    approvalControls: @Composable (PendingInteraction) -> Unit = {},
 )
 ```
 
@@ -108,8 +103,7 @@ data class SessionScreenActions(
     val onWake: () -> Unit = {},
     val isToolExpanded: (String) -> Boolean = { false },
     val onToolExpandedChanged: (String, Boolean) -> Unit = { _, _ -> },
-    val onDismissStaleInteraction: (String) -> Unit = {},
-    val isInteractionStale: (PendingInteraction) -> Boolean = { false },
+    val onAnswerDialog: (PiDialog, JsonObject) -> Boolean = { _, _ -> false },
     val onOpenPodDetails: (Pod) -> Unit = {},
     val onOpenModelPicker: () -> Unit = {},
     val onNavigateBack: (() -> Unit)? = null,
@@ -123,7 +117,7 @@ and the overlay layer stacked over it) → remote-UI widgets placed
 `ABOVE_EDITOR` → remote-UI editor panel → composer → widgets placed
 `BELOW_EDITOR` → remote-UI footer band.
 
-The transcript is a `LazyColumn` keyed by `TranscriptRow.id`, `approval-<id>`,
+The transcript is a `LazyColumn` keyed by `TranscriptRow.id`, `dialog-<id>`,
 `typing` and `transcript-tail`, so a streaming token updates one row instead of
 rebuilding the list. It stays viewport-wide and gets the reading-column limit as
 padding (`PaddingValues.centeredIn(viewportWidth)`), so a fling over the gutter
@@ -173,7 +167,7 @@ otherwise.
 the pod name is noise. Otherwise, in order: `Preparing sandbox`, `Unavailable`,
 `Couldn’t connect`, `Offline`, `Waking from storage…` / `Waking…`, `Asleep`,
 `Reconnecting…` / `Connecting…`, and `pi is working` only while the transcript
-and the approvals are both still empty.
+and the open dialogs are both still empty.
 
 ### Connection banner
 
@@ -211,12 +205,9 @@ Tags: `session-screen`, `session-transcript`.
 ```kotlin
 class SessionViewModel(
     val stream: SessionStream,
-    private val resolver: InteractionResolver,
     private val drafts: SessionDraftStore,
     initialPod: Pod,
     private val api: SessionApi? = null,
-    pendingInteractionsFetcher: (suspend () -> List<PendingInteraction>)? = null,
-    private val serverHost: String? = RuntimeConfig.serverUrl,
     private val ownsStream: Boolean = true,
 ) : ViewModel() {
     val state: StateFlow<SessionState>
@@ -235,13 +226,11 @@ class SessionViewModel(
     fun onForeground()
     fun setOffline(offline: Boolean)
     fun setToolExpanded(key: String, expanded: Boolean)
-    fun dismissStaleInteraction(id: String)
-    suspend fun resolveInteraction(interaction: PendingInteraction, response: JsonObject)
+    fun answer(dialog: PiDialog, response: JsonObject): Boolean
 
     companion object {
         fun create(client: ApiClient, drafts: SessionDraftStore, pod: Pod,
                    fromSeq: Long? = null, sessionId: String? = null): SessionViewModel
-        const val UNKNOWN_INTERACTION_MESSAGE: String
     }
 }
 ```
@@ -249,40 +238,18 @@ class SessionViewModel(
 `discardOutgoing` moves the message's text **back into the composer** instead of
 dropping it, so a mis-tap never destroys a long draft.
 
-### Answering an approval
+### Answering a dialog
 
-```kotlin
-fun interface InteractionResolver {
-    suspend fun resolve(id: String, response: JsonObject): ResolveOutcome
-}
-class ApiInteractionResolver(private val api: ApiClient) : InteractionResolver
-```
+When an extension calls `ctx.ui.confirm`, `select`, `input` or `editor`, pi
+waits for an answer. The stream keeps those as `openDialogs` (see
+[`session-core.md`](session-core.md#dialogs)) and the transcript ends with one
+`DialogCard` per dialog. `answer` sends the `extension_ui_response` over the
+socket and returns false while disconnected, which the card shows as
+`Not connected. pi is still waiting; answer again once the conversation reconnects.`
 
-A named seam rather than an `ApiClient` parameter, because the gateway contract
-lives on the other side of it: `ApiClient.resolveInteraction` is what wraps an
-object answer in `{"type": "extension_ui_response", …}`, and the agent releases
-its blocked prompt only on a frame carrying that key. A screen that built the
-request itself would answer the approval, clear the card, and leave the turn
-hanging until the agent's own 120-second ask timeout — which is exactly what the
-Flutter client does. **Do not reintroduce that.**
-
-`resolveInteraction` therefore:
-
-1. refuses a second answer for an id already in flight, so a double tap or a
-   semantics action slipping past a disabled button cannot post twice;
-2. adopts the gateway uuid (`stream.resolvableIdFor`, then one
-   `reconcilePendingWithServer` when the id is still a pi request id);
-3. registers the intent with `stream.beginLocalResolve` **before** the POST, so
-   the server's racing `interaction_resolved` fan-out can phrase
-   "You confirmed …" instead of the generic "Resolved …";
-4. calls `resolver.resolve` and settles with `stream.markInteractionResolved`,
-   or rolls back with `stream.cancelLocalResolve`;
-5. re-phrases a 404 on a non-uuid target as
-   `Couldn’t find this approval on the server. Reopen the session to refresh, then try again.`
-
-Answer shapes: confirm `{"confirmed": true}` (or `{"approved": …}` for a tool
-approval), select/input/editor `{"value": …}`, cancel `{"cancelled": true}`.
-The server supplies `id`.
+Answer shapes, built by `PiDialog`: confirm `{"confirmed": …}`, select, input and
+editor `{"value": …}`, cancel `{"cancelled": true}`, each with the frame `type`
+and pi's request `id`.
 
 ---
 
@@ -385,16 +352,13 @@ fun ToolActivityCard(
     modifier: Modifier = Modifier,
 )
 
+// features/session/DialogCard.kt
 @Composable
-fun ApprovalCard(
-    interaction: PendingInteraction,
+fun DialogCard(
+    dialog: PiDialog,
+    onAnswer: (JsonObject) -> Boolean,
     modifier: Modifier = Modifier,
-    isStale: Boolean = false,
-    onDismissStale: (() -> Unit)? = null,
-    controls: @Composable () -> Unit = {},
 )
-
-object ApprovalCardDefaults { const val STALE_CAPTION: String }
 ```
 
 Internal, so the wording can be tested without a composition:
@@ -422,9 +386,8 @@ Internal, so the wording can be tested without a composition:
 | typing indicator | the extension's label, or `pi is working…` |
 | jump control | `N new messages. Scroll to latest`, or `Scroll to latest messages` |
 | suggestion chip | the suggestion text |
-| approval card details | `Complete request details`, with an Expanded/Collapsed state |
-| approval stale caption | `pi moved on without this answer — you can still respond or dismiss.` |
-| approval dismiss | `Dismiss stale request` / `Dismiss stale request for <title>` |
+| dialog card details | `Complete request details`, with an Expanded/Collapsed state |
+| dialog buttons | `Confirm <title>` / `Decline <title>`, `Submit response for <title>` / `Submit choice for <title>`, `Cancel question <title>`; the field is `Response for <title>` |
 
 Visible delivery footers, which are not names: `Sending…`,
 `Waiting for connection`, `Saved — sends when the pod is ready`,
@@ -436,12 +399,9 @@ Visible delivery footers, which are not names: `Sending…`,
 `transcript-empty-state`, `transcript-suggestion-<index>`,
 `transcript-row-<item id>`, `transcript-row-retry`, `transcript-row-discard`,
 `transcript-tools-<first item id>`, `transcript-tool-detail-<item id>`,
-`approval-card-<interaction id>`, `approval-card-details`,
-`approval-card-dismiss`.
-
-The interaction id rides on the test tag only. The Dart put it in
-`Semantics(identifier:)`, which has no Compose analogue — and a 36-character
-UUID is noise in an announced label either way.
+`dialog-card-<pi request id>`, `dialog-card-details`, `dialog-confirm`,
+`dialog-decline`, `dialog-input`, `dialog-options`, `dialog-submit`,
+`dialog-cancel`.
 
 ---
 
@@ -532,7 +492,6 @@ Tags: `sandbox-preparation`, `sandbox-stage-<index>`.
 ## Drafts and attachments
 
 `features/session/SessionDraftStore.kt`,
-`features/session/InteractionDraftStore.kt`,
 `features/session/AndroidAttachmentPicker.kt`.
 
 ```kotlin
@@ -544,29 +503,11 @@ interface SessionDraftStore {
 class SharedPreferencesSessionDraftStore(context: Context) : SessionDraftStore
 class InMemorySessionDraftStore(initial: Map<String, String> = emptyMap()) : SessionDraftStore
 
-interface InteractionDraftStorage { fun read(key: String): String?; fun write(key: String, value: String); fun remove(key: String) }
-class SharedPreferencesInteractionDraftStorage(context: Context) : InteractionDraftStorage
-object InteractionDraftStore {
-    fun install(storage: InteractionDraftStorage)
-    fun keyFor(interactionId: String): String
-    fun canonicalKeyFor(interactionId: String, payload: JsonElement?): String
-    fun read(interactionId: String, payload: JsonElement? = null): String
-    fun write(key: String, draft: String, prefill: String = "")
-    fun clear(key: String)
-    fun resetForTest()
-}
 ```
 
 An empty draft removes its entry rather than storing `""`. A preferences
 backend that refuses degrades to "nothing stored": drafts are a convenience and
 a session is still usable without them.
-
-`InteractionDraftStore` is keyed by the **pi request id** when the payload
-carries one, so the inline card (request id) and the Approvals detail (gateway
-uuid) share one draft across id adoption. The Dart's separate
-`readCached`/`writeCached`/`clearCached` statics collapse into this object,
-because the object *is* the cache and `install` only gives it something durable
-to write through.
 
 ```kotlin
 class AndroidAttachmentPicker(private val contentResolver: ContentResolver) {
@@ -667,146 +608,8 @@ touch target too.
 
 ---
 
-## Approvals
-
-`features/interactions/`. The response controls are shared: the same composable
-renders inside a transcript `ApprovalCard` and on the standalone approval
-screen.
-
-```kotlin
-interface InteractionRepository {
-    suspend fun interactions(): DecodedList<PendingInteraction>
-    suspend fun resolve(id: String, response: JsonObject): ResolveOutcome
-}
-class ApiInteractionRepository(private val api: ApiClient) : InteractionRepository
-
-@Composable
-fun InteractionResponseControls(
-    interaction: PendingInteraction,
-    onResolve: suspend (JsonObject) -> Unit,
-    modifier: Modifier = Modifier,
-    guardUnsentDraft: Boolean = false,
-    onDiscardGuardedDraft: () -> Unit = {},
-    dialogHostState: AppDialogHostState? = null,
-)
-
-data class InteractionListState(
-    val interactions: List<PendingInteraction> = emptyList(),
-    val unsupportedCount: Int = 0,
-    val isLoading: Boolean = true,
-    val error: String? = null,
-) { val showsInitialSpinner: Boolean; val showsEmptyState: Boolean }
-
-class InteractionListViewModel(
-    private val repository: InteractionRepository,
-    private val serverHost: String? = RuntimeConfig.serverUrl,
-    private val onPendingCountChanged: (Int) -> Unit = {},
-) : ViewModel() {
-    val state: StateFlow<InteractionListState>
-    fun refresh()
-    fun removeResolved(id: String)
-    suspend fun openTarget(id: String): PendingInteraction?
-}
-
-@Composable
-fun InteractionListScreen(
-    viewModel: InteractionListViewModel,
-    onOpenInteraction: (PendingInteraction) -> Unit,
-    modifier: Modifier = Modifier,
-    targetInteractionId: String? = null,
-    onTargetHandled: (String) -> Unit = {},
-)
-
-@Composable
-fun InteractionListScreen(
-    state: InteractionListState,
-    onRefresh: () -> Unit,
-    onOpenInteraction: (PendingInteraction) -> Unit,
-    modifier: Modifier = Modifier,
-)
-
-@Composable
-fun InteractionDetailScreen(
-    interaction: PendingInteraction,
-    onResolve: suspend (JsonObject) -> Unit,
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-    onOpenPod: (String) -> Unit = {},
-)
-```
-
-`dialogHostState` is nullable rather than defaulted to
-`rememberAppDialogHostState()`, because a composable cannot tell whether an
-argument was defaulted: null means the controls remember *and* render their own
-host, and a caller that passes one renders `AppDialogHost` itself.
-
-`guardUnsentDraft` is **off** for the embedded transcript controls and **on**
-for the detail screen. Several mounted guards in a transcript would each answer
-the same back press with their own dialog, and discarding there should exit the
-session rather than pop it from inside.
-
-The view model subscribes to `SessionNotifications.interactionResolved` (drop
-that row, re-report the badge count) and `interactionPending` (refresh), so an
-approval answered in an open chat disappears from the inbox and vice versa.
-
-### Names
-
-List: `Approvals` (title) · `Refresh approvals` · `Loading approvals` ·
-`Try loading approvals again` · `Retry refreshing approvals` ·
-`Open approval for <pod>. <title>. <message>. Review request.` — each fragment
-stripped of trailing `[.!?:;\s]+` so a message ending in `.` never produces
-`..` · and the deep-link notice `Approval unavailable` /
-`That approval is no longer pending. It may already have been resolved.` /
-`Dismiss unavailable approval message`.
-
-Detail: `Approval` · `Back` · `Pod, <podName>` ·
-`Open pod <podName> for this approval` ·
-`Toggle complete request details for <podName>` with an Expanded/Collapsed
-state.
-
-Controls, all built by `actionLabel(verb)` — the verb alone when the request has
-no title, otherwise `"<verb> <title>"`, so a reader never hears a raw UUID:
-`Confirm <t>` · `Decline <t>` · `Approve <t>` · `Deny <t>` ·
-`Response for <t>` · `Submit response for <t>` · `Cancel request for <t>` ·
-`Submit choice for <t>` · `Cancel selection request for <t>` ·
-`Sending approval response` (live region) ·
-`Approval response error: Could not send your response: <friendly error>`
-(live region) · and the guard dialog `Discard response?` /
-`The response you typed has not been sent.` /
-`Confirm discard approval response` / `Keep editing approval response`.
-
-`Approve`/`Deny` is used when the `Confirmation.key` is not `confirmed` — that
-is, for a tool approval; `Confirm`/`Decline` otherwise. A selection never
-pre-selects (the picker opens on `Choose…`) and Submit stays disabled until the
-reader picks for real.
-
-Visible-only strings: `Loading approvals…`, `Couldn’t load approvals`,
-`No pending approvals`, `When pi needs an answer, it shows up here.`,
-`Try again`, `Review request`, `waiting <duration>`, `Request`,
-`Your response`, `Complete request details`, `Open pod`, `Submit`,
-`Cancel request`, `Discard`, `Keep editing`, `Choose…`, `Sending response…`,
-and `This app can’t answer this request type. Review the details, or use a
-client that supports it.`
-
-### Tags
-
-`approvals-list`, `approvals-loading`, `approval-row-<id>`, `approval-detail`,
-`approval-detail-disclosure`, `approval-detail-open-pod`,
-`interaction-controls`, `interaction-confirm`, `interaction-decline`,
-`interaction-input`, `interaction-submit`, `interaction-cancel`,
-`interaction-options`, `interaction-unsupported`, `interaction-sending`,
-`interaction-error`. Inherited from shared widgets: `app-list`,
-`app-back-button`, `empty-state`, `refresh-error-tile`,
-`unsupported-list-item`, `app-notice-dialog`, `app-confirm-dialog`,
-`app-option-picker-Response for <title>`.
-
----
-
 ## Known gaps
 
-- **Org switching.** The Flutter `InteractionListView` refreshes when
-  `currentOrgId` changes. `InteractionListViewModel` takes no org, so the shell
-  has to refresh or recreate it on an org switch.
 - **The extension editor does not move the caret to the end** when a pod frame
   replaces its text. `AppTextField` hoists a `String`, not a `TextFieldValue`,
   so there is no selection to set; fixing it needs a selection seam on the
@@ -829,17 +632,12 @@ The isolated dev gateway (`dev/main-fake.mts`) with its **scripted, deterministi
 fake agent** — not a real model and not a real sandbox — was driven directly at
 the REST/WS boundary these screens sit on:
 
-- `GET /v1/interactions?pending=true` returns a **gateway uuid that differs from
-  the pi request id** in `payload.id`. That is the id-adoption case
-  `pendingInteractionsFetcher` + `SessionStream.resolvableIdFor` exist for; a
-  resolve posted with the request id is a 404.
-- `POST /v1/interactions/<uuid>/resolve` with the body
-  `ApiClient.resolveInteraction` builds — the answer object plus
-  `"type": "extension_ui_response"` — returned
-  `{"resolved":true,"delivery":"delivered"}`, and the agent's blocked turn
-  settled **560 ms** after the answer for a CONFIRM and **558 ms** for a SELECT
-  answered with `{"value": …}`. Without that key the same turn hangs until the
-  agent's own 120-second ask timeout. The card cleared server-side.
+- A dialog answered with the answer object plus
+  `"type": "extension_ui_response"` released the agent's blocked turn within
+  about half a second for a CONFIRM and for a SELECT answered with
+  `{"value": …}`. Without that key the same turn hangs until the agent's own
+  120-second ask timeout. (Measured when answers still went through the
+  retired REST resolve; the socket path forwards the same frame.)
 - A TOOL turn produces `tool_execution_start` / `tool_execution_end` events —
   what the reducer folds into the `TOOL` rows `ToolActivityCard` groups.
 - A REMOTEUI turn opens all five surface roles at once (header, footer, two

@@ -50,7 +50,8 @@ public final class SessionStream: ModelSelecting {
     // MARK: - Observable state
 
     public private(set) var items: [StreamItem] = []
-    public private(set) var pendingInteractions: [PendingInteraction] = []
+    /// Questions pi is waiting on, oldest first.
+    public private(set) var openDialogs: [PiDialog] = []
     public private(set) var availableModels: [ModelChoice] = []
     public private(set) var availableThinkingLevels: [String] = []
 
@@ -149,12 +150,6 @@ public final class SessionStream: ModelSelecting {
 
     // MARK: - Injected collaborators
 
-    /// Fetches the server's still-pending approvals so restored cards that only
-    /// carry the pi request id can adopt the gateway uuid they resolve with. A
-    /// failure keeps the cards and retries on the next attach; only a submit
-    /// surfaces an error.
-    @ObservationIgnored public var pendingInteractionsFetcher: (() async throws -> [PendingInteraction])?
-
     @ObservationIgnored private var api: SessionAPI?
     @ObservationIgnored private let socketFactory: SessionTransportFactory
     @ObservationIgnored private let now: () -> Date
@@ -185,7 +180,6 @@ public final class SessionStream: ModelSelecting {
     @ObservationIgnored private var compacting = false
     @ObservationIgnored private var awaitingReply = false
     @ObservationIgnored private var replayThroughSeq = 0
-    @ObservationIgnored private var lastSettledSeq = 0
     @ObservationIgnored private var toolsExpandedByExtension = false
     @ObservationIgnored private var reconnectTask: Task<Void, Never>?
     @ObservationIgnored private var workstationTask: Task<Void, Never>?
@@ -196,7 +190,6 @@ public final class SessionStream: ModelSelecting {
     /// Only clear our own transient poll error; a later gateway failure must win.
     @ObservationIgnored private var preparationRefreshError: String?
     @ObservationIgnored private var openTask: Task<Void, Never>?
-    @ObservationIgnored private var resolvedObserver: NotificationToken?
     /// When the transport last delivered anything. A socket that stopped
     /// answering looks connected until something notices the silence.
     @ObservationIgnored private var lastInboundAt: Date?
@@ -243,10 +236,6 @@ public final class SessionStream: ModelSelecting {
         self.now = now
         self.reconnectDelay = reconnectDelay ?? SessionStream.defaultReconnectDelay
 
-        resolvedObserver = SessionNotifications.interactionResolved.addObserver {
-            [weak self] event in
-            self?.onInteractionResolvedNotification(event)
-        }
         remoteUI.responder = { [weak self] response in
             guard let self, self.isConnected, let socket = self.socket else { return false }
             return socket.uiResponse(response)
@@ -463,13 +452,6 @@ public final class SessionStream: ModelSelecting {
         for event in events {
             let id = eventId(event.sessionId, event.seq)
             guard seenEventIds.insert(id).inserted else { continue }
-            if let known = currentSessionId, known != event.sessionId {
-                // Sequence numbering restarts with every session, so a settle
-                // replayed from an earlier one says nothing about a request in
-                // this one. Carrying it across made a live approval read as one
-                // the agent had already moved past.
-                lastSettledSeq = 0
-            }
             currentSessionId = event.sessionId
             handleEvent(
                 id: id,
@@ -1468,12 +1450,10 @@ public final class SessionStream: ModelSelecting {
 
         case .ephemeral(let kind, let payload):
             if kind == "extension_ui_request" {
-                // Remote-UI surfaces own their frames; anything else is an
-                // approval the gateway is re-sending for this attach, and
-                // restoring it here brings the inline card back after backing
-                // out of the session.
+                // Remote-UI surfaces own their frames; anything else is a
+                // dialog pi is waiting on, live or re-sent for this attach.
                 if !remoteUI.applyExtensionRequest(payload) {
-                    restoreEphemeralInteraction(payload)
+                    showDialog(payload)
                 }
                 return
             }
@@ -1505,10 +1485,8 @@ public final class SessionStream: ModelSelecting {
                 return
             }
 
-        case .interaction(let interactionId, let seq, let kind, let ts, let payload):
-            addOrMergeInteraction(
-                interactionId: interactionId, seq: seq, kind: kind, ts: ts, payload: payload
-            )
+        case .dialogClosed(let id):
+            closeDialog(id)
 
         case .replayGap(let fromSeq, let toSeq):
             appendReplayGapStatus(fromSeq: fromSeq, toSeq: toSeq)
@@ -1623,18 +1601,10 @@ public final class SessionStream: ModelSelecting {
         // that difference is exactly what "already seen" means below.
         let isResumedSession = currentSessionId == nil || currentSessionId == sessionId
         if let existing = currentSessionId, existing != sessionId {
-            pendingInteractions.removeAll()
-            uuidByRequestId.removeAll()
-            requestIdByUuid.removeAll()
             // Keep the in-progress assistant bubble and tool cards: a
             // replacement gateway session is a transport boundary, not a new
             // turn, so live deltas must keep painting the same rows.
             lastSeq = 0
-            // Sequence numbering restarts with the session, so a settle recorded
-            // in the previous one says nothing about a request raised in this
-            // one. Carrying it over made every fresh approval read as "pi moved
-            // on without this answer".
-            lastSettledSeq = 0
             announcedGapThroughSeq = 0
             appendSessionBoundary()
         }
@@ -1700,13 +1670,12 @@ public final class SessionStream: ModelSelecting {
         // Only the models catalog response confirms a switch; otherwise a prompt
         // could be released while the gateway is still applying it.
 
-        restoreSnapshotInteractions(state)
+        // The gateway re-sends every dialog still open right after hello, so
+        // anything answered elsewhere while detached is gone from this list.
+        openDialogs.removeAll()
         _ = socket?.requestModels()
         flushQueuedOffline()
         Task { await refreshPodRecord() }
-        // Restored cards that only carry the pi request id cannot resolve until
-        // they adopt the gateway uuid from the pending listing.
-        Task { await reconcilePendingWithServer() }
     }
 
     /// A model receipt still matters when prior activity is temporarily unseen.
@@ -1887,7 +1856,6 @@ public final class SessionStream: ModelSelecting {
         case "agent_settled":
             streaming = false
             awaitingReply = false
-            if seq > lastSettledSeq { lastSettledSeq = seq }
             updateRunningState()
 
         case "compaction_start":
@@ -1944,19 +1912,6 @@ public final class SessionStream: ModelSelecting {
 
         case "bash_execution_end":
             settleBashOutput(payload)
-
-        case "extension_ui_request":
-            restoreInteractionFromEvent(seq: seq, timestamp: timestamp, payload: payload)
-
-        case "interaction_resolved":
-            resolveInteractionFromEvent(payload, seq: seq)
-
-        case "extension_ui_response":
-            if let answered = payload["id"]?.stringValue, !answered.isEmpty {
-                // A response answers the matching request; the resolved event
-                // that follows carries the transcript receipt.
-                _ = removePendingMatching(answered)
-            }
 
         case "session_ended":
             let endedReason = reason ?? payload["reason"]?.stringValue
@@ -2509,655 +2464,29 @@ public final class SessionStream: ModelSelecting {
         return result
     }
 
-    // MARK: - Interaction identity
-    //
-    // The gateway identifies one approval two ways: the durable uuid it mints
-    // (carried by `interaction` frames and `interaction_resolved` payloads, and
-    // the only id the resolve endpoints accept) and the pi request id inside the
-    // frame payload (`payload["id"]`, carried by the durable
-    // `extension_ui_request` event and the ephemeral re-send). Both name one
-    // card. Resolving with the request id is what the server rejects, so the
-    // surviving card always carries the uuid.
+    // MARK: - Dialogs
 
-    @ObservationIgnored private var uuidByRequestId: [String: String] = [:]
-    @ObservationIgnored private var requestIdByUuid: [String: String] = [:]
-    /// Every id, in either domain, known to be resolved by any surface. Restores
-    /// for these create no card; resolutions for them emit no receipt.
-    @ObservationIgnored private var resolvedInteractionIds: Set<String> = []
-    /// Ids for which a transcript receipt was already emitted, so a replayed
-    /// `interaction_resolved` after a local resolve stays silent.
-    @ObservationIgnored private var receiptedInteractionIds: Set<String> = []
-    /// Intended answers registered before the REST call returns, keyed by every
-    /// alias. A racing `interaction_resolved` consumes the entry to phrase the
-    /// specific receipt; a REST failure clears it.
-    @ObservationIgnored private var pendingLocalResolves: [String: JSONValue?] = [:]
-    @ObservationIgnored private var reconcileInFlight = false
-    @ObservationIgnored private var reconcilePending = false
-
-    private static func payloadRequestId(_ payload: JSONValue?) -> String? {
-        guard let raw = payload?["id"]?.stringValue, !raw.isEmpty else { return nil }
-        return raw
-    }
-
-    private func linkAlias(uuid: String, requestId: String) {
-        guard uuid != requestId else { return }
-        uuidByRequestId[requestId] = uuid
-        requestIdByUuid[uuid] = requestId
-    }
-
-    /// An id plus every id known to name the same approval.
-    private func aliasGroup(_ id: String) -> Set<String> {
-        var group: Set<String> = [id]
-        if let asUuid = uuidByRequestId[id] { group.insert(asUuid) }
-        if let asRequest = requestIdByUuid[id] { group.insert(asRequest) }
-        for item in pendingInteractions where item.id != id {
-            let payloadId = SessionStream.payloadRequestId(item.payload)
-            if payloadId == id || group.contains(item.id) {
-                group.insert(item.id)
-                if let payloadId { group.insert(payloadId) }
-            }
-        }
-        return group
-    }
-
-    private func pendingIndex(for id: String) -> Int? {
-        let group = aliasGroup(id)
-        return pendingInteractions.firstIndex {
-            group.contains($0.id)
-                || SessionStream.payloadRequestId($0.payload).map(group.contains) == true
-        }
-    }
-
-    /// The id the resolve endpoints accept for `id`: the adopted gateway uuid
-    /// when known, otherwise `id` unchanged.
-    public func resolvableId(for id: String) -> String {
-        if let uuid = uuidByRequestId[id] { return uuid }
-        for item in pendingInteractions where SessionStream.isGatewayUUID(item.id) {
-            if SessionStream.payloadRequestId(item.payload) == id { return item.id }
-            if item.id == id { return item.id }
-        }
-        return id
-    }
-
-    private static let uuidPattern = try? NSRegularExpression(
-        pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-    )
-
-    /// Whether `id` looks like the gateway uuid the resolve endpoints accept, as
-    /// opposed to a pi request id or a synthetic restore id.
-    public static func isGatewayUUID(_ id: String) -> Bool {
-        guard let uuidPattern else { return false }
-        let range = NSRange(id.startIndex..., in: id)
-        return uuidPattern.firstMatch(in: id, range: range) != nil
-    }
-
-    private static func canonicalRequestId(_ interaction: PendingInteraction) -> String? {
-        if let payloadId = payloadRequestId(interaction.payload) { return payloadId }
-        let id = interaction.id
-        if isGatewayUUID(id) { return nil }
-        if id.hasPrefix("ephemeral:") || id.hasPrefix("event:") { return nil }
-        return id.isEmpty ? nil : id
-    }
-
-    private static func interactionTitle(_ interaction: PendingInteraction) -> String {
-        let title = InteractionPresentation(interaction).title
-        if !title.isEmpty { return title }
-        return interaction.payload["title"]?.stringValue ?? ""
-    }
-
-    // MARK: - Interaction lifecycle
-
-    private func addOrMergeInteraction(
-        interactionId: String, seq: Int, kind: String, ts: String?, payload: JSONValue
-    ) {
-        if resolvedInteractionIds.contains(interactionId) { return }
-        if let requestId = SessionStream.payloadRequestId(payload) {
-            if resolvedInteractionIds.contains(requestId) { return }
-            linkAlias(uuid: interactionId, requestId: requestId)
-        }
-        if let index = pendingIndex(for: interactionId) {
-            let existing = pendingInteractions[index]
-            pendingInteractions[index] = PendingInteraction(
-                id: interactionId,
-                sessionId: existing.sessionId,
-                podId: existing.podId,
-                podName: existing.podName,
-                seq: seq != 0 ? seq : existing.seq,
-                kind: kind,
-                payload: payload,
-                createdAt: ts ?? existing.createdAt
-            )
-            scrollRevision += 1
-            SessionNotifications.postPending(id: interactionId)
-            return
-        }
-        pendingInteractions.append(
-            PendingInteraction(
-                id: interactionId,
-                sessionId: currentSessionId ?? "",
-                podId: podId,
-                podName: "",
-                seq: seq,
-                kind: kind,
-                payload: payload,
-                createdAt: ts ?? ""
-            )
-        )
+    /// A dialog pi raised. Anything that is not one is ignored.
+    private func showDialog(_ payload: JSONValue) {
+        guard let dialog = PiDialog(request: payload),
+              !openDialogs.contains(where: { $0.id == dialog.id })
+        else { return }
+        openDialogs.append(dialog)
         scrollRevision += 1
-        SessionNotifications.postPending(id: interactionId)
     }
 
-    /// Best-effort restore of a gateway snapshot that carries its outstanding
-    /// approvals. Entries that do not decode are ignored, so a new server shape
-    /// can never wedge an old attach.
-    private func restoreSnapshotInteractions(_ state: JSONValue?) {
-        guard let raw = state?["pendingInteractions"]?.arrayValue else { return }
-        for entry in raw {
-            guard entry.objectValue != nil,
-                  let id = entry["id"]?.stringValue, !id.isEmpty,
-                  !resolvedInteractionIds.contains(id)
-            else { continue }
-            let payload = entry["payload"] ?? .object([:])
-            if let requestId = SessionStream.payloadRequestId(payload) {
-                if resolvedInteractionIds.contains(requestId) { continue }
-                linkAlias(uuid: id, requestId: requestId)
-            }
-            if pendingIndex(for: id) != nil { continue }
-            pendingInteractions.append(
-                PendingInteraction(
-                    id: id,
-                    sessionId: currentSessionId ?? "",
-                    podId: podId,
-                    podName: "",
-                    seq: entry["seq"]?.intValue ?? 0,
-                    kind: entry["kind"]?.stringValue ?? "extension_ui",
-                    payload: payload,
-                    createdAt: entry["createdAt"]?.stringValue ?? ""
-                )
-            )
-        }
-        if !raw.isEmpty { scrollRevision += 1 }
-    }
-
-    /// An ephemeral `extension_ui_request` that is not remote-UI traffic is an
-    /// approval the gateway re-sends on every attach. It carries the pi request
-    /// id, not the REST uuid, so the card restores under that id and
-    /// `reconcilePendingWithServer` later adopts the uuid the resolve endpoint
-    /// requires.
-    private func restoreEphemeralInteraction(_ payload: JSONValue) {
-        guard let method = payload["method"]?.stringValue, isDialogMethod(method) else { return }
-        let requestId = SessionStream.payloadRequestId(payload)
-        let id = requestId ?? "ephemeral:\(method):\(payload["title"]?.stringValue ?? "")"
-        if resolvedInteractionIds.contains(id) { return }
-        if let requestId, let uuid = uuidByRequestId[requestId] {
-            if resolvedInteractionIds.contains(uuid) { return }
-            // The uuid card already names this approval; the re-send adds nothing.
-            if pendingIndex(for: uuid) != nil { return }
-        }
-        if pendingIndex(for: id) != nil { return }
-        pendingInteractions.append(
-            PendingInteraction(
-                id: id,
-                sessionId: currentSessionId ?? "",
-                podId: podId,
-                podName: "",
-                seq: 0,
-                kind: method,
-                payload: payload,
-                createdAt: ""
-            )
-        )
+    private func closeDialog(_ id: String) {
+        guard openDialogs.contains(where: { $0.id == id }) else { return }
+        openDialogs.removeAll { $0.id == id }
         scrollRevision += 1
-        Task { await reconcilePendingWithServer() }
     }
 
-    /// A durable replayed `extension_ui_request` restores the inline card when
-    /// the live `interaction` frame was missed while detached. Fire-and-forget
-    /// methods (notify, setStatus, …) are never cards.
-    private func restoreInteractionFromEvent(seq: Int, timestamp: Date?, payload: JSONValue) {
-        guard let method = payload["method"]?.stringValue, isDialogMethod(method) else { return }
-        let requestId = SessionStream.payloadRequestId(payload)
-        let id = requestId ?? "event:\(seq)"
-        if resolvedInteractionIds.contains(id) { return }
-        if let requestId, let uuid = uuidByRequestId[requestId] {
-            if resolvedInteractionIds.contains(uuid) { return }
-            if pendingIndex(for: uuid) != nil { return }
-        }
-        if pendingIndex(for: id) != nil { return }
-        // The same approval may already be present under its REST uuid with the
-        // same sequence; keep one card.
-        if seq != 0, pendingInteractions.contains(where: { $0.seq == seq }) { return }
-        pendingInteractions.append(
-            PendingInteraction(
-                id: id,
-                sessionId: currentSessionId ?? "",
-                podId: podId,
-                podName: "",
-                seq: seq,
-                kind: method,
-                payload: payload,
-                createdAt: timestamp.map(Format.iso) ?? ""
-            )
-        )
-        scrollRevision += 1
-        Task { await reconcilePendingWithServer() }
-    }
-
-    private func isDialogMethod(_ method: String) -> Bool {
-        method == "select" || method == "confirm" || method == "input" || method == "editor"
-    }
-
-    /// Seq-ordered fallback for resolutions naming an unlinked uuid: cold
-    /// replays carry no `interaction` frames, and approvals block the turn, so
-    /// in seq order the oldest still-pending card predating the resolution is
-    /// the one it belongs to. Durable cards sort before ephemeral ones.
-    private func removeOldestPendingBefore(_ resolveSeq: Int?) -> [PendingInteraction] {
-        guard !pendingInteractions.isEmpty else { return [] }
-        let ordered = pendingInteractions.sorted {
-            ($0.seq == 0 ? Int.max : $0.seq) < ($1.seq == 0 ? Int.max : $1.seq)
-        }
-        guard let victim = ordered.first(where: {
-            resolveSeq == nil || $0.seq == 0 || $0.seq < resolveSeq!
-        }) else { return [] }
-        pendingInteractions.removeAll { $0.id == victim.id }
-        scrollRevision += 1
-        return [victim]
-    }
-
-    /// Removes every pending card naming `id` in either domain, oldest first.
-    @discardableResult
-    private func removePendingMatching(_ id: String) -> [PendingInteraction] {
-        let group = aliasGroup(id)
-        let removed = pendingInteractions.filter {
-            group.contains($0.id)
-                || SessionStream.payloadRequestId($0.payload).map(group.contains) == true
-        }
-        guard !removed.isEmpty else { return [] }
-        let removedIds = Set(removed.map(\.id))
-        pendingInteractions.removeAll { removedIds.contains($0.id) }
-        scrollRevision += 1
-        return removed
-    }
-
-    private func recordResolved(for id: String) {
-        resolvedInteractionIds.formUnion(aliasGroup(id))
-    }
-
-    public func removeInteraction(_ id: String) -> Bool {
-        guard pendingInteractions.contains(where: { $0.id == id }) else { return false }
-        pendingInteractions.removeAll { $0.id == id }
-        scrollRevision += 1
+    /// Sends the answer and leaves a line in the transcript saying what it was.
+    /// False while disconnected: the card stays, and pi keeps waiting.
+    public func answer(_ dialog: PiDialog, with response: JSONValue) -> Bool {
+        guard isConnected, let socket, socket.uiResponse(response) else { return false }
+        closeDialog(dialog.id)
+        appendStatus(dialog.receipt(for: response))
         return true
-    }
-
-    /// Registers the intended answer BEFORE awaiting the REST resolve, so a
-    /// racing `interaction_resolved` event — which typically arrives before the
-    /// POST returns — can phrase the specific receipt instead of the generic
-    /// fallback. Pair with `markInteractionResolved` or `cancelLocalResolve`.
-    public func beginLocalResolve(_ id: String, response: JSONValue?) {
-        for key in aliasGroup(id) { pendingLocalResolves[key] = response }
-    }
-
-    /// Rolls back `beginLocalResolve` when the REST call fails: the card stays
-    /// and no receipt is emitted.
-    public func cancelLocalResolve(_ id: String) {
-        for key in aliasGroup(id) { pendingLocalResolves.removeValue(forKey: key) }
-        pendingLocalResolves.removeValue(forKey: id)
-    }
-
-    public func markInteractionResolved(
-        _ id: String, deliveryPending: Bool = false, response: JSONValue? = nil
-    ) {
-        let group = aliasGroup(id)
-        // A racing `interaction_resolved` already left the specific receipt via
-        // the beginLocalResolve intent: do not duplicate it.
-        if group.contains(where: receiptedInteractionIds.contains) {
-            _ = removePendingMatching(id)
-            recordResolved(for: id)
-            clearLocalResolves(group: group, id: id, removed: [])
-            if deliveryPending {
-                appendStatus("Response saved — it reaches the agent when the pod reconnects.")
-            }
-            SessionNotifications.postResolved(id: id, response: response)
-            return
-        }
-        let removed = removePendingMatching(id)
-        recordResolved(for: id)
-        if let first = removed.first {
-            receiptedInteractionIds.formUnion(aliasGroup(id))
-            for victim in removed {
-                receiptedInteractionIds.insert(victim.id)
-                if let request = SessionStream.payloadRequestId(victim.payload) {
-                    receiptedInteractionIds.insert(request)
-                }
-            }
-            let receipt = interactionReceiptText(first, response)
-            appendStatus(receipt)
-            persistInteractionReceipt(receiptKeys(group: group, removed: removed), receipt)
-        }
-        clearLocalResolves(group: group, id: id, removed: removed)
-        if deliveryPending {
-            appendStatus("Response saved — it reaches the agent when the pod reconnects.")
-        }
-        SessionNotifications.postResolved(id: id, response: response)
-    }
-
-    private func clearLocalResolves(
-        group: Set<String>, id: String, removed: [PendingInteraction]
-    ) {
-        for key in group { pendingLocalResolves.removeValue(forKey: key) }
-        pendingLocalResolves.removeValue(forKey: id)
-        for victim in removed {
-            for key in aliasGroup(victim.id) { pendingLocalResolves.removeValue(forKey: key) }
-            if let request = SessionStream.payloadRequestId(victim.payload) {
-                pendingLocalResolves.removeValue(forKey: request)
-            }
-        }
-    }
-
-    /// A replayed `interaction_resolved` clears the card and leaves the same
-    /// receipt a local resolve would have. When the card was already removed
-    /// there is nothing to do and no duplicate receipt is emitted.
-    private func resolveInteractionFromEvent(_ payload: JSONValue, seq: Int?) {
-        guard let raw = (payload["interactionId"] ?? payload["id"])?.stringValue, !raw.isEmpty
-        else { return }
-        // The payload names the uuid; the card may sit under the request id.
-        if let requestId = SessionStream.payloadRequestId(payload), requestId != raw {
-            linkAlias(uuid: raw, requestId: requestId)
-        }
-        let group = aliasGroup(raw)
-        // Already handled elsewhere: nothing may be claimed for this uuid,
-        // especially not an unrelated card.
-        let alreadyKnown = resolvedInteractionIds.contains(raw)
-        resolvedInteractionIds.formUnion(group)
-        var removed = removePendingMatching(raw)
-        if removed.isEmpty, alreadyKnown { return }
-        if removed.isEmpty {
-            removed = removeOldestPendingBefore(seq)
-            for victim in removed {
-                resolvedInteractionIds.insert(victim.id)
-                if let request = SessionStream.payloadRequestId(victim.payload) {
-                    resolvedInteractionIds.insert(request)
-                    linkAlias(uuid: raw, requestId: request)
-                }
-            }
-        }
-        guard let first = removed.first else { return }
-        // A local resolve already left its "You confirmed …" receipt; a replay
-        // of that resolution removes any lingering card silently.
-        if group.contains(where: receiptedInteractionIds.contains) { return }
-
-        var localResponse: JSONValue?
-        var hasLocal = false
-        for key in group where pendingLocalResolves.index(forKey: key) != nil {
-            hasLocal = true
-            localResponse = pendingLocalResolves[key] ?? nil
-            break
-        }
-        if !hasLocal {
-            for victim in removed {
-                if pendingLocalResolves.index(forKey: victim.id) != nil {
-                    hasLocal = true
-                    localResponse = pendingLocalResolves[victim.id] ?? nil
-                    break
-                }
-                if let request = SessionStream.payloadRequestId(victim.payload),
-                   pendingLocalResolves.index(forKey: request) != nil {
-                    hasLocal = true
-                    localResponse = pendingLocalResolves[request] ?? nil
-                    break
-                }
-            }
-        }
-
-        if hasLocal {
-            let receipt = interactionReceiptText(first, localResponse)
-            appendStatus(receipt)
-            persistInteractionReceipt(receiptKeys(group: group, removed: removed), receipt)
-        } else if let stored = storedInteractionReceipt(group: group, removed: removed) {
-            // The replayed event carries no answer, only the fact of resolution.
-            // A receipt stored by the earlier resolve restores the specific
-            // wording; otherwise a generic receipt, never a guessed choice.
-            appendStatus(stored)
-        } else {
-            let title = InteractionPresentation(first).title
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            appendStatus(title.isEmpty ? "Resolved." : "Resolved \(title).")
-        }
-
-        receiptedInteractionIds.formUnion(group)
-        for victim in removed {
-            receiptedInteractionIds.insert(victim.id)
-            if let request = SessionStream.payloadRequestId(victim.payload) {
-                receiptedInteractionIds.insert(request)
-            }
-        }
-        clearLocalResolves(group: group, id: raw, removed: removed)
-        scrollRevision += 1
-        SessionNotifications.postResolved(id: raw, response: hasLocal ? localResponse : nil)
-    }
-
-    /// Approvals-tab and notification resolutions while this session is open.
-    /// When the resolver carried the answer, the transcript phrases the same
-    /// specific receipt an inline resolve would have, exactly once. A
-    /// notification without an answer stays silent: the resolver owns the
-    /// single receipt.
-    private func onInteractionResolvedNotification(_ event: InteractionResolvedEvent) {
-        let id = event.id
-        guard let response = event.response else {
-            _ = removePendingMatching(id)
-            recordResolved(for: id)
-            return
-        }
-        let group = aliasGroup(id)
-        if group.contains(where: receiptedInteractionIds.contains)
-            || resolvedInteractionIds.contains(id) {
-            _ = removePendingMatching(id)
-            recordResolved(for: id)
-            return
-        }
-        let removed = removePendingMatching(id)
-        recordResolved(for: id)
-        guard let first = removed.first else { return }
-        receiptedInteractionIds.formUnion(aliasGroup(id))
-        for victim in removed {
-            receiptedInteractionIds.insert(victim.id)
-            if let request = SessionStream.payloadRequestId(victim.payload) {
-                receiptedInteractionIds.insert(request)
-            }
-        }
-        let receipt = interactionReceiptText(first, response)
-        appendStatus(receipt)
-        persistInteractionReceipt(receiptKeys(group: group, removed: removed), receipt)
-        clearLocalResolves(group: group, id: id, removed: removed)
-    }
-
-    /// Best-effort stale detection for approvals a turn left behind: when the
-    /// agent settled after the request without an answer, the row is moot. This
-    /// never marks a turn that is still blocked as stale.
-    public func isInteractionStale(_ interaction: PendingInteraction) -> Bool {
-        interaction.seq > 0 && lastSettledSeq > interaction.seq
-    }
-
-    /// Adopts gateway uuids from a pending listing for restored cards that only
-    /// carry the pi request id. Matches by pod id plus `payload.id`, falling back
-    /// to kind plus title (plus seq when both carry one). Returns how many cards
-    /// adopted a uuid.
-    @discardableResult
-    public func adoptUUIDs(_ rows: [PendingInteraction]) -> Int {
-        let candidates = rows.filter {
-            !$0.id.isEmpty && ($0.podId.isEmpty || $0.podId == podId)
-        }
-        guard !candidates.isEmpty else { return 0 }
-        var adopted = 0
-        for index in pendingInteractions.indices {
-            let local = pendingInteractions[index]
-            if SessionStream.isGatewayUUID(local.id) { continue }
-            if resolvedInteractionIds.contains(local.id) { continue }
-            let localRequest = SessionStream.canonicalRequestId(local)
-            var match: PendingInteraction?
-            if let localRequest {
-                match = candidates.first {
-                    SessionStream.isGatewayUUID($0.id)
-                        && SessionStream.payloadRequestId($0.payload) == localRequest
-                }
-            }
-            if match == nil {
-                let localTitle = SessionStream.interactionTitle(local)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                for row in candidates {
-                    guard SessionStream.isGatewayUUID(row.id) else { continue }
-                    if pendingInteractions.contains(where: { $0.id == row.id }) { continue }
-                    if row.kind != local.kind, row.kind != "extension_ui",
-                       local.kind != "extension_ui" {
-                        continue
-                    }
-                    let rowTitle = SessionStream.interactionTitle(row)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let titlesMatch = !localTitle.isEmpty && rowTitle == localTitle
-                    let seqMatch = local.seq != 0 && row.seq != 0 && row.seq == local.seq
-                    if !titlesMatch, !seqMatch { continue }
-                    // A bare seq match with empty titles is too weak across kinds.
-                    if !titlesMatch, localTitle.isEmpty, rowTitle.isEmpty { continue }
-                    match = row
-                    break
-                }
-            }
-            guard let resolved = match else { continue }
-            let uuid = resolved.id
-            let linkRequest = localRequest
-                ?? SessionStream.payloadRequestId(local.payload) ?? local.id
-            if linkRequest != uuid { linkAlias(uuid: uuid, requestId: linkRequest) }
-            if let localPayloadId = SessionStream.payloadRequestId(local.payload),
-               localPayloadId != uuid {
-                linkAlias(uuid: uuid, requestId: localPayloadId)
-            }
-            if let rowPayloadId = SessionStream.payloadRequestId(resolved.payload),
-               rowPayloadId != uuid {
-                linkAlias(uuid: uuid, requestId: rowPayloadId)
-            }
-            pendingInteractions[index] = PendingInteraction(
-                id: uuid,
-                sessionId: local.sessionId.isEmpty ? resolved.sessionId : local.sessionId,
-                podId: local.podId.isEmpty ? resolved.podId : local.podId,
-                podName: resolved.podName.isEmpty ? local.podName : resolved.podName,
-                seq: resolved.seq != 0 ? resolved.seq : local.seq,
-                kind: local.kind,
-                payload: resolved.payload,
-                createdAt: resolved.createdAt.isEmpty ? local.createdAt : resolved.createdAt
-            )
-            adopted += 1
-        }
-        if adopted > 0 { scrollRevision += 1 }
-        return adopted
-    }
-
-    /// Fetches the server's pending approvals and adopts uuids for restored
-    /// cards. A failure keeps the cards for a retry on the next attach; only a
-    /// submit surfaces an error.
-    public func reconcilePendingWithServer() async {
-        guard let fetcher = pendingInteractionsFetcher, !pendingInteractions.isEmpty else { return }
-        guard pendingInteractions.contains(where: { !SessionStream.isGatewayUUID($0.id) })
-        else { return }
-        if reconcileInFlight {
-            reconcilePending = true
-            return
-        }
-        reconcileInFlight = true
-        do {
-            adoptUUIDs(try await fetcher())
-        } catch {
-            // Keep the cards; the next attach retries. Submits surface errors.
-        }
-        reconcileInFlight = false
-        if reconcilePending {
-            reconcilePending = false
-            if pendingInteractions.contains(where: { !SessionStream.isGatewayUUID($0.id) }) {
-                await reconcilePendingWithServer()
-            }
-        }
-    }
-
-    // MARK: - Receipts
-
-    /// Transcript receipt for a resolved approval, mirroring the "Model switched
-    /// to X." status rows. Secret-looking freeform input is never echoed, and
-    /// long values are truncated to one line.
-    func interactionReceiptText(
-        _ interaction: PendingInteraction, _ response: JSONValue?
-    ) -> String {
-        let presentation = InteractionPresentation(interaction)
-        let title = presentation.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        func withTitle(_ action: String) -> String {
-            title.isEmpty ? "\(action)." : "\(action) \(title)."
-        }
-        let answer = response ?? .object([:])
-        if answer["cancelled"]?.boolValue == true { return withTitle("You cancelled") }
-
-        switch presentation.responseStyle {
-        case .confirmation(let key):
-            let confirmed = answer[key]?.boolValue == true
-            let verb = key == "approved"
-                ? (confirmed ? "You approved" : "You denied")
-                : (confirmed ? "You confirmed" : "You declined")
-            return withTitle(verb)
-
-        case .selection:
-            guard let raw = answer["value"]?.stringValue,
-                  !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return withTitle("You answered") }
-            let choice = receiptTruncate(
-                raw.trimmingCharacters(in: .whitespacesAndNewlines), limit: 80
-            )
-            return title.isEmpty ? "You chose \(choice)." : "You chose \(choice) for \(title)."
-
-        case .input:
-            guard let raw = answer["value"]?.stringValue,
-                  !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return withTitle("You answered") }
-            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Never echo credentials or assignments back into the transcript.
-            if SessionStream.redactingSecrets(value) != value { return withTitle("You answered") }
-            return "You answered \(receiptTruncate(value, limit: 80))."
-
-        case .unsupported:
-            return withTitle("Resolved")
-        }
-    }
-
-    /// Persists the phrased receipt under every id naming the approval so a
-    /// reattach or cold restart replays the same specific wording. Only specific
-    /// receipts are stored; the generic fallback must never overwrite them.
-    private func persistInteractionReceipt(_ ids: Set<String>, _ receipt: String) {
-        guard !receipt.isEmpty else { return }
-        for id in ids { InteractionReceiptStore.writeCached(id, receipt) }
-    }
-
-    /// Every id that may name the resolved approval on a later replay.
-    private func receiptKeys(group: Set<String>, removed: [PendingInteraction]) -> Set<String> {
-        var keys = group
-        for victim in removed {
-            if !victim.id.isEmpty { keys.insert(victim.id) }
-            if let request = SessionStream.payloadRequestId(victim.payload) { keys.insert(request) }
-        }
-        return keys
-    }
-
-    private func storedInteractionReceipt(
-        group: Set<String>, removed: [PendingInteraction]
-    ) -> String? {
-        for id in receiptKeys(group: group, removed: removed) {
-            if let stored = InteractionReceiptStore.readCached(id), !stored.isEmpty {
-                return stored
-            }
-        }
-        return nil
-    }
-
-    private func receiptTruncate(_ value: String, limit: Int) -> String {
-        let singleLine = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard singleLine.count > limit else { return singleLine }
-        return String(singleLine.prefix(limit))
-            .trimmingCharacters(in: .whitespaces) + "…"
     }
 }

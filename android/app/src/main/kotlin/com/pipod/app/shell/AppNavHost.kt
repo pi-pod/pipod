@@ -12,7 +12,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -30,7 +29,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.navArgument
 import com.pipod.app.core.api.model.EnvironmentEditorData
-import com.pipod.app.core.api.model.PendingInteraction
 import com.pipod.app.core.api.model.PlanChangeAccount
 import com.pipod.app.core.api.model.PodTemplate
 import com.pipod.app.core.config.RuntimeConfig
@@ -44,10 +42,6 @@ import com.pipod.app.features.pods.LaunchPodScreen
 import com.pipod.app.features.pods.LaunchPodViewModel
 import com.pipod.app.features.pods.PodDetailScreen
 import com.pipod.app.features.pods.PodDetailViewModel
-import com.pipod.app.features.interactions.ApiInteractionRepository
-import com.pipod.app.features.interactions.InteractionDetailScreen
-import com.pipod.app.features.interactions.InteractionListScreen
-import com.pipod.app.features.interactions.InteractionListViewModel
 import com.pipod.app.features.jobs.ApiJobRepository
 import com.pipod.app.features.jobs.JobDetailScreen
 import com.pipod.app.features.jobs.JobDetailViewModel
@@ -114,14 +108,6 @@ fun AppNavHost(
                 // the same object and wins when it does; on the self-hosted
                 // backend neither arrives and the row never appears.
                 LaunchedEffectOnce(session.billing) { viewModel.setAccountBilling(session.billing) }
-                // Approvals answered inline in a session already refresh the
-                // badge through the store's notifications; a notification
-                // answered on another device, or one raised while the app was
-                // away, only shows up on the way back in.
-                val scope = rememberCoroutineScope()
-                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-                    scope.launch { runCatching { container.session.refreshApprovalsBadge() } }
-                }
                 PodListScreen(
                     viewModel = viewModel,
                     // A pod you can talk to opens its conversation, which links to its
@@ -130,73 +116,8 @@ fun AppNavHost(
                     onOpenPod = { pod ->
                         router.push(if (pod.canOpenSession) Routes.session(pod.id) else Routes.podDetail(pod.id))
                     },
-                    onOpenApprovals = { router.push(Routes.approvals()) },
                     onLaunchNewPod = { router.push(Routes.launch()) },
-                    pendingApprovalsCount = session.pendingApprovalsCount,
                 )
-            }
-        }
-
-        composable(
-            Routes.APPROVALS,
-            arguments = listOf(
-                navArgument("interactionId") { nullable = true; defaultValue = null },
-            ),
-        ) { backStackEntry ->
-            // A notification names one approval. Without the argument the link
-            // opened the inbox and the id was dropped, so the reader had to find
-            // the row the banner had just been holding.
-            val target = backStackEntry.arguments?.getString("interactionId")
-            Tab(container, destination, router, navController) {
-                val repository = remember(container.api) { ApiInteractionRepository(container.api) }
-                // Through `viewModel` rather than `remember`, so leaving the tab
-                // runs onCleared and cancels the notification collectors this
-                // view model subscribes to for its whole life.
-                val viewModel = viewModel(key = "approvals") {
-                    InteractionListViewModel(
-                        repository = repository,
-                        // The tab badge and this list are the same number; letting
-                        // the screen publish it keeps them from disagreeing while
-                        // the list is open.
-                        onPendingCountChanged = container.session::setPendingApprovalsCount,
-                    )
-                }
-                // The detail is a step *inside* this tab rather than a route of its
-                // own, so it receives the interaction the list already holds. As a
-                // route it would carry an id and have to re-fetch a payload the
-                // reader is looking at — and a pending interaction can be resolved
-                // from elsewhere while that fetch is in flight.
-                //
-                // The open row is remembered by id rather than by value so it
-                // survives process death, and re-resolved from the list the view
-                // model reloads — which is also what drops it when the request
-                // was answered while the app was away.
-                var openId by rememberSaveable { mutableStateOf<String?>(null) }
-                var handledTarget by rememberSaveable { mutableStateOf<String?>(null) }
-                val state by viewModel.state.collectAsState()
-                val selected = openId?.let { id -> state.interactions.firstOrNull { it.id == id } }
-
-                // Back steps out of the detail rather than out of the whole tab.
-                BackHandler(enabled = openId != null) { openId = null }
-
-                if (selected == null) {
-                    InteractionListScreen(
-                        viewModel = viewModel,
-                        onOpenInteraction = { openId = it.id },
-                        targetInteractionId = target?.takeIf { it != handledTarget },
-                        onTargetHandled = { handledTarget = it },
-                    )
-                } else {
-                    InteractionDetailScreen(
-                        interaction = selected,
-                        onResolve = { repository.resolve(selected.id, it) },
-                        onBack = { openId = null },
-                        onOpenPod = { podId ->
-                            openId = null
-                            router.push(Routes.session(podId))
-                        },
-                    )
-                }
             }
         }
 
@@ -275,9 +196,6 @@ fun AppNavHost(
                     drafts = container.drafts,
                     fromSeq = fromSeq,
                     sessionId = sessionId,
-                    // So an approval raised by the conversation on screen does
-                    // not also arrive as a notification banner.
-                    push = container.push,
                     onOpenPodDetails = { router.push(Routes.podDetail(it.id)) },
                     onBack = { router.pop() },
                 )
@@ -567,11 +485,9 @@ private fun Tab(
     content: @Composable () -> Unit,
 ) {
     Gate(container) {
-        val session by container.session.state.collectAsState()
         AdaptiveShell(
             destination = destination,
             onSelect = router::selectTab,
-            approvalCount = session.pendingApprovalsCount,
             // Only a tab root has nothing behind it; anywhere deeper, back pops.
             confirmsExit = navController.previousBackStackEntry == null,
         ) { padding ->

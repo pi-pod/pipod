@@ -5,31 +5,21 @@ headless half of the live agent session: the WebSocket transport, the transcript
 reducer, the remote-UI protocol, and the app-wide signed-in state. Nothing here
 imports Compose; a screen observes a `StateFlow` and calls methods.
 
-It is a 1:1 behavioural port of `pi-pod-flutter/lib/core/session/` and
+It is a behavioural port of `pi-pod-flutter/lib/core/session/` and
 `lib/core/credentials/`, with one deliberate protocol fix (see
-[Answering an approval](#answering-an-approval)).
+[Dialogs](#dialogs)).
 
 ## Wiring
 
-Two process-global objects need a one-time install from the application object:
-
 ```kotlin
-// Durable approval receipts survive a cold restart only if this is installed
-// before the first session opens. Without it receipts last one launch.
-InteractionReceiptStore.install(SharedPreferencesReceiptStorage(context))
-
 val store = SessionStore(
     api = ApiClientSessionStoreApi(apiClient),
     storage = SecureSessionTokenStorage(context),
     authenticator = /* the OIDC sign-in flow */,
-    onBadgeChanged = { count -> /* shortcut badge */ },
     scope = applicationScope,
 )
 apiClient.onSessionExpired = store::handleUnauthorized
 ```
-
-`SessionNotifications` is the process-local bus that keeps the approvals list,
-the badge and any open session agreeing. It needs no installation.
 
 Every class that takes a `CoroutineScope` uses it for its own background work and
 **does not cancel a scope you passed in**; a scope it created itself is cancelled
@@ -92,13 +82,8 @@ class SessionStream(
     now: () -> Instant = Instant::now,
     reconnectDelay: (attempt: Int) -> Duration = ::defaultReconnectDelay,  // 1,2,4,…,30s
     scope: CoroutineScope? = null,
-    var pendingInteractionsFetcher: (suspend () -> List<PendingInteraction>)? = null,
 )
 ```
-
-Pass `pendingInteractionsFetcher = { apiClient.interactions().items }`: without
-it, an approval card restored from a replay carries the pi request id and the
-server rejects a resolve posted with it.
 
 ### State
 
@@ -106,7 +91,7 @@ server rejects a resolve posted with it.
 val state: StateFlow<SessionStreamState>
 val snapshot: SessionStreamState          // state.value
 val items: List<StreamItem>               // snapshot.items
-val pendingInteractions: List<PendingInteraction>
+val openDialogs: List<PiDialog>
 val lastSeq: Long
 val sessionId: String?
 val remoteUi: RemoteUiStore
@@ -115,7 +100,7 @@ val remoteUi: RemoteUiStore
 ```kotlin
 data class SessionStreamState(
     val items: List<StreamItem>,
-    val pendingInteractions: List<PendingInteraction>,
+    val openDialogs: List<PiDialog>,
     val availableModels: List<ModelChoice>,
     val availableThinkingLevels: List<String>,
     val isConnected: Boolean,
@@ -244,68 +229,36 @@ adopted.
 picker; the current model sorts first. `ModelChoice` equality is
 provider + model id, never the display name.
 
-### Approvals
+### Dialogs
 
-`pendingInteractions` holds the inline cards. Render one with
-`InteractionPresentation(interaction)`, which yields `title`, `message`,
-`details` (pretty-printed sorted JSON), `placeholder`, `prefill` and a
-`responseStyle`:
+When an extension calls `ctx.ui.confirm`, `select`, `input` or `editor`, pi
+waits until a client answers. The gateway sends the request as an ephemeral
+`extension_ui_request`, live and again on every attach while it is still open,
+and sends `dialog_closed` when some client answers it. `openDialogs` is that set,
+oldest first: each hello clears it, and the re-sent requests rebuild it.
+
+`PiDialog.from(payload)` reads a request into `title`, `message`, `details`
+(pretty-printed sorted JSON), `placeholder`, `prefill` and a `style`:
 
 ```kotlin
-sealed interface InteractionResponseStyle {
-    data class Confirmation(val key: String)   // "confirmed" or "approved"
+sealed interface Style {
+    data object Confirm
     data class Input(val multiline: Boolean)
-    data class Selection(val options: List<String>)
+    data class Select(val options: List<String>)
     data object Unsupported                     // offer details + cancel only
 }
 ```
 
-#### Answering an approval
-
-One approval has two ids: the gateway uuid (`interactionId`, the only id the
-resolve endpoints accept) and the pi request id (`payload["id"]`). A card
-restored from a replay carries the request id until it adopts the uuid.
+Answer with one of the dialog's own builders, so the frame carries
+`type: "extension_ui_response"` and pi's request `id`. pi releases the turn only
+on that frame; anything else is accepted by the gateway and ignored by pi.
 
 ```kotlin
-val target = stream.resolvableIdFor(card.id)
-val answer = buildJsonObject { put("confirmed", true) }   // or "value", or "cancelled"
-stream.beginLocalResolve(target, answer)                  // BEFORE the await
-try {
-    val outcome = apiClient.resolveInteraction(target, answer)
-    stream.markInteractionResolved(target, outcome.isDeliveryPending, answer)
-} catch (error: Throwable) {
-    stream.cancelLocalResolve(target)                     // card stays, no receipt
-}
+stream.answer(dialog, dialog.confirmed(true))   // or dialog.value(text), dialog.cancelled
 ```
 
-`beginLocalResolve` must run before the suspend point: the server's
-`interaction_resolved` fan-out normally beats the POST's own response, and the
-registered intent is what lets the racing event phrase "You confirmed …" instead
-of the generic "Resolved …". Exactly one receipt row is emitted either way.
-
-**Do not build the answer map by hand and post it raw.** The gateway forwards the
-resolution to the agent's `rpc.respondExtensionUi` unchanged and the agent
-releases its prompt only on a frame carrying `type: "extension_ui_response"`.
-`ApiClient.resolveInteraction` adds that key to an object answer, and
-`SessionTransport.resolve` does the same for the socket path. The Flutter client
-omits it: the REST call still returns 200, the card still clears, and the turn
-then hangs until the agent's own 120 s ask timeout. Verified live against the dev
-gateway: with the key, a CONFIRM turn settles ~0.7 s after the answer on both the
-REST and the WebSocket path. A literal JSON `null` and a bare scalar are answers
-in their own right and are sent unchanged.
-
-Other approval methods:
-
-```kotlin
-fun removeInteraction(id: String): Boolean
-fun isInteractionStale(interaction: PendingInteraction): Boolean  // settled past it
-fun adoptUuids(rows: List<PendingInteraction>): Int
-suspend fun reconcilePendingWithServer()
-companion object { fun isGatewayUuid(id: String): Boolean }
-```
-
-`isInteractionStale` is a heuristic: the agent settled after the request without
-an answer, so the row is moot. It never marks a still-blocked turn stale.
+`answer` sends over the socket, removes the card and appends a receipt row such
+as "You confirmed <title>." It returns false while disconnected; the card stays.
 
 ### Tool cards
 
@@ -356,7 +309,7 @@ class SessionSocket(
 
 Implements `SessionTransport`: `connect(ticket)`, `disconnect(notify)`,
 `prompt(text, images)`, `interrupt()`, `requestModels()`,
-`resolve(interactionId, response)`, `uiResponse(response)`,
+`uiResponse(response)`,
 `set(model, thinkingLevel)`, plus `onMessage` / `onDisconnect` callbacks and the
 `isConnected` / `latestSeq` / `sessionId` observables.
 
@@ -382,7 +335,7 @@ SessionStream(
 )
 ```
 
-Decoded frames are `SessionServerMessage.Hello | Event | Ephemeral | Interaction
+Decoded frames are `SessionServerMessage.Hello | Event | Ephemeral | DialogClosed
 | ReplayGap | PodState | PodUpdated | Ended | Models | Pong | Error`. Malformed
 and unknown frames are ignored rather than throwing, so a server that ships a new
 frame kind costs nothing.
@@ -434,7 +387,6 @@ data class SessionStoreState(
     val permissions: List<String>,
     val adminConsoleUrl: String?,       // null when this account may not open it
     val isRestoringSession: Boolean,    // starts true; gate the shell on it
-    val pendingApprovalsCount: Int,
     val pendingDeepLink: Any?,
     val authNotice: String?,            // render verbatim
 )
@@ -446,11 +398,9 @@ data class SessionStoreState(
 | `suspend fun signIn(callback: String? = null)` | Needs a `SessionAuthenticator`. |
 | `suspend fun applyAuthorization(response)` | Persist + `loadMe`. Idempotent per response, because the browser service calls it from inside the attempt that spent the code as well. |
 | `suspend fun signInWithDevToken(token: String)` | Debug bypass; the token is stripped to the JWT alphabet. |
-| `suspend fun signOut()` | Clears locally **first**, then tells the provider best-effort. Zeroes the platform badge, not just the field. |
-| `suspend fun setOrganizationAlias(alias: String)` | Re-authorizes pinned to one org; the approval badge resets with it. |
+| `suspend fun signOut()` | Clears locally **first**, then tells the provider best-effort. |
+| `suspend fun setOrganizationAlias(alias: String)` | Re-authorizes pinned to one org. |
 | `suspend fun loadMe()` | |
-| `suspend fun refreshApprovalsBadge()` | Keeps the last good count on a transient failure. |
-| `fun setPendingApprovalsCount(n)` | For a screen that just fetched. |
 | `fun setPendingDeepLink(destination)` | |
 | `fun handleUnauthorized()` | Wire to `ApiClient.onSessionExpired`. |
 | `fun dispose()` | |

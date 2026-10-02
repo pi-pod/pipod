@@ -38,7 +38,7 @@ export const SESSION_PERSIST_BARRIER_TIMEOUT_MS = 30 * 1000;
 /** The socket replays a bounded tail; REST serves deeper history (spec §9.1). */
 export const MAX_SOCKET_REPLAY = 500;
 /** Pi blocks on one dialog at a time; more than a handful unanswered is already pathological. */
-export const MAX_PENDING_INTERACTION_RESENDS = 16;
+export const MAX_OPEN_DIALOGS = 16;
 
 /** Tool executions whose newest in-flight output is cached per session. A turn fans out across
  * parallel calls, but not unboundedly; the oldest is dropped rather than growing the session. */
@@ -142,8 +142,6 @@ export function sessionEndReasonForRpcInvalidation(
  * interval so a live-but-slow launch is never mistaken for a dead one.
  */
 export const ABANDONED_PROVISION_SECONDS = 180;
-/** How quickly durable mobile work persisted by another role reaches the agent. */
-export const RESOLUTION_POLL_MS = 2 * 1000;
 export const QUEUED_PROMPT_POLL_MS = 2 * 1000;
 export const QUEUED_PROMPT_MAX_ATTEMPTS = 5;
 export const SWEEP_MS = 10 * 1000;

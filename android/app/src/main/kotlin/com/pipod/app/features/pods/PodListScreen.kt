@@ -112,10 +112,8 @@ private val TwoColumnPodBreakpoint: Dp = 1050.dp
 fun PodListScreen(
     viewModel: PodListViewModel,
     onOpenPod: (Pod) -> Unit,
-    onOpenApprovals: () -> Unit,
     onLaunchNewPod: () -> Unit,
     modifier: Modifier = Modifier,
-    pendingApprovalsCount: Int = 0,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -140,12 +138,10 @@ fun PodListScreen(
         onClearFilters = viewModel::clearFilters,
         onShowAllStatuses = viewModel::showAllStatuses,
         onOpenPod = onOpenPod,
-        onOpenApprovals = onOpenApprovals,
         onLaunchNewPod = onLaunchNewPod,
         onCancelWorkstationWait = viewModel::cancelWorkstationWait,
         onRetryWorkstation = viewModel::retryAfterWorkstationWait,
         modifier = modifier,
-        pendingApprovalsCount = pendingApprovalsCount,
         isRefreshing = state.isLoading && state.pods.isNotEmpty(),
     )
 }
@@ -175,12 +171,10 @@ fun PodListScreen(
     onClearFilters: () -> Unit,
     onShowAllStatuses: () -> Unit,
     onOpenPod: (Pod) -> Unit,
-    onOpenApprovals: () -> Unit,
     onLaunchNewPod: () -> Unit,
     onCancelWorkstationWait: () -> Unit = {},
     onRetryWorkstation: () -> Unit = {},
     modifier: Modifier = Modifier,
-    pendingApprovalsCount: Int = 0,
     isRefreshing: Boolean = false,
 ) {
     var showingFilters by rememberSaveable { mutableStateOf(false) }
@@ -293,13 +287,11 @@ fun PodListScreen(
                         state = state,
                         rows = rows,
                         twoColumn = twoColumn,
-                        pendingApprovalsCount = pendingApprovalsCount,
-                        onRefresh = onRefresh,
+                                        onRefresh = onRefresh,
                         onClearFilters = onClearFilters,
                         onShowAllStatuses = onShowAllStatuses,
                         onOpenPod = onOpenPod,
-                        onOpenApprovals = onOpenApprovals,
-                        onLaunchNewPod = onLaunchNewPod,
+                                        onLaunchNewPod = onLaunchNewPod,
                         onCancelWorkstationWait = onCancelWorkstationWait,
                         onRetryWorkstation = onRetryWorkstation,
                     )
@@ -353,12 +345,10 @@ private fun LazyListScope.podListRows(
     state: PodListState,
     rows: PodListRowData,
     twoColumn: Boolean,
-    pendingApprovalsCount: Int,
     onRefresh: () -> Unit,
     onClearFilters: () -> Unit,
     onShowAllStatuses: () -> Unit,
     onOpenPod: (Pod) -> Unit,
-    onOpenApprovals: () -> Unit,
     onLaunchNewPod: () -> Unit,
     onCancelWorkstationWait: () -> Unit,
     onRetryWorkstation: () -> Unit,
@@ -425,26 +415,6 @@ private fun LazyListScope.podListRows(
             )
         }
         return
-    }
-
-    if (pendingApprovalsCount > 0) {
-        item(key = "approvals") {
-            AppListSection(modifier = Modifier.padding(bottom = 8.dp)) {
-                row {
-                    AppListTile(
-                        title = { Text("Waiting for your approval") },
-                        leading = { Icon(AppIcons.approval, contentDescription = null) },
-                        additionalInfo = { AppBadge(count = pendingApprovalsCount) },
-                        onClick = onOpenApprovals,
-                        backgroundColor = appColors.noticeFill,
-                        semanticsLabel = "Open pending approvals, $pendingApprovalsCount pending",
-                        modifier = Modifier
-                            .testTag(PodListTestTags.APPROVALS_ROW)
-                            .semantics(mergeDescendants = true) { },
-                    )
-                }
-            }
-        }
     }
 
     for (index in 0 until state.unsupportedPodCount) {
@@ -917,7 +887,6 @@ object PodListTestTags {
     const val HEADER = "pod-list-header"
     const val FILTER_BUTTON = "pod-list-filter"
     const val FILTER_SHEET = "pod-filter-sheet"
-    const val APPROVALS_ROW = "pod-list-approvals"
     const val DISCLOSE_HIDDEN = "pod-list-disclose-hidden"
 
     fun podRow(id: String) = "pod-row-$id"

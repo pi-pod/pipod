@@ -84,9 +84,7 @@ class MainActivity : ComponentActivity() {
      *
      * Permission can be granted or revoked in system settings while the app is
      * backgrounded, so the answer is only ever as good as the last time it was
-     * asked — and nothing asked unless the settings screen had been opened,
-     * which is why approval banners never appeared for anyone who had not been
-     * there.
+     * asked, and the settings screen shows it.
      */
     override fun onStart() {
         super.onStart()

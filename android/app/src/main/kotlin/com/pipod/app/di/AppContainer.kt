@@ -24,11 +24,10 @@ import com.pipod.app.core.auth.OidcClient
 import com.pipod.app.core.auth.ZitadelAuthService
 import com.pipod.app.core.config.Config
 import com.pipod.app.core.config.RuntimeConfig
-import com.pipod.app.core.push.AndroidLocalNotifier
-import com.pipod.app.core.push.LocalNotifier
+import com.pipod.app.core.push.AndroidNotificationPermission
+import com.pipod.app.core.push.NotificationPermission
 import com.pipod.app.core.push.PushController
 import com.pipod.app.core.session.ApiClientSessionStoreApi
-import com.pipod.app.core.session.InteractionReceiptStore
 import com.pipod.app.core.session.LiveSessionStreams
 import com.pipod.app.core.session.ModelMemory
 import com.pipod.app.core.session.SecureSessionTokenStorage
@@ -36,10 +35,7 @@ import com.pipod.app.core.session.SessionAuthenticator
 import com.pipod.app.core.session.SessionEnvironment
 import com.pipod.app.core.session.SessionSocket
 import com.pipod.app.core.session.SessionTransportFactory
-import com.pipod.app.core.session.SharedPreferencesReceiptStorage
-import com.pipod.app.features.session.InteractionDraftStore
 import com.pipod.app.features.session.SessionDraftStore
-import com.pipod.app.features.session.SharedPreferencesInteractionDraftStorage
 import com.pipod.app.features.session.SharedPreferencesSessionDraftStore
 import com.pipod.app.core.session.SessionKeys
 import com.pipod.app.core.session.SessionStore
@@ -85,9 +81,6 @@ class AppContainer(
         .build()
 
     val tokenStorage = SecureSessionTokenStorage(context)
-
-    /** Per-approval freeform drafts, shared by the inline card and the inbox row. */
-    private val interactionDrafts = SharedPreferencesInteractionDraftStorage(context)
 
     /**
      * The session socket's transport, built on the app's one connection pool.
@@ -172,13 +165,9 @@ class AppContainer(
     }
 
     init {
-        // Approval receipts have to be durable before the first session opens:
-        // installed later, a receipt written by this launch is the only one that
-        // survives, and a card answered just before a restart comes back looking
-        // unanswered. The same is true of approval drafts, which had no
-        // installation at all and so never outlived the process.
-        InteractionReceiptStore.install(SharedPreferencesReceiptStorage(context))
-        InteractionDraftStore.install(interactionDrafts)
+        // Earlier versions kept the answers given to approvals here. Nothing reads
+        // them any more, and they are someone's answers, so they go.
+        runCatching { context.deleteSharedPreferences("interaction-receipts") }
         SessionEnvironment.transportFactory = SessionTransportFactory { podId, fromSeq, fromSession ->
             SessionSocket(
                 podId = podId,
@@ -239,7 +228,7 @@ class AppContainer(
     @Volatile
     var permissionPrompt: (suspend (String) -> Boolean)? = null
 
-    val notifier: LocalNotifier = AndroidLocalNotifier(context)
+    val notificationPermission: NotificationPermission = AndroidNotificationPermission(context)
 
     /** Per-pod composer drafts. Losing typed work is the one thing a composer must not do. */
     val drafts: SessionDraftStore = SharedPreferencesSessionDraftStore(context)
@@ -358,7 +347,7 @@ class AppContainer(
 
     private fun newPushController() = PushController(
         api = api,
-        notifier = notifier,
+        permission = notificationPermission,
         requestPermission = ::requestNotificationPermission,
         openSettings = ::openNotificationSettings,
     )
@@ -367,7 +356,7 @@ class AppContainer(
         // Below API 33 there is no runtime permission to ask for: the manifest
         // one is granted at install, so the only question is whether the user
         // has switched notifications off for the app.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return notifier.isPermitted()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return notificationPermission.isGranted()
         val prompt = permissionPrompt ?: return false
         return prompt(Manifest.permission.POST_NOTIFICATIONS)
     }
@@ -397,16 +386,13 @@ class AppContainer(
             api = ApiClientSessionStoreApi(api),
             storage = tokenStorage,
             authenticator = BrowserSessionAuthenticator(authService),
-            onBadgeChanged = { badge ->
-                appScope.launch { push.onPendingCount(badge.count, badge.byPod) }
-            },
             pendingAuthCallback = { authCallbacks.hasPending },
             scope = appScope,
         )
         api.onSessionExpired = store::handleUnauthorized
         // Signing out has to reach past the credentials. A live gateway socket
         // keeps streaming the conversation of the person who just left, and the
-        // drafts and receipts they typed sit in plain preferences waiting for
+        // drafts they typed sit in plain preferences waiting for
         // whoever signs in next on this device.
         store.onSessionCleared(::clearLocalUserData)
         return store
@@ -416,7 +402,7 @@ class AppContainer(
      * Everything a sign-out has to reach past the credentials.
      *
      * A live gateway socket keeps streaming the conversation of the person who
-     * just left; drafts and receipts sit in plain preferences waiting for
+     * just left; drafts sit in plain preferences waiting for
      * whoever signs in next on this device; and decoded attachment tiles are
      * held process-wide against the attachment's id, which is the one thing the
      * round-one teardown missed.
@@ -424,8 +410,6 @@ class AppContainer(
     internal fun clearLocalUserData() {
         LiveSessionStreams.disposeAll()
         drafts.clearAll()
-        InteractionDraftStore.clearAll()
-        InteractionReceiptStore.clearAll()
         AppThumbnails.clearCache()
     }
 

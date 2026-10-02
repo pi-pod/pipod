@@ -80,7 +80,7 @@ public enum AppColors {
     /// Errors and destructive actions. NOT brand — a legibility-tuned red.
     public static let destructive = StatusTone.danger.color
     public static let destructiveFill = StatusTone.danger.fill
-    /// Attention that is not an error, such as a pending approval.
+    /// Attention that is not an error, such as a question pi is waiting on.
     public static let notice = StatusTone.caution.color
     public static let noticeFill = StatusTone.caution.fill
 
