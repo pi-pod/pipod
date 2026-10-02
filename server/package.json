@@ -34,7 +34,7 @@
     "@fastify/websocket": "^11.0.1",
     "@prometheus-io/client": "^0.16.1",
     "cron-parser": "^5.6.2",
-    "fastify": "^5.2.0",
+    "fastify": "^5.12.5",
     "fastify-type-provider-zod": "^4.0.2",
     "jose": "^5.10.0",
     "pg": "^8.13.1",
