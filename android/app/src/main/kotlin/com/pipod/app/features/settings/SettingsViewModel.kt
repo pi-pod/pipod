@@ -14,7 +14,6 @@ import com.pipod.app.core.api.model.CredentialStatus
 import com.pipod.app.core.api.model.ModelCredentialsResponse
 import com.pipod.app.core.api.model.Organization
 import com.pipod.app.core.api.model.SecretMeta
-import com.pipod.app.core.api.model.SettingsProposal
 import com.pipod.app.core.config.RuntimeConfig
 import com.pipod.app.core.format.FriendlyError
 import com.pipod.app.core.format.SecretName
@@ -123,8 +122,6 @@ data class SettingsState(
     val planChangeWorking: Boolean = false,
     val secrets: List<SecretMeta> = emptyList(),
     val unsupportedSecretCount: Int = 0,
-    val proposals: List<SettingsProposal> = emptyList(),
-    val unsupportedProposalCount: Int = 0,
     val modelCredentials: ModelCredentialsResponse? = null,
     /** Providers with a test or a delete in flight. */
     val credentialActions: Set<String> = emptySet(),
@@ -154,15 +151,6 @@ data class SettingsState(
     val secretStatus: SettingsStatus? = null,
     val organizationStatus: SettingsStatus? = null,
     val adminConsoleStatus: SettingsStatus? = null,
-    /**
-     * Bumped whenever the secret form is opened *for* a name rather than by the
-     * reader tapping Add. A counter rather than a flag: two proposals applied in
-     * a row each have to bring the form back into view, and nothing has to
-     * remember to clear it.
-     */
-    val secretFormFocusRequest: Int = 0,
-    /** The proposal being reviewed in place of the settings list, when there is one. */
-    val openProposal: SettingsProposal? = null,
     val pendingLogin: PendingCredentialLogin? = null,
     /** Providers offered by the connect sheet, when it is up. */
     val providerChoices: List<ConnectableProvider>? = null,
@@ -270,7 +258,6 @@ class SettingsViewModel(
             coroutineScope {
                 listOf(
                     async { refreshSecretsNow() },
-                    async { refreshProposalsNow() },
                     async { refreshModelCredentialsNow() },
                     async { refreshNotificationAuthorizationNow() },
                     async { refreshBillingFlagsNow() },
@@ -282,10 +269,6 @@ class SettingsViewModel(
 
     fun refreshSecrets() {
         viewModelScope.launch { refreshSecretsNow() }
-    }
-
-    fun refreshProposals() {
-        viewModelScope.launch { refreshProposalsNow() }
     }
 
     fun refreshModelCredentials() {
@@ -804,23 +787,6 @@ class SettingsViewModel(
         }
     }
 
-    private suspend fun refreshProposalsNow() {
-        try {
-            val values = repository.proposals()
-            _state.update {
-                it.copy(
-                    proposals = values.items,
-                    unsupportedProposalCount = values.unparsedRows.size,
-                )
-            }
-            clearSectionError(PROPOSALS)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            setSectionError(PROPOSALS, error)
-        }
-    }
-
     private suspend fun refreshModelCredentialsNow() {
         try {
             _state.update { it.copy(modelCredentials = credentials.modelCredentials()) }
@@ -876,24 +842,6 @@ class SettingsViewModel(
 
     fun cancelSecretForm() = _state.update {
         it.copy(secretName = "", secretValue = "", isSecretFormExpanded = false)
-    }
-
-    /**
-     * Opens the form pre-filled, which is what an applied proposal asks for.
-     *
-     * The form is most of a screen below where the reader was, so this also asks
-     * to be scrolled to: a field that silently filled itself off screen is the
-     * same as one that did not fill at all.
-     */
-    fun openSecretForm(name: String) = _state.update {
-        it.copy(
-            secretName = name,
-            secretValue = "",
-            isSecretFormExpanded = true,
-            secretStatus = null,
-            openProposal = null,
-            secretFormFocusRequest = it.secretFormFocusRequest + 1,
-        )
     }
 
     fun saveSecret() {
@@ -1186,12 +1134,6 @@ class SettingsViewModel(
         viewModelScope.launch { account.signOut() }
     }
 
-    // --- proposals ----------------------------------------------------------
-
-    fun openProposal(proposal: SettingsProposal) = _state.update { it.copy(openProposal = proposal) }
-
-    fun closeProposal() = _state.update { it.copy(openProposal = null) }
-
     // --- notifications ------------------------------------------------------
 
     fun requestNotifications() {
@@ -1213,7 +1155,6 @@ class SettingsViewModel(
     companion object {
         const val NOTIFICATIONS = "notifications"
         const val PROVIDERS = "providers"
-        const val PROPOSALS = "proposals"
         const val SECRETS = "secrets"
 
         /** The server's credential states, in the words the reader sees. */

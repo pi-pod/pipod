@@ -5,15 +5,24 @@ import { PI_THINKING_LEVELS, validateConfig } from "../../core/config.js";
 import { supportedProviders } from "../../core/providers/registry.js";
 import { requirePermission } from "../auth/plugin.js";
 import { audit } from "../audit.js";
+import { query } from "../db/index.js";
 import type { ServerEnv } from "../env.js";
 import { forbidden } from "../httperrors.js";
 import { IdentityId } from "../ids.js";
 import { admittedSandboxMemoryGB } from "../pods/capacity.js";
-import { NESTED_PODS_DEFAULTS } from "../pods/lineage.js";
+import { NESTED_PODS_DEFAULTS, parentDelegation } from "../pods/lineage.js";
 import { deploymentResourceMaximums } from "../pods/planning.js";
-import { clientFacingConfig, MAX_INIT_SCRIPT_BYTES, readLayer, writeLayer } from "./merge.js";
+import { getPod } from "../pods/store.js";
+import { findTemplate } from "../templates/store.js";
+import {
+  clientFacingConfig,
+  MAX_INIT_SCRIPT_BYTES,
+  readLayer,
+  stripRetiredConfigKeys,
+  writeLayer,
+  type SettingsLayerRow,
+} from "./merge.js";
 import { PiSettingsFilesSchema } from "./pi-settings.js";
-import { registerSettingsProposalRoutes } from "./proposals.js";
 
 const PutBody = z.object({
   config: z.record(z.unknown()),
@@ -38,7 +47,8 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       path,
       {
         preHandler: [app.authenticate],
-        // Org defaults are visible in pods so agents can prepare an org-scoped proposal.
+        // Pods read org defaults through /settings/layers; this older path stays readable for
+        // agents whose skill predates it. Policy stays out of pods' reach.
         ...(scopeType === "org_defaults" ? { config: { allowPodToken: true } } : {}),
         schema: { params: z.object({ id: IdentityId }) },
       },
@@ -118,7 +128,40 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     },
   );
 
-  registerSettingsProposalRoutes(app);
+  /**
+   * The layers a launch builds on, read-only: org defaults, the caller's own user layer, and
+   * for a pod token the template that pod launched from, as stored now. This is how the agent
+   * in a pod sees what it runs with; pods never write the org or user layers, whose scripts
+   * run in every later launch, so the agent hands the change to its person instead. A pod
+   * launched without its owner's bundle (an org-scoped job, and pods it launches) gets no user
+   * layer, just as it gets none of their personal templates. `template` is null when the pod
+   * launched without one or it has since been deleted.
+   */
+  r.get("/settings/layers", { preHandler: [app.authenticate], config: { allowPodToken: true } }, async (req) => {
+    const { orgId, userId, podId } = req.auth;
+    const [delegation, pod] = podId
+      ? await Promise.all([parentDelegation({ query }, { orgId, parentPodId: podId }), getPod(orgId, podId)])
+      : [null, null];
+    const [org, user, template] = await Promise.all([
+      readLayer("org_defaults", orgId, orgId),
+      delegation?.includeUserBundle === false ? null : readLayer("user_defaults", userId, orgId),
+      pod?.template_id ? findTemplate(orgId, pod.template_id, userId) : null,
+    ]);
+    return {
+      org,
+      user,
+      template: template && {
+        id: template.id,
+        name: template.name,
+        scope: template.owner_user_id ? ("user" as const) : ("org" as const),
+        version: template.version,
+        config: stripRetiredConfigKeys(template.config) as Record<string, unknown>,
+        initScript: template.init_script ?? "",
+        bakeScript: template.bake_script ?? "",
+        piFiles: template.pi_settings,
+      } satisfies SettingsLayerRow & { id: string; name: string; scope: "user" | "org" },
+    };
+  });
 }
 
 /**

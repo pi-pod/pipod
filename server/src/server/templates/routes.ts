@@ -68,7 +68,6 @@ function toApi(row: TemplateRow) {
   };
 }
 
-/** Pod tokens may only touch templates they created; users need templates:write. */
 /**
  * An org template is code every member's launch runs (scripts, Pi packages loaded on their
  * workstations, init steps inside org jobs that carry their creators' model credentials),

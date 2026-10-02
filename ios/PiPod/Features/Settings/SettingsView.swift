@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The workspace hub: who you are, proposed settings changes, and the way in to
-/// everything that configures a pod.
+/// The workspace hub: who you are and the way in to everything that configures
+/// a pod.
 ///
 /// The Flutter build inlined every editor into one long scroll. Here each editor
 /// is its own pushed screen, so the hub stays a map rather than a wall.
@@ -12,11 +12,6 @@ public struct SettingsView: View {
     @Environment(\.apiClient) private var api
     @Environment(\.openURL) private var openURL
 
-    @State private var proposals: [SettingsProposal] = []
-    @State private var unparsedProposalCount = 0
-    /// Loads run concurrently and fail independently: each section keeps its own
-    /// error so one outage cannot hide or clear another's.
-    @State private var sectionErrors: [String: String] = [:]
     @State private var organizationAlias = ""
     @State private var didSeedAlias = false
     @State private var isSwitchingOrganization = false
@@ -35,7 +30,6 @@ public struct SettingsView: View {
 
     public var body: some View {
         List {
-            proposalsSection
             accountSection
             launchSection
             defaultsSection
@@ -61,13 +55,9 @@ public struct SettingsView: View {
         }
         .refreshable { await loadAll() }
         .onChange(of: router.settingsPath) { _, path in
-            // A proposal applied or rejected one level deeper changes this list,
-            // and a confirmed plan change rewrites the pending truth.
+            // A confirmed plan change one level deeper rewrites the pending truth.
             guard path.isEmpty else { return }
-            Task {
-                await loadProposals()
-                await loadBillingFlags()
-            }
+            Task { await loadBillingFlags() }
         }
         .confirmationDialog(
             "Sign out of pi pod?",
@@ -86,64 +76,6 @@ public struct SettingsView: View {
                 out would sign straight back in. Use a release build to switch accounts.
                 """
             )
-        }
-    }
-
-    // MARK: - Proposals
-
-    @ViewBuilder
-    private var proposalsSection: some View {
-        if let error = sectionErrors["proposals"] {
-            Section {
-                SectionErrorView(message: error, retryLabel: "Retry loading proposals") {
-                    await loadProposals()
-                }
-            }
-        }
-        if !proposals.isEmpty || unparsedProposalCount > 0 {
-            Section {
-                UnparsedRowsNotice(count: unparsedProposalCount, resourceName: "approval")
-                ForEach(proposals) { proposal in
-                    Button {
-                        router.settingsPath.append(.proposals)
-                    } label: {
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Change to \(proposal.scopeLabel)")
-                                    .foregroundStyle(AppColors.label)
-                                if let note = proposal.note, !note.isEmpty {
-                                    Text(note)
-                                        .font(.subheadline)
-                                        .foregroundStyle(AppColors.secondaryLabel)
-                                        .lineLimit(2)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            StatusChip("Needs review", tone: .caution)
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(AppColors.tertiaryLabel)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(
-                        "Proposed change to \(proposal.scopeLabel), needs approval"
-                    )
-                    .accessibilityIdentifier("Open proposal \(proposal.id)")
-                    .accessibilityAddTraits(.isButton)
-                }
-            } header: {
-                Text("Waiting for your approval")
-            } footer: {
-                Text(
-                    """
-                    An agent drafted these from inside a pod. Nothing changes until you \
-                    apply them here.
-                    """
-                )
-            }
         }
     }
 
@@ -334,12 +266,7 @@ public struct SettingsView: View {
                     )
                 }
             } footer: {
-                Text(
-                    """
-                    Applied under every environment for everyone in your organization. \
-                    Agents can propose changes here from inside a pod.
-                    """
-                )
+                Text("Applied under every environment for everyone in your organization.")
             }
         }
         if let user = session.user {
@@ -469,7 +396,6 @@ public struct SettingsView: View {
     }
 
     private func loadAll() async {
-        await loadProposals()
         await loadBillingFlags()
         await push.refreshAuthorization()
     }
@@ -528,21 +454,6 @@ public struct SettingsView: View {
             openURL(url)
         } catch {
             billingStatus = .failure(FriendlyError.message(error, serverHost: Config.serverURL.absoluteString))
-        }
-    }
-
-    private func loadProposals() async {
-        guard session.user != nil else { return }
-        do {
-            let decoded = try await api.settingsProposals()
-            proposals = decoded.items
-            unparsedProposalCount = decoded.unparsedRows.count
-            sectionErrors["proposals"] = nil
-        } catch {
-            sectionErrors["proposals"] = """
-                Some settings could not be loaded: \
-                \(FriendlyError.message(error, serverHost: Config.serverURL.absoluteString))
-                """
         }
     }
 

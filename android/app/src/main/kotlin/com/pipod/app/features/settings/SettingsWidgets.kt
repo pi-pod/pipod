@@ -32,12 +32,11 @@ import com.pipod.app.ui.theme.appColors
 
 /**
  * The pieces every settings surface is assembled from, ported from the private
- * widgets at the bottom of `pi-pod-flutter/lib/features/settings/settings_view.dart`
- * and `settings_proposals_view.dart`.
+ * widgets at the bottom of `pi-pod-flutter/lib/features/settings/settings_view.dart`.
  *
- * They live in one file because the settings screen, the proposal detail and
- * the config-bundle editor all draw the same card, the same "label, value" row
- * and the same status line, and three copies would drift.
+ * They live in one file because the settings screen and the config-bundle
+ * editor both draw the same card, the same "label, value" row and the same
+ * status line, and two copies would drift.
  */
 
 /** Something that just happened, phrased for the reader. */

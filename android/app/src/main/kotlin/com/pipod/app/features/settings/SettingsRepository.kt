@@ -4,7 +4,6 @@ import com.pipod.app.core.api.ApiClient
 import com.pipod.app.core.api.model.DecodedList
 import com.pipod.app.core.api.model.SecretMeta
 import com.pipod.app.core.api.model.SettingsLayer
-import com.pipod.app.core.api.model.SettingsProposal
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -17,20 +16,6 @@ import kotlinx.serialization.json.JsonObject
  * the server refuse a write that would overwrite somebody else's edit.
  */
 interface SettingsRepository {
-
-    /**
-     * The layer a proposal wants to change, so the detail screen can show
-     * current beside proposed. A scope this build does not understand throws
-     * rather than guessing which layer was meant.
-     */
-    suspend fun currentSettings(proposal: SettingsProposal): SettingsLayer
-
-    suspend fun proposals(): DecodedList<SettingsProposal>
-
-    /** Returns the secret names the applied proposal now expects values for. */
-    suspend fun applyProposal(id: String): List<String>
-
-    suspend fun rejectProposal(id: String)
 
     suspend fun secrets(userId: String): DecodedList<SecretMeta>
 
@@ -62,19 +47,6 @@ interface SettingsRepository {
 }
 
 class ApiSettingsRepository(private val api: ApiClient) : SettingsRepository {
-
-    override suspend fun currentSettings(proposal: SettingsProposal): SettingsLayer {
-        if (proposal.scope != ORG_DEFAULTS_SCOPE) {
-            throw UnsupportedOperationException("Unsupported proposal scope ${proposal.scope}")
-        }
-        return api.orgSettings(proposal.scopeId)
-    }
-
-    override suspend fun proposals(): DecodedList<SettingsProposal> = api.settingsProposals()
-
-    override suspend fun applyProposal(id: String): List<String> = api.applyProposal(id)
-
-    override suspend fun rejectProposal(id: String) = api.rejectProposal(id)
 
     override suspend fun secrets(userId: String): DecodedList<SecretMeta> =
         api.secrets(scope = SECRET_SCOPE, scopeId = userId)
@@ -119,6 +91,5 @@ class ApiSettingsRepository(private val api: ApiClient) : SettingsRepository {
 
     private companion object {
         const val SECRET_SCOPE = "user"
-        const val ORG_DEFAULTS_SCOPE = "org_defaults"
     }
 }

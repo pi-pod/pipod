@@ -32,10 +32,21 @@ Resolve responses report `configProvenance` (winning layer per leaf),
 ## Secrets are not bundle content
 
 Bundles carry no secret values. Pod secrets resolve from the `secrets` table
-(org / template / user scopes) at launch; proposals carry `secretNames` only,
-and the apply response returns those names so the app can prompt for values
-the proposing agent could not set. Model credentials in `piFiles.models.json`
-must be `$VAR` references — literals are stripped on write.
+(org / template / user scopes) at launch. Model credentials in
+`piFiles.models.json` must be `$VAR` references — literals are stripped on
+write.
+
+## Who reads and writes which layer
+
+People write layers with their own sign-in: org defaults need `org:manage`,
+policy `policy:write`, the user bundle is its owner's, and org templates need
+`org:manage`. A pod token writes only personal templates that pod created.
+
+`GET /v1/settings/layers` is the read side for an agent in a pod: org
+defaults, the launching user's bundle, and the pod's template as stored now.
+A pod launched without its owner's bundle (an org-scoped job and its child
+pods) gets `user: null`, as it gets none of their personal templates. Policy
+is not readable from a pod; `POST /v1/pods/resolve` reports its clamps.
 
 ## Retired keys
 
@@ -62,6 +73,4 @@ Live and enforced — do not remove: `workdir`, `labels`, `initOnFailure`,
   only. Rows stored before the removal keep serving flattened (read-time
   migration); they normalize on next write.
 - **Retired config keys**: delete them from the payload and retry — the server
-  ignores them, so dropping them changes nothing it does. Pending settings
-  proposals authored before a removal list stripped and apply their live
-  content.
+  ignores them, so dropping them changes nothing it does.

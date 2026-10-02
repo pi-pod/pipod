@@ -27,9 +27,9 @@ created from a **pod template** — a named bundle of:
 
 A **session** is a pi agent session (like this one) inside a pod. This pod was launched from
 one template; the user can ask you to create a *new* template so their next pod comes up
-pre-configured. Templates are **personal to the user by default** — only they see and launch
-them. Pass \`"scope": "org"\` at creation, or PATCH \`{ "scope": "org" }\` later, only when the
-user explicitly wants the template shared org-wide (org scope is one-way).
+pre-configured. Templates you create are **personal to the user** — only they see and launch
+them. Sharing one org-wide is the user's step, not yours: \`pipod templates share <name>\`
+(it needs the org:manage permission and cannot be undone).
 
 ## Your credentials
 
@@ -45,11 +45,13 @@ The token is deliberately limited. It can:
 - create templates (they go **live immediately**) and scheduled jobs (they also go **live immediately**),
 - read templates/jobs and update or delete **templates this pod created**,
 - write (never read) secret *values* into templates this pod created, and list which names are set,
-- read the organization's **default settings layer**, and **propose** changes to it,
+- read every **settings layer** behind this pod — organization defaults, the user's own
+  layer, and this pod's template (see "Server settings bundles" below),
 - **launch child pods** and manage them — see "Child pods" below.
 
-It cannot modify another pod's templates, apply settings proposals, touch pods it did
-not launch, update/pause/resume/delete jobs, upload a pi sign-in, or touch org/user secrets.
+It cannot modify another pod's templates, create or change org-wide templates, write the
+organization or user settings layers, read organization policy, touch pods it did not launch,
+update/pause/resume/delete jobs, upload a pi sign-in, or touch org/user secrets.
 Creating a job schedules it immediately, so confirm the schedule, model, and prompt with the user
 before POSTing.
 
@@ -59,8 +61,10 @@ Prefer referencing secrets by NAME and letting the user enter values in the app:
 transcripts are persisted and replayed, so a value pasted into chat is a value on a server.
 If the user chooses to paste a value anyway, store it immediately with the API below and do
 not repeat it back. This applies to every kind of key alike — model providers, scrapers, git
-hosts; nothing is special-cased by name. If a pod is missing a shared key it needs, propose the
-NAME via \`secretNames\` on an organization-default settings proposal.
+hosts; nothing is special-cased by name. If a pod is missing a key you cannot set yourself,
+tell the user its NAME and where it belongs — \`pipod secrets set org <NAME>\` for a key the
+whole organization shares, \`pipod secrets set user <NAME>\` for their own — or the same
+secret screen in the app.
 
 ## API quick reference (all JSON, all under \`$PI_POD_SERVER_URL/v1\`)
 
@@ -275,26 +279,29 @@ retired launch inputs; push them to a template or server bundle instead. Organiz
 the resolved result, and \`requireTemplate\` can require a selected template. Explicit
 provider/model/thinking launch controls remain available.
 
-Read the current organization layer:
+Read the layers behind this pod — organization defaults, the user's own layer, and the
+template this pod launched from as it is stored now (an edit since launch shows up here and
+applies from the next launch):
 
-    curl -sS "$PI_POD_SERVER_URL/v1/orgs/<orgId>/settings" -H "Authorization: Bearer $PI_POD_SERVER_TOKEN"
+    curl -sS "$PI_POD_SERVER_URL/v1/settings/layers" -H "Authorization: Bearer $PI_POD_SERVER_TOKEN"
 
-Propose an organization-default change. \`config\`, \`initScript\`, and \`bakeScript\`
-replace the layer's current values when applied, so send the full intended result, not a
-diff. \`secretNames\` suggests names for an administrator to fill in — never send values:
+Each of \`org\`, \`user\`, and \`template\` carries \`config\`, \`initScript\`, \`bakeScript\`,
+\`piFiles\`, and \`version\`. \`user\` is null in a pod launched without its owner's personal
+settings (an organization job, and pods it launches); \`template\` is null when this pod
+launched without one or it has since been deleted. Organization policy is not readable from a
+pod; \`POST /v1/pods/resolve\` (above) reports every clamp it applies.
 
-    curl -sS -X POST "$PI_POD_SERVER_URL/v1/settings/proposals" \\
-      -H "Authorization: Bearer $PI_POD_SERVER_TOKEN" -H "Content-Type: application/json" \\
-      -d '{
-        "scope": "org_defaults",
-        "initScript": "#!/usr/bin/env bash\\ngit config --global user.name \\"Ada\\"\\n",
-        "secretNames": ["GH_TOKEN"],
-        "note": "Sets the organization git identity and requests a GitHub token."
-      }'
+The organization and user layers are **read-only** to you: their scripts run in every later
+pod, so changing them is the user's act. When one should change, show the user the exact edit
+and how to make it with their own sign-in:
 
-Check what happened to your proposals (an organization administrator applies or rejects them):
+- one config key — \`pipod settings user set <key> '<json>'\` (or \`org\`, which needs the
+  org:manage permission), for example \`pipod settings user set pi.model '"provider/model"'\`;
+- scripts or Pi files — \`pipod pull user\` (or \`org\`), edit the local files, then
+  \`pipod push user\` (or \`org\`);
+- or the settings screens of the pi pod app, or of the web dashboard on a self-hosted server.
 
-    curl -sS "$PI_POD_SERVER_URL/v1/settings/proposals?status=all" -H "Authorization: Bearer $PI_POD_SERVER_TOKEN"
+A template this pod created you can change yourself (see "Update a template" above).
 
 ## Jobs (scheduled prompts)
 

@@ -520,26 +520,6 @@ public final class APIClient: @unchecked Sendable {
         return version
     }
 
-    public func settingsProposals(status: String = "pending") async throws -> DecodedList<SettingsProposal> {
-        try decodeListRows(
-            json: try await request("GET", "settings/proposals", query: ["status": status]),
-            key: "proposals", resourceName: "settings proposal"
-        )
-    }
-
-    public func applyProposal(id: String) async throws -> [String] {
-        let data = try await request(
-            "POST", "settings/proposals/\(escaped(id))/apply", body: .object([:])
-        )
-        return data["secretNames"]?.arrayValue?.compactMap(\.stringValue) ?? []
-    }
-
-    public func rejectProposal(id: String) async throws {
-        _ = try await request(
-            "POST", "settings/proposals/\(escaped(id))/reject", body: .object([:])
-        )
-    }
-
     // MARK: - Secrets
 
     public func secrets(scope: String, scopeId: String) async throws -> DecodedList<SecretMeta> {

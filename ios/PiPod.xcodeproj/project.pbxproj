@@ -38,7 +38,6 @@
 		369729E4AFF1FD7B10F7FD5F /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 633C8B27D641CDEE27EBD02D /* ModelCatalog.swift */; };
 		3848A54D3CD68F4BDEA0DE56 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 835AE2721576115E6F5D956B /* SignInView.swift */; };
 		38CF1EB1D93A284C101F06F9 /* Billing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7D63069D94C263C3834E71 /* Billing.swift */; };
-		398859A3F104D51C1EED3392 /* SettingsProposalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E40305FDE8E650D55F02AFCC /* SettingsProposalsView.swift */; };
 		3F9CA255044E3B79C89D7D55 /* PodListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F58108D08FAB381A9507CC3 /* PodListView.swift */; };
 		431FAACF630694612BFE87E1 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13C65930826A65A29A39235F /* Settings.swift */; };
 		44032CD18B42AC46355167A3 /* SessionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB1ED62F9119F4E38EF32F0 /* SessionModels.swift */; };
@@ -220,7 +219,6 @@
 		D8F4AAF1610F5DBF066EB59D /* ComposerBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerBar.swift; sourceTree = "<group>"; };
 		DC453FFC46C65300659A54A6 /* WorkstationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkstationViews.swift; sourceTree = "<group>"; };
 		E3CB2CDF2DC13A62E0FE5C66 /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
-		E40305FDE8E650D55F02AFCC /* SettingsProposalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsProposalsView.swift; sourceTree = "<group>"; };
 		EB9214F3F698284A0F86ACF8 /* LaunchRecoveryFakeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchRecoveryFakeUITests.swift; sourceTree = "<group>"; };
 		EC4BB9DE233215B8B9B1B103 /* AuthSystemBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthSystemBoundaryTests.swift; sourceTree = "<group>"; };
 		EDF532DD09727474988BC836 /* MarkdownBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlock.swift; sourceTree = "<group>"; };
@@ -435,7 +433,6 @@
 				0CF53CBD06B798730E36C7A8 /* FormControls.swift */,
 				66D22B2C3BD520207B86FF4F /* PlanChangeView.swift */,
 				234E855D548FF5DD3F58B683 /* SecretsView.swift */,
-				E40305FDE8E650D55F02AFCC /* SettingsProposalsView.swift */,
 				F09D79060E7B657927AB3F0A /* SettingsView.swift */,
 			);
 			path = Settings;
@@ -725,7 +722,6 @@
 				563F315452D7ABD629FA78F7 /* SessionStreamRegistry.swift in Sources */,
 				F953A4D784AABCA625BDB428 /* SessionView.swift in Sources */,
 				431FAACF630694612BFE87E1 /* Settings.swift in Sources */,
-				398859A3F104D51C1EED3392 /* SettingsProposalsView.swift in Sources */,
 				6353F63817D09B9E851050E3 /* SettingsView.swift in Sources */,
 				3848A54D3CD68F4BDEA0DE56 /* SignInView.swift in Sources */,
 				EB70787CB5C2B3F6B25FEF69 /* StatusTone.swift in Sources */,
