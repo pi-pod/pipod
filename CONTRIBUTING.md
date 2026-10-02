@@ -3,9 +3,15 @@
 ## Before you start
 
 The hosted service at pipod.dev is built on this code, so every contribution has to be licensed
-to us under terms that let us use it there as well as under the AGPL. That takes a contributor
-license agreement. **The agreement is not published yet, and until it is we cannot merge pull
-requests from outside the maintainers.** Issues and discussion are welcome now.
+to us under terms that let us use it there as well as under the AGPL. That takes the
+[contributor license agreement](CLA.md): you keep your copyright and grant Billzo, LLC a broad
+license to your contributions. Sign it once by commenting on your first pull request:
+
+> I have read the CLA Document and I hereby sign the CLA
+
+The `cla` check on the pull request tells you whether every commit author has signed, and we
+cannot merge until it passes. Every commit must be authored with an email linked to a GitHub
+account.
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md) instead of opening an issue.
 
