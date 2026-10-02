@@ -27,6 +27,7 @@ export const CALLBACK_PATH = "/dashboard/callback";
  * @property {string} tokenEndpoint
  * @property {string | undefined} endSessionEndpoint
  * @property {string | undefined} revocationEndpoint
+ * @property {string | undefined} serverUrl the non-loopback address sign-in may return to
  */
 
 /**
@@ -80,7 +81,26 @@ async function discover() {
     tokenEndpoint: meta.token_endpoint,
     endSessionEndpoint: meta.end_session_endpoint,
     revocationEndpoint: meta.revocation_endpoint,
+    serverUrl: config.serverUrl,
   };
+}
+
+/**
+ * Why Zitadel would refuse to send a sign-in back to this page, or null when it will. It returns
+ * one only to an address registered for the app: loopback on any port, or SERVER_URL. Refused,
+ * it shows its own error page and never comes back here, so the check has to happen first.
+ * @param {string | undefined} serverUrl
+ */
+function redirectProblem(serverUrl) {
+  const host = location.hostname;
+  if (host === "localhost" || host === "[::1]" || /^127\./.test(host) || location.origin === serverUrl) return null;
+  if (location.protocol !== "https:") {
+    return `sign-in can return to this page only over HTTPS or on 127.0.0.1, and it is open at ${location.origin}. ` +
+      "Open http://127.0.0.1:8080/dashboard/ (through an SSH tunnel from another machine), or serve the server over HTTPS " +
+      '(self-host guide, "Going public").';
+  }
+  return `sign-in returns only to ${serverUrl ?? "127.0.0.1"}, and this page is open at ${location.origin}. ` +
+    `On the server, set SERVER_URL=${location.origin} in selfhost/.env and run selfhost/upgrade --apply-zitadel.`;
 }
 
 /** @param {Uint8Array} bytes */
@@ -145,6 +165,8 @@ export function signedIn() {
 /** Leaves for the identity provider; the page comes back at the callback with a code. */
 export async function signIn() {
   const p = await provider();
+  const problem = redirectProblem(p.serverUrl);
+  if (problem) throw new SignInError(problem);
   const verifier = randomToken();
   const pending = { verifier, state: randomToken(), nonce: randomToken(), returnTo: location.hash };
   sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));

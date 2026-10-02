@@ -206,7 +206,9 @@ migration it needs. In order, `upgrade`:
    about any drift without changing anything.
 
 An install from before the dashboard has no `pipod-dashboard` app in Zitadel yet, so the first
-upgrade past it warns about drift. Run `selfhost/upgrade --apply-zitadel` once to create it.
+upgrade past it warns about drift. Run `selfhost/upgrade --apply-zitadel` once to create it. If
+you have [gone public](#going-public), set `SERVER_URL` in `.env` first: the dashboard signs in
+back to that address, and Zitadel refuses any address it was not given.
 
 Then update the CLI and check the result:
 
@@ -540,5 +542,5 @@ brings your existing pods' workspaces up under the new sandbox.
 | Pods die after a few minutes idle | The sandbox's `PI_POD_SANDBOX_API_HOST` does not match its bridge gateway. |
 | A pod cannot reach something on your network (a git host, a `PUBLIC_URL` on a LAN address) | Pods are kept off private, shared and reserved addresses whatever their egress mode. List what they need in `PI_POD_SANDBOX_PRIVATE_EGRESS` in `.env`, then `selfhost/upgrade`. |
 | The dashboard says *"this server has no dashboard sign-in configured"* | The install predates the dashboard: `selfhost/upgrade --apply-zitadel`. |
-| Zitadel answers the dashboard's sign-in with *"redirect_uri is missing in the client configuration"* | The browser reaches the server at an address other than `SERVER_URL` or loopback. Set `SERVER_URL` to it and run `selfhost/upgrade --apply-zitadel`. |
+| Zitadel answers the dashboard's sign-in with *"redirect_uri is missing in the client configuration"*, or the dashboard says sign-in *"returns only to …"* | The browser reaches the server at an address other than `SERVER_URL` or loopback — usually a public install whose `SERVER_URL` is unset. Set `SERVER_URL` to the address in the browser (`https://api.example.com`) and run `selfhost/upgrade --apply-zitadel`. A plain-HTTP address other than loopback cannot work: Zitadel returns sign-ins over HTTP only to loopback. |
 | Browser calls blocked by CORS | `WEB_ORIGINS` is empty, or lists a URL with a path or trailing slash instead of a bare origin. |

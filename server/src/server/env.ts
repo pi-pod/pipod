@@ -22,6 +22,35 @@ const ZitadelIssuerSchema = z
   })
   .transform((value) => value.replace(/\/+$/, ""));
 
+/**
+ * An origin people reach this server at. Like the identity provider, anything but loopback
+ * must be HTTPS: Zitadel returns a browser sign-in over plain HTTP only to loopback.
+ */
+const ServerOriginSchema = z
+  .string()
+  .optional()
+  .transform((value, ctx) => {
+    const raw = value?.trim();
+    if (!raw) return undefined;
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must be a URL such as https://api.example.com" });
+      return z.NEVER;
+    }
+    const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must use HTTPS except for loopback" });
+      return z.NEVER;
+    }
+    if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "must be an origin, without a path, query, or credentials" });
+      return z.NEVER;
+    }
+    return url.origin;
+  });
+
 const SandboxServiceUrlSchema = z
   .string()
   .url()
@@ -271,6 +300,13 @@ export const serverEnvShape = {
     /** Best-effort platform image warmup on worker startup; launch-time building remains authoritative. */
     IMAGE_PREWARM_ENABLED: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
 
+    /**
+     * Where people reach this server, e.g. `https://api.example.com`: the address the dashboard
+     * signs in back to. It must be the same origin the Zitadel reconciler registered for the
+     * `pipod-dashboard` app (its PIPOD_SERVER_URL). Loopback is always registered, so a server
+     * used only through 127.0.0.1 leaves it unset.
+     */
+    SERVER_URL: ServerOriginSchema,
     /** Public base URL of this server, injected into pods as PI_POD_SERVER_URL (§8.5). */
     PUBLIC_URL: z.string().url().optional(),
     /** Browser origins allowed to call /v1, comma-separated. Empty disables CORS entirely,
