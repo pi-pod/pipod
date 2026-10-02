@@ -75,6 +75,15 @@ way back in for someone who forgot theirs, since a fresh instance cannot send em
 pipod login --server http://127.0.0.1:8080
 ```
 
+That builds the CLI from this checkout, so it always matches the server. On a machine without
+the checkout, install the published release from npm instead — it needs Node 22.19 or later:
+
+```bash
+npm install -g @pipod/cli
+```
+
+A CLI newer than the server is refused with a message saying so; upgrade the server first.
+
 `pipod login` asks the server where to sign in, opens your browser, and waits for it. A
 server has no browser to open, so the CLI prints the URL instead — and whatever browser you
 use has to reach *both* Zitadel and the CLI's sign-in redirect as `127.0.0.1`. Forward them
@@ -173,10 +182,10 @@ migration it needs. In order, `upgrade`:
 7. compares Zitadel's `pipod` project with the release's roles and apps, and warns
    about any drift without changing anything.
 
-Then rebuild the CLI from the same checkout and check the result:
+Then update the CLI and check the result:
 
 ```bash
-pipod update    # rebuilds the CLI here; a CLI newer than the server is refused, so server first
+pipod update    # rebuilds the CLI here, or upgrades it from npm if installed that way
 pipod doctor    # names the new revision
 cd selfhost && docker compose ps   # db, zitadel, server, sandbox, registry up; backup exited 0
 ```

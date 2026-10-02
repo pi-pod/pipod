@@ -23,6 +23,21 @@ clients drive that session over the server's gateway. Identity is [Zitadel](http
 To run your own instance, follow [docs/self-host.md](docs/self-host.md); upgrading it later is
 `git pull && selfhost/upgrade`.
 
+## Install the CLI
+
+The CLI is published to npm as [`@pipod/cli`](https://www.npmjs.com/package/@pipod/cli) and
+needs Node 22.19 or later:
+
+```sh
+npm install -g @pipod/cli
+pipod login --server <your server's URL>
+pipod                  # launch a pod for the current directory and attach
+pipod update           # upgrade it later
+```
+
+A CLI newer than its server is refused with a message saying so; upgrade the server first. See
+[cli/README.md](cli/README.md) for what it does.
+
 ## Development
 
 Each component builds on its own; see its README. From the repository root:
