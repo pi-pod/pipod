@@ -41,6 +41,9 @@ The fake provider registers on the `sandbox` slot and uses `PI_POD_SANDBOX_TOKEN
 ## Layout
 
 - `src/server/` — API, gateway, workers, persistence, and host placement.
+- `dashboard/` — the web dashboard served at `/dashboard/`: static ES modules with no build
+  step, type-checked by `npm run typecheck`. It signs in to Zitadel with PKCE (the
+  `pipod-dashboard` app) and edits settings and templates through `/v1`.
 - `src/core/` — the server's copy of the CLI's pod lifecycle, image, provider, and PTY code,
   classified file by file in `scripts/core-manifest.txt`. Change a `[shared]` file in `../cli`
   and run `scripts/sync-core.sh ../cli`.

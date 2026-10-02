@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#6D2598" />
+    <title>pi pod dashboard</title>
+    <link rel="icon" href="/dashboard/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/dashboard/dashboard.css" />
+    <script type="module" src="/dashboard/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="#/org"><img src="/dashboard/favicon.svg" alt="" width="24" height="24" /> pi pod</a>
+      <nav id="nav" hidden>
+        <a href="#/org">Organization</a>
+        <a href="#/me">My settings</a>
+        <a href="#/templates">Templates</a>
+      </nav>
+      <div id="account"></div>
+    </header>
+    <main id="main"><p class="loading">Loading…</p></main>
+  </body>
+</html>

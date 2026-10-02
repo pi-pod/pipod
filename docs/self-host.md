@@ -115,6 +115,22 @@ pipod
 `doctor` names the server's release revision and fails when its database is missing
 migrations or launch admission is held.
 
+### The dashboard
+
+The server also serves a web dashboard at `http://127.0.0.1:8080/dashboard/`, for the settings
+every launch is built from: the organization's defaults and policy, your own defaults, and
+templates. Sign in with the same account as `pipod login`. From another machine, forward both
+the server and Zitadel, since the browser reaches each as `127.0.0.1`:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 -L 8081:127.0.0.1:8081 root@<this host>
+```
+
+What you can change follows your permissions, and the server enforces them whatever the page
+shows: an `--owner` changes everything; a member edits their own settings and personal
+templates and reads the rest. People and organizations stay in the Zitadel Console, which the
+dashboard links to.
+
 ### The phone apps
 
 The iOS and Android apps sign in to your server too, once it is [public](#going-public):
@@ -188,6 +204,9 @@ migration it needs. In order, `upgrade`:
    and waits until it is healthy;
 7. compares Zitadel's `pipod` project with the release's roles and apps, and warns
    about any drift without changing anything.
+
+An install from before the dashboard has no `pipod-dashboard` app in Zitadel yet, so the first
+upgrade past it warns about drift. Run `selfhost/upgrade --apply-zitadel` once to create it.
 
 Then update the CLI and check the result:
 
@@ -313,14 +332,15 @@ volumes:
   caddy_config:
 ```
 
-Then set these together in `.env` and run `selfhost/upgrade` — they must agree, and
-a mismatch in any one of them is the usual cause of a login that returns a token the
-server rejects:
+Then set these together in `.env` and run `selfhost/upgrade --apply-zitadel` — they must
+agree, and a mismatch in any one of them is the usual cause of a login that returns a token
+the server rejects:
 
 | Where | Set to |
 | --- | --- |
 | `.env` | `ZITADEL_EXTERNALDOMAIN=auth.example.com`, `ZITADEL_EXTERNALPORT=443`, `ZITADEL_EXTERNALSECURE=true`, `ZITADEL_TLS_MODE=external` |
 | `.env` | `ZITADEL_ISSUER=https://auth.example.com` |
+| `.env` | `SERVER_URL=https://api.example.com`, where the dashboard signs in back to |
 | `.env`, only if you serve the web app | `WEB_ORIGINS=https://app.example.com` |
 | Zitadel Console | the `pipod-web` app's redirect URI, to `https://app.example.com/auth/callback` |
 | the CLI | `pipod login --server https://api.example.com` — the server tells it the new issuer |
@@ -519,4 +539,6 @@ brings your existing pods' workspaces up under the new sandbox.
 | `doctor` reports a removed provider (`e2b`/`daytona`) | Stale project-layer `provider` pin — remove it; only `sandbox` is supported. |
 | Pods die after a few minutes idle | The sandbox's `PI_POD_SANDBOX_API_HOST` does not match its bridge gateway. |
 | A pod cannot reach something on your network (a git host, a `PUBLIC_URL` on a LAN address) | Pods are kept off private, shared and reserved addresses whatever their egress mode. List what they need in `PI_POD_SANDBOX_PRIVATE_EGRESS` in `.env`, then `selfhost/upgrade`. |
+| The dashboard says *"this server has no dashboard sign-in configured"* | The install predates the dashboard: `selfhost/upgrade --apply-zitadel`. |
+| Zitadel answers the dashboard's sign-in with *"redirect_uri is missing in the client configuration"* | The browser reaches the server at an address other than `SERVER_URL` or loopback. Set `SERVER_URL` to it and run `selfhost/upgrade --apply-zitadel`. |
 | Browser calls blocked by CORS | `WEB_ORIGINS` is empty, or lists a URL with a path or trailing slash instead of a bare origin. |
