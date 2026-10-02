@@ -160,8 +160,7 @@ export function buildSpec(opts: BundleOptions): unknown {
         destination: "/etc/hosts",
         type: "bind",
         source: opts.hostsPath,
-        // Writable: the pod's own copy, rewritten at every start.
-        options: ["rbind", "rw", "rprivate"],
+        options: ["rbind", "ro", "rprivate"],
       },
       {
         destination: INIT_PATH,

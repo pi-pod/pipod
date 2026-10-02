@@ -1659,10 +1659,13 @@ async function provision(
       // Hosts seeding and the workdir ride one script — each exec is a provider round trip.
       await phase("prep", async () => {
         const prepLines = ["set -e"];
+        // A sandbox that receives `names` writes them into a read-only /etc/hosts itself; one
+        // that predates them leaves DNS open. The append only helps providers that do neither.
         if (resolution.resolved.length > 0 && egressEnforcement === "cidr") {
-          prepLines.push("cat >> /etc/hosts <<'PI_POD_HOSTS'");
+          prepLines.push("{ cat >> /etc/hosts <<'PI_POD_HOSTS'");
           prepLines.push(renderHostsFile(buildHostsEntries(resolution.resolved)).trimEnd());
           prepLines.push("PI_POD_HOSTS");
+          prepLines.push("} 2>/dev/null || true");
         }
         prepLines.push(`mkdir -p ${shellQuote(config.workdir)}`);
         const prep = await sandbox.exec(["bash", "-c", prepLines.join("\n")], { env: execEnv, timeoutMs: 30_000 });
