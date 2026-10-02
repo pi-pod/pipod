@@ -41,8 +41,9 @@ The pi version is one pin shared by the CLI and the server. Change it with
 
 ## The hosted service
 
-[pipod.dev](https://pipod.dev) runs this code with an extension that adds per-user hosts,
-metering and billing. Those parts are not in this repository; they plug into the interface in
+A hosted pi pod service at [pipod.dev](https://pipod.dev) is coming soon; it is not available
+yet. It will run this code with an extension that adds per-user hosts, metering and billing.
+Those parts are not in this repository; they plug into the interface in
 [`server/src/server/edition.ts`](server/src/server/edition.ts), which this server runs without.
 
 ## License
