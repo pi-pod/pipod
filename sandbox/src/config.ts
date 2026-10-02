@@ -145,6 +145,11 @@ const Schema = z.object({
   PI_POD_SANDBOX_MAX_MEMORY_GB: z.coerce.number().positive().default(4),
   PI_POD_SANDBOX_MAX_DISK_GB: z.coerce.number().positive().default(20),
   PI_POD_SANDBOX_MAX_PIDS: z.coerce.number().int().positive().default(4096),
+  /**
+   * Largest image a pull may store, compressed or extracted. Image layers live on the host's
+   * state volume, outside every pod's disk quota, and a launch can name any image.
+   */
+  PI_POD_SANDBOX_MAX_IMAGE_GB: z.coerce.number().positive().default(20),
 
   /** Bridge subnet for sandbox netns veth pairs. */
   PI_POD_SANDBOX_BRIDGE_CIDR: z.string().default("10.77.0.0/16"),
@@ -255,6 +260,7 @@ export interface Config {
   limits: { maxUploadBytes: number };
   maximums: { cpu: number; memoryGB: number; diskGB: number };
   maxPids: number;
+  maxImageBytes: number;
   bridge: { name: string; cidr: string };
   dns: string[];
   apiHost?: string;
@@ -460,6 +466,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       diskGB: e.PI_POD_SANDBOX_MAX_DISK_GB,
     },
     maxPids: e.PI_POD_SANDBOX_MAX_PIDS,
+    maxImageBytes: Math.floor(e.PI_POD_SANDBOX_MAX_IMAGE_GB * 1024 ** 3),
     bridge: { name: e.PI_POD_SANDBOX_BRIDGE_NAME, cidr: env.PI_POD_SANDBOX_BRIDGE_CIDR === undefined && e.PI_POD_SANDBOX_HOST_BACKEND === "boat" ? "10.78.0.0/16" : e.PI_POD_SANDBOX_BRIDGE_CIDR },
     dns: e.PI_POD_SANDBOX_DNS.split(",").map((s) => s.trim()).filter(Boolean),
     apiHost: e.PI_POD_SANDBOX_API_HOST,

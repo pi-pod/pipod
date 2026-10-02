@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { isIP, isIPv4 } from "node:net";
 
 export const OCI_INDEX = "application/vnd.oci.image.index.v1+json";
 export const DOCKER_INDEX = "application/vnd.docker.distribution.manifest.list.v2+json";
@@ -193,6 +195,53 @@ export interface HostRegistryAuth extends RegistryAuth {
   registry: string;
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function privateAddress(address: string): boolean {
+  if (isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number) as [number, number];
+    return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b < 128) ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) ||
+      (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19));
+  }
+  const v6 = address.toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
+  if (mapped) return privateAddress(mapped[1]!);
+  return v6 === "::" || v6 === "::1" || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || v6.startsWith("ff");
+}
+
+/**
+ * Where a pull may send a request. Image references, redirects and token realms are chosen
+ * by whoever runs the registry, and this process runs as root on the host's networks: only
+ * HTTPS to public addresses, or plain HTTP back to the loopback registry the pull began at.
+ * (The check resolves the name before fetch does; it is not proof against DNS rebinding.)
+ */
+async function assertFetchable(target: URL, registryHost: string): Promise<void> {
+  if (target.host === registryHost && registryProtocol(registryHost) === "http") return;
+  if (target.protocol !== "https:") throw new Error(`registry request to ${target.origin} is not HTTPS`);
+  const hostname = target.hostname.replace(/^\[|\]$/g, "");
+  const addresses = isIP(hostname) ? [hostname] : (await lookup(hostname, { all: true })).map((a) => a.address);
+  if (addresses.some(privateAddress)) {
+    throw new Error(`registry request to ${target.origin} resolves to a private address`);
+  }
+}
+
+/** Follows redirects itself, checking each hop and dropping credentials across origins. */
+async function fetchChecked(url: string | URL, headers: Headers, registryHost: string): Promise<Response> {
+  let target = new URL(url);
+  for (let hop = 0; hop <= 5; hop++) {
+    await assertFetchable(target, registryHost);
+    const response = await fetch(target, { headers, redirect: "manual" });
+    const location = response.headers.get("location");
+    if (!REDIRECT_STATUSES.has(response.status) || !location) return response;
+    await response.body?.cancel();
+    const next = new URL(location, target);
+    if (next.origin !== target.origin) headers.delete("authorization");
+    target = next;
+  }
+  throw new Error("too many registry redirects");
+}
+
 export class RegistryClient {
   readonly #auth?: HostRegistryAuth;
   readonly #log: (message: string) => void;
@@ -299,21 +348,26 @@ export class RegistryClient {
     const initialHeaders = new Headers(headers);
     if (auth) initialHeaders.set("Authorization", this.#basicAuthorization(auth));
 
-    let response = await fetch(url, { headers: initialHeaders, redirect: "follow" });
+    let response = await fetchChecked(url, initialHeaders, reference.apiHost);
     if (response.status !== 401) return response;
 
     const challenge = parseBearerChallenge(response.headers.get("www-authenticate") ?? "");
     if (!challenge) return response;
     await response.body?.cancel();
 
-    const token = await this.#bearerToken(challenge, context, auth);
+    const token = await this.#bearerToken(challenge, context, auth, reference.apiHost);
     const retryHeaders = new Headers(headers);
     retryHeaders.set("Authorization", `Bearer ${token}`);
-    response = await fetch(url, { headers: retryHeaders, redirect: "follow" });
+    response = await fetchChecked(url, retryHeaders, reference.apiHost);
     return response;
   }
 
-  async #bearerToken(challenge: BearerChallenge, context: RequestContext, auth: RegistryAuth | undefined): Promise<string> {
+  async #bearerToken(
+    challenge: BearerChallenge,
+    context: RequestContext,
+    auth: RegistryAuth | undefined,
+    registryHost: string,
+  ): Promise<string> {
     const key = `${challenge.realm}\n${challenge.service ?? ""}\n${challenge.scope ?? ""}`;
     const cached = context.tokens.get(key);
     if (cached) return cached;
@@ -322,14 +376,9 @@ export class RegistryClient {
     if (challenge.service) url.searchParams.set("service", challenge.service);
     if (challenge.scope) url.searchParams.set("scope", challenge.scope);
     const headers = new Headers({ Accept: "application/json" });
-    if (auth) {
-      if (url.protocol !== "https:" && registryProtocol(url.host) !== "http") {
-        throw new Error(`registry token service ${url.origin} is not HTTPS`);
-      }
-      headers.set("Authorization", this.#basicAuthorization(auth));
-    }
+    if (auth) headers.set("Authorization", this.#basicAuthorization(auth));
 
-    const response = await fetch(url, { headers, redirect: "follow" });
+    const response = await fetchChecked(url, headers, registryHost);
     if (!response.ok) throw new Error(`registry token request failed: HTTP ${response.status}`);
     const body = (await response.json()) as { token?: unknown; access_token?: unknown };
     const token = typeof body.token === "string" ? body.token : body.access_token;

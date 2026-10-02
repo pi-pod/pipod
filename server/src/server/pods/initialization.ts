@@ -39,6 +39,8 @@ export async function runPodInitSteps(args: {
   config: PiPodConfig;
   report: ResolvedConfigReport;
   execEnv: Record<string, string>;
+  /** The sandbox's own environment (secrets, the pod token): redacted from script output. */
+  sandboxEnv?: Record<string, string>;
   egressRestricted: boolean;
   timings: Record<string, number>;
 }): Promise<void> {
@@ -62,6 +64,7 @@ export async function runPodInitSteps(args: {
         timeoutSeconds: config.initTimeoutSeconds,
         onFailure: config.initOnFailure === "continue" ? "continue" : "abort",
         env: {},
+        inherited: args.sandboxEnv,
         egressRestricted: args.egressRestricted,
       });
       const failed = bake.ran && bake.exitCode !== 0;
@@ -120,7 +123,8 @@ export async function runPodInitSteps(args: {
           timeoutSeconds: config.initTimeoutSeconds,
           onFailure: config.initOnFailure === "continue" ? "continue" : "abort",
           env: args.execEnv,
-          egressRestricted: args.egressRestricted,
+          inherited: args.sandboxEnv,
+        egressRestricted: args.egressRestricted,
         });
         const failed = init.ran && init.exitCode !== 0;
         for (const [offset, entry] of batch.entries()) {
@@ -163,6 +167,7 @@ export async function runPodInitSteps(args: {
         timeoutSeconds: config.initTimeoutSeconds,
         onFailure: config.initOnFailure === "continue" ? "continue" : "abort",
         env: args.execEnv,
+        inherited: args.sandboxEnv,
         egressRestricted: args.egressRestricted,
       });
       const failed = init.ran && init.exitCode !== 0;

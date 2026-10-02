@@ -526,6 +526,7 @@ async function provisionHostChild(
           config,
           report,
           execEnv,
+          sandboxEnv: args.env,
           egressRestricted: false,
           timings,
         });

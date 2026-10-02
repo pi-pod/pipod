@@ -1742,6 +1742,7 @@ async function provision(
         config,
         report,
         execEnv,
+        sandboxEnv: args.env,
         egressRestricted: resolution.policy.mode === "allowlist",
         timings,
       });

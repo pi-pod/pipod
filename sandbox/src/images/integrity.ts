@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, readdir, readlink, readFile } from "node:fs/promises";
+import { lstat, readdir, readlink, readFile, stat } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import * as path from "node:path";
@@ -52,13 +52,25 @@ export async function fileDigest(file: string, algorithm: string): Promise<strin
   return hash.digest("hex");
 }
 
-/** OCI diff_id is the digest of the uncompressed tar, not the compressed registry blob. */
-export async function verifyDiffDigest(blob: string, mediaType: string, digest: string): Promise<void> {
+/**
+ * OCI diff_id is the digest of the uncompressed tar, not the compressed registry blob. Returns
+ * the tar's size, and stops at `maxBytes`: a small layer can decompress to fill the host's
+ * state volume, which no pod quota covers.
+ */
+export async function verifyDiffDigest(
+  blob: string,
+  mediaType: string,
+  digest: string,
+  maxBytes = Number.POSITIVE_INFINITY,
+): Promise<number> {
   const [algorithm, expected] = digest.split(":");
+  const tooLarge = () => new Error(`layer ${digest} is larger than the ${maxBytes}-byte image limit`);
   const command = mediaType.includes("zstd") ? "zstd" : mediaType.includes("gzip") ? "gzip" : null;
   if (!command) {
+    const { size } = await stat(blob);
+    if (size > maxBytes) throw tooLarge();
     if (await fileDigest(blob, algorithm!) !== expected) throw new Error(`layer diff digest verification failed: ${digest}`);
-    return;
+    return size;
   }
   const hash = createHash(algorithm!);
   const child = spawn(command, ["-dc", "--", blob], { stdio: ["ignore", "pipe", "pipe"] });
@@ -69,7 +81,16 @@ export async function verifyDiffDigest(blob: string, mediaType: string, digest: 
   child.stderr.resume();
   // Attach a rejection handler immediately while stdout is being drained.
   void done.catch(() => undefined);
-  for await (const chunk of child.stdout) hash.update(chunk);
+  let bytes = 0;
+  for await (const chunk of child.stdout) {
+    bytes += (chunk as Buffer).length;
+    if (bytes > maxBytes) {
+      child.kill();
+      throw tooLarge();
+    }
+    hash.update(chunk);
+  }
   await done;
   if (hash.digest("hex") !== expected) throw new Error(`layer diff digest verification failed: ${digest}`);
+  return bytes;
 }

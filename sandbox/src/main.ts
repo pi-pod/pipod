@@ -42,6 +42,7 @@ export async function main(): Promise<void> {
   const ociImages = new OciImageStore({
     stateDir: cfg.stateDir,
     auth: cfg.registryAuth,
+    maxImageBytes: cfg.maxImageBytes,
     log: (msg) => log.debug({ images: msg }, "image store"),
   });
   // No network, cgroup reconciliation, reaper, or listener until every retained lower
