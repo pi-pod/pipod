@@ -422,7 +422,8 @@ export type ServerMessage =
    * live/cached, never part of durable transcript replay. */
   | { type: "ephemeral"; kind: string; payload: unknown }
   | { type: "replay_gap"; fromSeq: number; toSeq: number }
-  | { type: "interaction"; interactionId: string; seq: number; kind: string; payload: unknown; ts: string }
+  /** A blocking extension dialog was answered by some client; others should put it away. */
+  | { type: "dialog_closed"; id: string }
   | { type: "pod_state"; state: string; reason?: string }
   /** Durable pod-row change. Emitted only after `pods.name` has been written, so a later GET agrees. */
   | { type: "pod_updated"; id: string; name: string }
@@ -491,7 +492,6 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: "prompt"; text?: string; images?: ImageContent[] }
   | { type: "interrupt" }
-  | { type: "resolve"; interactionId: string; response: unknown }
   | {
       type: "set";
       model?: { provider: string; id: string };
@@ -524,6 +524,6 @@ export type ClientMessage =
    *  command keeps the client's own request id (unique-prefixed), so id-correlated event
    *  streams — bash output, extension flows — still line up on the client. */
   | { type: "rpc"; id: string; command: Record<string, unknown> }
-  /** An extension-UI answer from a full-fidelity client; consumes the matching pending interaction. */
+  /** An extension-UI answer, forwarded to pi; answering a blocking dialog closes it for everyone. */
   | { type: "ui_response"; response: Record<string, unknown> }
   | { type: "ping" };

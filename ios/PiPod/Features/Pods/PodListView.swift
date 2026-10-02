@@ -62,9 +62,6 @@ public struct PodListView: View {
                 // throttle below.
                 lastBillingRead = nil
                 Task { await refreshPods() }
-                // Approvals raised or answered while the app was away leave the
-                // badge and the notice row stale until something asks.
-                Task { await session.refreshApprovalsBadge() }
             }
             .sheet(isPresented: $showsFilterSheet) {
                 PodFilterSheet(
@@ -105,7 +102,6 @@ public struct PodListView: View {
 
     private var list: some View {
         List {
-            if session.pendingApprovalsCount > 0 { approvalsSection }
             blockedBillingSection
             workstationSection
             if let loadError, !pods.isEmpty {
@@ -203,31 +199,6 @@ public struct PodListView: View {
     private var keepWaitingAction: (() -> Void)? {
         guard canKeepWaiting else { return nil }
         return { Task { await refreshPods() } }
-    }
-
-    private var approvalsSection: some View {
-        Section {
-            Button {
-                router.openApprovals()
-            } label: {
-                HStack {
-                    Label("Waiting for your approval", systemImage: "shield.lefthalf.filled")
-                        .foregroundStyle(AppColors.label)
-                    Spacer()
-                    Text("\(session.pendingApprovalsCount)")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(AppColors.notice)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(AppColors.noticeFill, in: Capsule())
-                }
-            }
-            .listRowBackground(AppColors.noticeFill)
-            .accessibilityLabel(
-                "Open pending approvals, \(session.pendingApprovalsCount) pending"
-            )
-            .accessibilityIdentifier("pods.approvals")
-        }
     }
 
     private var filterSummarySection: some View {

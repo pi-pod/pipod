@@ -32,6 +32,13 @@ sign-in screen rather than by launch argument:
 Not exercised: approvals (no default pod extension raises one), push notifications, image
 and file attachments, organization switching, a Release build against a public HTTPS server.
 
+Approvals were removed after this pass (2026-10-02). There is no Approvals inbox, tab or pod-list
+row, no approval badge or "Approval needed" banner, no `pipod://interaction/…` link and no REST
+resolve any more. A question an extension asks (`confirm`, `select`, `input`, `editor`) appears as
+a card at the end of its conversation and is answered over the session socket; the gateway re-sends
+it on every attach until some client answers. Older entries below that mention approvals describe
+the app before that change.
+
 ## Testing on a remote Mac
 
 On a Mac, run the app from Xcode or `xcrun simctl` directly. From Linux, use
@@ -491,13 +498,10 @@ Two things about it are load-bearing:
 - **Only attach to pods the fake provider launched.** Seeded `fixture-*` rows exist to make
   the list and detail screens representative. Opening a session on one makes the server
   honestly report the pod gone and flips that row for everyone.
-- **An interaction answer must carry `type: "extension_ui_response"`.** The gateway
-  forwards the answer unchanged to pi, which only releases the blocked prompt when the
-  frame has it. Without it the resolve still returns 200 and the card still clears, while
-  the agent's turn hangs until pi's 120s timeout — which reads exactly like a working
-  approval until you notice the reply never arrives. `InteractionResponse` in
-  `Core/Models/SessionModels.swift` is the one place that adds it; every answer, over REST
-  or the socket, goes through it.
+- **A dialog answer must carry `type: "extension_ui_response"` and pi's request `id`.**
+  The gateway forwards the answer unchanged to pi, which only releases the blocked prompt
+  when the frame has both. Without them the card still clears while the agent's turn hangs
+  until pi's 120s timeout. `PiDialog` in `Core/Session/PiDialog.swift` builds every answer.
 
 Not covered by this backend at all: real sandbox launches, production PKCE/OAuth, APNs
 push, and background wake. Do not report those as verified.

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The workspace hub: who you are, what needs your approval, and the way in to
+/// The workspace hub: who you are, proposed settings changes, and the way in to
 /// everything that configures a pod.
 ///
 /// The Flutter build inlined every editor into one long scroll. Here each editor
@@ -405,7 +405,7 @@ public struct SettingsView: View {
         Section("Notifications") {
             Text(
                 """
-                Get an alert when pi needs approval or finishes a turn. Notifications are \
+                Get an alert when pi finishes a turn. Notifications are \
                 optional and can be changed anytime.
                 """
             )

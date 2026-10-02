@@ -175,8 +175,8 @@ public enum TranscriptScrollPolicy {
 /// Transcript rows cached against the items they were built from.
 ///
 /// The reducer bumps its scroll revision many times a second while a turn
-/// streams, and plenty of those bumps change no items at all — a reconnect, a
-/// resolved approval, a re-anchor. Deriving the rows inside `body` rebuilt and
+/// streams, and plenty of those bumps change no items at all — a reconnect, an
+/// answered dialog, a re-anchor. Deriving the rows inside `body` rebuilt and
 /// re-identified the whole transcript for every one of them.
 public struct TranscriptRowCache {
     public private(set) var items: [StreamItem] = []

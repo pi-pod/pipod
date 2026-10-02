@@ -2,7 +2,7 @@ import Foundation
 
 /// A decoded JSON value of unknown shape.
 ///
-/// The server carries genuinely dynamic payloads — interaction bodies, transcript
+/// The server carries genuinely dynamic payloads — extension dialogs, transcript
 /// event payloads, extension-UI frames, config bundles — that no Swift type can
 /// describe ahead of time. Modelling them as `Any` loses `Codable` and equatability
 /// (SwiftUI diffing needs both), so they are kept as this enum instead.

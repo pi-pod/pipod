@@ -95,9 +95,8 @@ public enum SessionServerMessage: Sendable {
     )
     case event(seq: Int, kind: String, ts: String?, payload: JSONValue)
     case ephemeral(kind: String, payload: JSONValue)
-    case interaction(
-        interactionId: String, seq: Int, kind: String, ts: String?, payload: JSONValue
-    )
+    /// Some client answered the dialog with this pi request id.
+    case dialogClosed(id: String)
     case replayGap(fromSeq: Int, toSeq: Int)
     case podState(state: String, reason: String?)
     case podUpdated(id: String, name: String)
@@ -137,7 +136,6 @@ public protocol SessionTransport: AnyObject {
     @discardableResult func prompt(_ text: String, images: [SessionImage]) -> Bool
     @discardableResult func interrupt() -> Bool
     @discardableResult func requestModels() -> Bool
-    @discardableResult func resolve(interactionId: String, response: JSONValue) -> Bool
     @discardableResult func uiResponse(_ response: JSONValue) -> Bool
     @discardableResult func set(
         model: [String: String]?, thinkingLevel: String?, requestID: String?
@@ -295,27 +293,9 @@ public final class SessionSocket: SessionTransport {
     @discardableResult
     public func requestModels() -> Bool { send(.object(["type": .string("get_models")])) }
 
-    /// Answers an approval over the socket.
-    ///
-    /// The gateway hands the answer to pi's `respondExtensionUi` unchanged, and
-    /// pi only releases the blocked prompt when the frame carries the
-    /// `extension_ui_response` type — without it the answer is accepted, the
-    /// card clears, and the turn silently hangs to pi's 120s `askUi` timeout.
-    /// Normalising here means no caller can send an answer that looks fine and
-    /// stalls the agent.
-    @discardableResult
-    public func resolve(interactionId: String, response: JSONValue) -> Bool {
-        send(
-            .object([
-                "type": .string("resolve"),
-                "interactionId": .string(interactionId),
-                "response": InteractionResponse.normalized(response),
-            ])
-        )
-    }
-
-    /// Answers an extension UI request the pod is blocking on. Remote-UI
-    /// surfaces ride this path; the gateway forwards it to pi verbatim.
+    /// Answers an extension UI request the pod is blocking on: a dialog, or a
+    /// remote-UI surface. The gateway forwards it to pi verbatim, so it must
+    /// already be a complete `extension_ui_response` frame.
     @discardableResult
     public func uiResponse(_ response: JSONValue) -> Bool {
         send(.object(["type": .string("ui_response"), "response": response]))
@@ -391,14 +371,8 @@ public final class SessionSocket: SessionTransport {
                 kind: string(object["kind"], fallback: "event"),
                 payload: map(object["payload"]) ?? .object([:])
             )
-        case "interaction":
-            return .interaction(
-                interactionId: string(object["interactionId"]),
-                seq: integer(object["seq"]),
-                kind: string(object["kind"], fallback: "extension_ui"),
-                ts: object["ts"]?.stringValue,
-                payload: map(object["payload"]) ?? .object([:])
-            )
+        case "dialog_closed":
+            return .dialogClosed(id: string(object["id"]))
         case "replay_gap":
             return .replayGap(
                 fromSeq: integer(object["fromSeq"]), toSeq: integer(object["toSeq"])

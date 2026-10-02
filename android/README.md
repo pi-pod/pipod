@@ -17,15 +17,14 @@ OIDC ID-token signature is verified against the provider's JWKS with
   resolved config, capacity waits, and archive/restore/delete.
 - **Session** — the live agent conversation: streaming transcript, markdown and
   ANSI output, tool cards, image attachments, interrupt, model and
-  thinking-level switching, queued prompts, reattach replay, and pod-side
-  extension UI surfaces.
-- **Approvals** — the inbox of interactions an agent is blocked on, answerable
-  inline in the conversation or from the tab.
+  thinking-level switching, queued prompts, reattach replay, pod-side extension
+  UI surfaces, and the questions an extension asks (confirm, choose, type an
+  answer), answered in the conversation.
 - **Jobs** — scheduled runs, their schedules read as sentences, and run history.
 - **Environments, settings and credentials** — environment templates,
   organization and personal config bundles with optimistic-concurrency saves,
   write-only secrets, and model-provider credentials.
-- **Platform** — `pipod://` deep links and local approval notifications.
+- **Platform** — `pipod://` deep links and notification permission.
 
 ## Layout
 
@@ -38,7 +37,7 @@ app/src/main/kotlin/com/pipod/app/
     session/            session WebSocket, transcript reducer, remote extension UI
     credentials/        the model-provider login WebSocket
     format/             presentation strings, error copy, ANSI, markdown
-    push/               local approval banners and notification permission
+    push/               notification permission and device registration
     deeplink/           pipod:// and notification payload routing
   ui/                   the design system: brand palette, controls, scaffolds
   shell/                the tab frame, the route table, width limits

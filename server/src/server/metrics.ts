@@ -66,7 +66,6 @@ const JOB_RUN_LIVE_STATUSES = new Set(["running", "interrupted"]);
 const JOB_RUN_TERMINALS = new Set(["completed", "failed"]);
 const PUSH_KINDS = new Set([
   "turn_completed",
-  "interaction_pending",
   "session_ended",
   "pod_error",
   "idle_stop",

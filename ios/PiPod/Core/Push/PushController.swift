@@ -22,8 +22,7 @@ public enum NotificationAuthorization: String, Sendable {
     }
 }
 
-/// APNs registration, permission state, and the local banner shown when the
-/// number of waiting approvals goes up while the app is open.
+/// APNs registration, permission state, and where a notification tap leads.
 @MainActor
 @Observable
 public final class PushController: NSObject, UNUserNotificationCenterDelegate {
@@ -34,8 +33,7 @@ public final class PushController: NSObject, UNUserNotificationCenterDelegate {
     /// The destination a notification tap asked for, consumed by the router.
     public var pendingDestination: DeepLinkDestination?
 
-    /// The pod whose conversation is on screen. Its own approvals do not deserve
-    /// a banner — the card is already visible.
+    /// The pod whose conversation is on screen. A push about it would be noise.
     public var visiblePodId: String?
 
     private let api: APIClient
@@ -44,8 +42,6 @@ public final class PushController: NSObject, UNUserNotificationCenterDelegate {
     private let defaults: UserDefaults
     private let log = Logger(subsystem: "com.pipod.app", category: "push")
 
-    private var lastPending = 0
-    private var seenFirst = false
     /// Tests have no `UIApplication` worth talking to.
     let skipsRemoteRegistration: Bool
 
@@ -69,6 +65,9 @@ public final class PushController: NSObject, UNUserNotificationCenterDelegate {
         self.api = api
         self.center = center
         self.defaults = defaults
+        // Earlier versions counted waiting approvals on the app icon. Nothing
+        // sets that count any more, so nothing else would clear it.
+        center.setBadgeCount(0) { _ in }
         // Which APNs a token belongs to is not a detail: registering a sandbox
         // token as production silently drops every push. The value is read from
         // Info.plist rather than the entitlement, because entitlements are not in
@@ -174,7 +173,7 @@ public final class PushController: NSObject, UNUserNotificationCenterDelegate {
     /// `didRegister` callback — registration is asynchronous, so signing out
     /// shortly after launch, or after any registration failure, used to make
     /// this a silent no-op that left the `devices` row in place and the server
-    /// pushing a signed-out person's approvals to their phone. The stored copy
+    /// pushing a signed-out person's notifications to their phone. The stored copy
     /// is dropped only once the server has accepted the delete, so a failed
     /// attempt is still there for the next attempt to retry.
     public func unregister(using cleanupClient: APIClient? = nil) async {
@@ -193,56 +192,9 @@ public final class PushController: NSObject, UNUserNotificationCenterDelegate {
         defaults.removeObject(forKey: Self.deviceTokenKey)
     }
 
-    /// Forgets what this process has already announced, for a session that is
-    /// over. Without it the first count of the *next* session is compared
-    /// against the previous person's: a cold count of 1 after signing in as
-    /// someone with none would banner, and a genuine rise would not.
-    public func resetBadgeState() {
-        lastPending = 0
-        seenFirst = false
+    /// Forgets the conversation on screen, for a session that is over.
+    public func resetForNewSession() {
         visiblePodId = nil
-    }
-
-    /// What this process has already announced, for tests that pin the
-    /// first-observation-is-silent rule.
-    var lastAnnouncedPendingCount: Int { lastPending }
-    var hasAnnouncedAPendingCount: Bool { seenFirst }
-
-    // MARK: - Local banners
-
-    /// Called whenever the signed-in store learns a new pending-approval count.
-    /// The first observation is silent so a cold start does not replay history.
-    /// `announce` is false when the rise was raised by a session this app is
-    /// rendering: the icon badge still moves, but a banner over a card that is
-    /// already on screen only repeats it.
-    public func onPendingCount(_ count: Int, announce: Bool = true) async {
-        defer {
-            seenFirst = true
-            lastPending = count
-        }
-        UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
-        guard announce, seenFirst, count > lastPending, authorization == .authorized
-        else { return }
-        let request = UNNotificationRequest(
-            identifier: "approvals-\(count)-\(Date().timeIntervalSince1970)",
-            content: PushController.approvalsContent(count: count),
-            trigger: nil
-        )
-        try? await center.add(request)
-    }
-
-    /// The banner itself, built apart from delivering it so its payload is
-    /// testable — a notification with no `userInfo` reaches the router with
-    /// nothing to route, and tapping it merely reopens whatever was on screen.
-    nonisolated static func approvalsContent(count: Int) -> UNMutableNotificationContent {
-        let content = UNMutableNotificationContent()
-        content.title = "Approval needed"
-        content.body = count == 1 ? "1 request is waiting" : "\(count) requests are waiting"
-        content.sound = .default
-        // The count names no single approval, so it opens the inbox listing all
-        // of them — the same destination `pipod://…/pods/approvals` resolves to.
-        content.userInfo = ["interaction_id": "inbox"]
-        return content
     }
 
     // MARK: - UNUserNotificationCenterDelegate

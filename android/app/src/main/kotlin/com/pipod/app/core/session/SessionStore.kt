@@ -11,16 +11,13 @@ import com.pipod.app.core.api.model.BillingSummary
 import com.pipod.app.core.api.model.Job
 import com.pipod.app.core.api.model.MeResponse
 import com.pipod.app.core.api.model.Organization
-import com.pipod.app.core.api.model.PendingInteraction
 import com.pipod.app.core.api.model.RefreshResponse
 import com.pipod.app.core.auth.OidcSessionExpiredException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job as CoroutineJob
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,7 +44,6 @@ data class SessionStoreState(
      */
     val billing: BillingSummary? = null,
     val isRestoringSession: Boolean = true,
-    val pendingApprovalsCount: Int = 0,
     val pendingDeepLink: Any? = null,
     val authNotice: String? = null,
 )
@@ -141,7 +137,7 @@ interface SessionAuthenticator {
     suspend fun signOut(refreshToken: String? = null, idToken: String? = null)
 }
 
-/** Narrow API boundary for deterministic state restoration and badge tests. */
+/** Narrow API boundary for deterministic state restoration tests. */
 interface SessionStoreApi {
     var accessToken: String?
     var refreshToken: String?
@@ -149,7 +145,6 @@ interface SessionStoreApi {
 
     suspend fun refresh(refreshToken: String): RefreshResponse
     suspend fun me(): MeResponse
-    suspend fun interactions(): List<PendingInteraction>
 }
 
 class ApiClientSessionStoreApi(private val client: ApiClient) : SessionStoreApi {
@@ -176,44 +171,24 @@ class ApiClientSessionStoreApi(private val client: ApiClient) : SessionStoreApi 
 
     override suspend fun me(): MeResponse = client.me()
 
-    override suspend fun interactions(): List<PendingInteraction> = client.interactions().items
-
 }
 
 /**
- * A pending-approval count together with the pods it is spread across.
- *
- * The count alone cannot say *whose* approval just arrived, so a banner could
- * not tell "the pod you are looking at is asking you something" — where the
- * card is already on screen — from an approval on some other pod. The
- * breakdown is null when the observation came from a screen that reported only
- * a total.
- */
-data class ApprovalBadge(val count: Int, val byPod: Map<String, Int>? = null)
-
-/**
- * The signed-in state machine: token restoration, sign-in/out, and the two
- * counters the shell badges.
+ * The signed-in state machine: token restoration and sign-in/out.
  *
  * Port of `pi-pod-flutter/lib/core/session/session_store.dart` minus its
  * Riverpod adapter — this app wires its graph by hand, so the class itself is
  * the whole surface.
  *
- * [scope] owns the approval-notification collectors and any fire-and-forget
- * work ([handleUnauthorized]); [dispose] cancels them. Pass a scope you own
- * (an `Application`-lifetime one in production) and the store will not cancel
+ * [scope] owns fire-and-forget work ([handleUnauthorized]); [dispose] cancels
+ * it. Pass a scope you own (an `Application`-lifetime one in production) and
+ * the store will not cancel
  * it, matching how [SessionStream] treats its scope.
  */
 class SessionStore(
     private val api: SessionStoreApi,
     private val storage: SessionTokenStorage,
     private val authenticator: SessionAuthenticator? = null,
-    /**
-     * Called with the approval count whenever it changes. Synchronous, because
-     * every platform badge API is; a throwing updater is swallowed so a badge
-     * cannot take the session down.
-     */
-    private val onBadgeChanged: ((ApprovalBadge) -> Unit)? = null,
     /**
      * True when an authorization redirect arrived with nothing waiting for it —
      * the app was killed while the browser was open. The gate resumes it instead
@@ -248,37 +223,18 @@ class SessionStore(
     private var hasRestored = false
 
     private var disposed = false
-    private val subscriptions: List<CoroutineJob>
 
     /**
      * Fired from [clearSession]. Sign-out has to reach further than this class:
      * a live session socket keeps streaming somebody else's conversation, and
-     * drafts and receipts sit in plaintext preferences until something drops
+     * drafts sit in plaintext preferences until something drops
      * them.
      */
     private val sessionClearedListeners = CopyOnWriteArrayList<() -> Unit>()
 
-    /** The last approval breakdown seen, so a total-only report keeps the split. */
-    @Volatile
-    private var approvalsByPod: Map<String, Int>? = null
-
     /** The authorization already applied, so [applyAuthorization] is idempotent. */
     @Volatile
     private var appliedAuthorization: AuthResponse? = null
-
-    init {
-        // UNDISPATCHED so both collectors are subscribed before the constructor
-        // returns; a resolution posted immediately afterwards must still move
-        // the badge.
-        subscriptions = listOf(
-            this.scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                SessionNotifications.interactionPending.stream.collect { refreshApprovalsBadge() }
-            },
-            this.scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                SessionNotifications.interactionResolved.stream.collect { refreshApprovalsBadge() }
-            },
-        )
-    }
 
     /**
      * Registers a listener for sign-out. Returns the unregistration, so a caller
@@ -296,7 +252,7 @@ class SessionStore(
      * Applies [change] to the current state.
      *
      * Read-modify-write through [MutableStateFlow.update] rather than
-     * `copy(…)` of a separately read value: the badge collectors, a 401 from
+     * `copy(…)` of a separately read value: a 401 from
      * OkHttp's pool and the foreground restoration all publish concurrently, and
      * a lost update there strands `isRestoringSession` at true — a permanent
      * spinner over the whole app.
@@ -314,14 +270,9 @@ class SessionStore(
         val auth = authenticator
             ?: throw IllegalStateException("A SessionAuthenticator is required to switch organization.")
         val response = auth.signIn(organizationAlias = alias)
-        // The approvals belonged to the organization being left. Zeroing the
-        // badge (and the platform one with it) is honest until the first poll
-        // for the new one answers; leaving it would attribute someone else's
-        // pending count to an organization the reader has just arrived in.
-        setApprovals(0, emptyMap())
-        // Everything else the old organization left behind goes the way a sign-out
-        // sends it: its live sessions would keep streaming under the new identity,
-        // and its drafts, receipts and deep links would act in the wrong tenant.
+        // What the old organization left behind goes the way a sign-out sends it:
+        // its live sessions would keep streaming under the new identity, and its
+        // drafts and deep links would act in the wrong tenant.
         publish { it.copy(pendingDeepLink = null) }
         notifySessionCleared()
         applyAuthorization(response)
@@ -495,52 +446,6 @@ class SessionStore(
         }
     }
 
-    suspend fun refreshApprovalsBadge() {
-        if (_state.value.user == null) {
-            setApprovals(0, emptyMap())
-            return
-        }
-        try {
-            val pending = api.interactions()
-            setApprovals(pending.size, pending.groupingBy { it.podId }.eachCount())
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Throwable) {
-            // Keep the last trustworthy count on transient poll failures.
-        }
-    }
-
-    /**
-     * A list screen that has just fetched knows the count already; taking it
-     * directly keeps the badge honest without a second round trip. It reports
-     * only a total, so the per-pod split is left as it was rather than guessed.
-     */
-    fun setPendingApprovalsCount(count: Int) = setApprovals(count, byPod = null)
-
-    private fun setApprovals(count: Int, byPod: Map<String, Int>?) {
-        val previousByPod = approvalsByPod
-        val splitChanged = byPod != null && byPod != previousByPod
-        if (byPod != null) approvalsByPod = byPod
-        val countChanged = count != _state.value.pendingApprovalsCount
-        if (countChanged) publish { it.copy(pendingApprovalsCount = count) }
-        // The listener is the only writer of the push controller's per-pod
-        // split, and the split can move while the total does not: one approval
-        // answered on this pod and another raised on that one, in the same poll.
-        // Returning early on an unchanged total left the controller comparing
-        // the next genuine rise against a stale breakdown.
-        if (!countChanged && !splitChanged) return
-        notifyBadge(ApprovalBadge(count = count, byPod = byPod))
-    }
-
-    private fun notifyBadge(badge: ApprovalBadge) {
-        val updateBadge = onBadgeChanged ?: return
-        try {
-            updateBadge(badge)
-        } catch (_: Throwable) {
-            // A badge that cannot be drawn is not worth failing a poll over.
-        }
-    }
-
     suspend fun signOut() {
         val auth = authenticator
         val refreshToken = api.refreshToken
@@ -570,7 +475,6 @@ class SessionStore(
         api.accessToken = null
         api.refreshToken = null
         api.idToken = null
-        approvalsByPod = null
         appliedAuthorization = null
         // The next launch has nothing to restore, and a gate composed after a
         // sign-out must show the sign-in screen rather than start over.
@@ -583,14 +487,8 @@ class SessionStore(
                 permissions = emptyList(),
                 adminConsoleUrl = null,
                 billing = null,
-                pendingApprovalsCount = 0,
             )
         }
-        // The app-icon badge and the push controller's per-pod split live
-        // outside this state, so zeroing the field is not zeroing the badge: the
-        // previous account's approval count stayed on the launcher icon until
-        // somebody else signed in and polled.
-        notifyBadge(ApprovalBadge(count = 0, byPod = emptyMap()))
         notifySessionCleared()
     }
 
@@ -607,7 +505,6 @@ class SessionStore(
 
     fun dispose() {
         disposed = true
-        subscriptions.forEach { it.cancel() }
         sessionClearedListeners.clear()
         if (ownsScope) scope.cancel()
     }

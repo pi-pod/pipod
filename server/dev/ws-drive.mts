@@ -43,10 +43,6 @@ const done = new Promise<void>((resolve) => {
       }
       return;
     }
-    if (msg.type === "interaction") {
-      events.push({ seq: msg.seq, kind: `interaction:${msg.kind}`, summary: summarize(msg.kind, msg.payload) });
-      return;
-    }
     if (msg.type === "error") { events.push({ seq: -1, kind: "ws-error", summary: msg.message }); }
   });
   ws.on("close", () => { clearTimeout(timer); resolve(); });

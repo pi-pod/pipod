@@ -5,7 +5,6 @@ import { observePushMessage } from "../metrics.js";
 export interface PushPayload {
   title: string;
   body: string;
-  /** time-sensitive for pending interactions (spec §11). */
   interruptionLevel?: "passive" | "active" | "time-sensitive";
   data: {
     pod_id?: string;
@@ -13,8 +12,7 @@ export interface PushPayload {
     org_id?: string;
     session_id?: string;
     seq?: number;
-    interaction_id?: string;
-    kind: "turn_completed" | "interaction_pending" | "session_ended" | "pod_error" | "idle_stop" | "archived" | "job_failed";
+    kind: "turn_completed" | "session_ended" | "pod_error" | "idle_stop" | "archived" | "job_failed";
   };
 }
 

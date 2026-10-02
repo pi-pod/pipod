@@ -74,9 +74,6 @@ describe("session event retention (postgres)", { skip: databaseUrl ? false : "se
   });
 
   after(async () => {
-    await query("DELETE FROM pending_interactions WHERE session_id IN (SELECT id FROM sessions WHERE pod_id = ANY($1))", [
-      [podA, podB],
-    ]);
     await query("DELETE FROM session_events WHERE session_id IN (SELECT id FROM sessions WHERE pod_id = ANY($1))", [
       [podA, podB],
     ]);
@@ -89,9 +86,6 @@ describe("session event retention (postgres)", { skip: databaseUrl ? false : "se
   });
 
   async function wipe(): Promise<void> {
-    await query("DELETE FROM pending_interactions WHERE session_id IN (SELECT id FROM sessions WHERE pod_id = ANY($1))", [
-      [podA, podB],
-    ]);
     await query("DELETE FROM session_events WHERE session_id IN (SELECT id FROM sessions WHERE pod_id = ANY($1))", [
       [podA, podB],
     ]);
@@ -185,19 +179,6 @@ describe("session event retention (postgres)", { skip: databaseUrl ? false : "se
     await makeSession({ id: newSession, podId: podB, startedAt: "2026-08-01T00:00:00Z" });
     await makeEvent(newSession, 1, "2026-08-01T00:00:01Z");
 
-    const oldInteraction = uuidv7();
-    const newInteraction = uuidv7();
-    await query(
-      `INSERT INTO pending_interactions (id, session_id, seq, kind, payload, created_at, resolved_at, delivered_at)
-       VALUES ($1, $2, 1, 'tool_approval', '{}'::jsonb, '2020-01-01T00:00:02Z', '2020-01-01T00:00:03Z', '2020-01-01T00:00:03Z')`,
-      [oldInteraction, oldSession],
-    );
-    await query(
-      `INSERT INTO pending_interactions (id, session_id, seq, kind, payload, created_at)
-       VALUES ($1, $2, 1, 'tool_approval', '{}'::jsonb, now())`,
-      [newInteraction, newSession],
-    );
-
     const oldPrompt = uuidv7();
     const newPrompt = uuidv7();
     const pendingPrompt = uuidv7();
@@ -218,12 +199,6 @@ describe("session event retention (postgres)", { skip: databaseUrl ? false : "se
     );
 
     await runRetention(deps({ EVENT_RETENTION_DAYS: 30, EVENT_MAX_ROWS: 4_000_000 }));
-
-    const interactions = await query<{ id: string }>(
-      "SELECT id FROM pending_interactions WHERE id = ANY($1)",
-      [[oldInteraction, newInteraction]],
-    );
-    assert.deepEqual(interactions.rows.map((row) => row.id), [newInteraction]);
 
     const prompts = await query<{ id: string }>(
       "SELECT id FROM queued_prompts WHERE id = ANY($1) ORDER BY id",

@@ -35,11 +35,6 @@ public enum PodRoute: Hashable, Sendable {
     /// pod launched without one has no `templateId` to infer it from, and would
     /// have titled the flow "New pod".
     case retryLaunch(templateId: String?)
-    case approvals
-    /// One approval in full. A value route rather than a `navigationDestination`
-    /// bound to a selection: this stack is driven by `podsPath`, and a screen the
-    /// path does not know about cannot be replaced, popped or reasoned about.
-    case approvalDetail(interaction: PendingInteraction)
     /// The model and thinking-level picker for a live conversation.
     case modelPicker(podId: String)
 
@@ -48,7 +43,7 @@ public enum PodRoute: Hashable, Sendable {
     var isLaunch: Bool {
         switch self {
         case .launch, .retryLaunch: return true
-        case .detail, .session, .approvals, .approvalDetail, .modelPicker: return false
+        case .detail, .session, .modelPicker: return false
         }
     }
 
@@ -56,7 +51,7 @@ public enum PodRoute: Hashable, Sendable {
     var podID: String? {
         switch self {
         case .detail(let id, _), .session(let id, _, _, _), .modelPicker(let id): return id
-        case .launch, .retryLaunch, .approvals, .approvalDetail: return nil
+        case .launch, .retryLaunch: return nil
         }
     }
 }
@@ -200,27 +195,6 @@ public final class AppRouter {
         podsPath.append(.detail(podId: podId, pod: pod))
     }
 
-    public func openApprovals() {
-        selectedTab = .pods
-        podsPath = [.approvals]
-    }
-
-    /// Leaves one approval's own screen. Answering it, or opening the pod it came
-    /// from, both turn that screen into a page about a question nobody is asking.
-    public func closeApprovalDetail() {
-        podsPath.removeAll { route in
-            if case .approvalDetail = route { return true }
-            return false
-        }
-    }
-
-    /// An approval is answered in context: the pod's conversation is where the
-    /// request came from. The request's own screen does not stay behind it.
-    public func openSessionFromApproval(podId: String) {
-        closeApprovalDetail()
-        openSession(podId: podId)
-    }
-
     public func openModelPicker(podId: String) {
         selectedTab = .pods
         guard podsPath.last != .modelPicker(podId: podId) else { return }
@@ -237,8 +211,8 @@ public final class AppRouter {
         jobsPath = [.detail(jobId: jobId, job: job)]
     }
 
-    /// Routes a deep link. Interactions without a pod land on the inbox; a job
-    /// without a pod lands on the job; everything else opens the session.
+    /// Routes a deep link: a pod opens its session, a job without a pod opens
+    /// the job, and anything else lands on the pod list.
     public func handle(_ destination: DeepLinkDestination) {
         if let podId = destination.podId, !podId.isEmpty {
             openSession(
@@ -248,10 +222,6 @@ public final class AppRouter {
         }
         if let jobId = destination.jobId, !jobId.isEmpty {
             openJob(jobId)
-            return
-        }
-        if destination.interactionId != nil {
-            openApprovals()
             return
         }
         openPods()

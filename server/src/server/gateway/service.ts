@@ -50,7 +50,7 @@ import { hostForPod, hostCanDial, personalBoatHostIsAsleep, requireHostAwake } f
 import { assertPersonalPodAccess, edition } from "../edition.js";
 import { assertLaunchStateSupported } from "../pods/retired-launch-state.js";
 import { workspaceSeedGateOpen } from "../pods/workspace-seed.js";
-import { interactionSummary, turnEndSummary } from "../push/copy.js";
+import { turnEndSummary } from "../push/copy.js";
 import { enqueuePush } from "../push/queue.js";
 import {
   BUSY_ACTIVITY_REFRESH_MS,
@@ -77,14 +77,13 @@ import {
   HOST_SLEEP_SWEEP_MS,
   LEASE_STALE_SECONDS,
   MAX_SOCKET_REPLAY,
-  MAX_PENDING_INTERACTION_RESENDS,
+  MAX_OPEN_DIALOGS,
   MAX_TOOL_EXECUTION_SNAPSHOTS,
   OVERSIZED_STALL_MIN_PENDING_BYTES,
   PI_STARTUP_CRASH_WITHDRAW_AFTER,
   PROVIDER_ACTIVITY_TIMEOUT_MS,
   QUEUED_PROMPT_MAX_ATTEMPTS,
   QUEUED_PROMPT_POLL_MS,
-  RESOLUTION_POLL_MS,
   SESSION_PERSIST_BARRIER_TIMEOUT_MS,
   SESSION_STARTUP_STATE_TIMEOUT_MS,
   SWEEP_MS,
@@ -138,11 +137,7 @@ import {
   type UserPromptPayload,
   type WsSink,
 } from "./stream-fanout.js";
-import {
-  interactionKind,
-  isInteractionEvent,
-  unansweredInteractionFrames,
-} from "./interactions.js";
+import { blockingDialogId, liveDialogs, openDialog } from "./dialogs.js";
 
 /**
  * Reserve a model/catalog operation before its first await. WebSocket receives
@@ -316,11 +311,6 @@ export type {
   UserPromptPayload,
   WsSink,
 } from "./stream-fanout.js";
-export {
-  interactionKind,
-  isInteractionEvent,
-  unansweredInteractionFrames,
-} from "./interactions.js";
 export { SESSION_STEERING_ARGS, piArgsHaveSessionSteering } from "../pods/fork-seed.js";
 
 /**
@@ -375,85 +365,6 @@ export async function extendPodCredentialContractForModel(args: {
     await persistPodCredentialContract(pod.id, current).catch(() => {});
     throw error;
   }
-}
-
-/** What became of a resolution attempt; the REST route maps these onto status codes. */
-export type ResolveOutcome =
-  | { status: "delivered"; podId: string }
-  | { status: "pending_delivery"; podId: string }
-  | { status: "already_resolved"; podId: string }
-  | { status: "undeliverable"; podId: string }
-  | { status: "not_found" };
-
-interface InteractionRow {
-  id: string;
-  pod_id: string;
-  payload: Record<string, unknown>;
-  resolution: unknown;
-  resolved_by: string | null;
-  delivered_at: string | null;
-  ended_at: string | null;
-}
-
-/**
- * Resolve an interaction. Works with or without an in-process gateway (split roles): the
- * answer is persisted first, delivery is claimed atomically, and `delivered_at` — the only
- * marker that consumes the approval — is set exclusively by the gateway that actually
- * forwarded it to the agent. Never claims success when no live session can receive it.
- */
-export async function resolveInteraction(
-  gateway: GatewayService | null,
-  args: { interactionId: string; response: unknown; resolvedBy: string | null; podId?: string },
-): Promise<ResolveOutcome> {
-  const rows = await query<InteractionRow>(
-    `SELECT pi.id, s.pod_id, pi.payload, pi.resolution, pi.resolved_by, pi.delivered_at, s.ended_at
-     FROM pending_interactions pi JOIN sessions s ON s.id = pi.session_id
-     WHERE pi.id = $1`,
-    [args.interactionId],
-  );
-  const row = rows.rows[0];
-  // A session client may answer only its own pod's interactions.
-  if (!row || (args.podId !== undefined && row.pod_id !== args.podId)) return { status: "not_found" };
-  if (row.delivered_at) return { status: "already_resolved", podId: row.pod_id };
-
-  const session = gateway?.liveSession(row.pod_id) ?? null;
-  if (!session && row.ended_at) return { status: "undeliverable", podId: row.pod_id };
-
-  if (!session) {
-    // Not held here. Only promise delivery while a live-heartbeat gateway holds the pod —
-    // its resolution poll forwards within RESOLUTION_POLL_MS.
-    const lease = await query<{ live: boolean }>(
-      `SELECT (gateway_id IS NOT NULL AND gateway_heartbeat_at > now() - make_interval(secs => $2)) AS live
-       FROM pods WHERE id = $1`,
-      [row.pod_id, LEASE_STALE_SECONDS],
-    );
-    if (!lease.rows[0]?.live) return { status: "undeliverable", podId: row.pod_id };
-    await recordResolution(args);
-    return { status: "pending_delivery", podId: row.pod_id };
-  }
-
-  await recordResolution(args);
-  const delivered = await gateway!.deliverResolution(session, {
-    id: row.id,
-    payload: row.payload,
-    resolution: args.response,
-    resolvedBy: args.resolvedBy,
-  });
-  return delivered
-    ? { status: "delivered", podId: row.pod_id }
-    : { status: "already_resolved", podId: row.pod_id };
-}
-
-async function recordResolution(args: {
-  interactionId: string;
-  response: unknown;
-  resolvedBy: string | null;
-}): Promise<void> {
-  await query(
-    `UPDATE pending_interactions SET resolution = $2, resolved_at = now(), resolved_by = $3
-     WHERE id = $1 AND delivered_at IS NULL`,
-    [args.interactionId, JSON.stringify(args.response ?? null), args.resolvedBy],
-  );
 }
 
 /** Sweep retry spacing for pods whose transport keeps failing. Every sweep attempt runs a
@@ -696,7 +607,6 @@ export class GatewayService {
     schedule("channel-liveness", SWEEP_MS, () => this.probeSessionChannels());
     schedule("abandoned-provisioning", SWEEP_MS, () => this.failAbandonedProvisioning(), true);
     schedule("lease-heartbeat", HEARTBEAT_MS, () => this.heartbeatLeases());
-    schedule("resolution-delivery", RESOLUTION_POLL_MS, () => this.deliverPendingResolutions());
     schedule("prompt-delivery", QUEUED_PROMPT_POLL_MS, () => this.deliverQueuedPrompts());
     schedule("busy-activity", BUSY_ACTIVITY_REFRESH_MS, () => this.refreshBusySessions());
     schedule("host-sleep", HOST_SLEEP_SWEEP_MS, () => this.closeSessionsOnStoppedHosts());
@@ -1119,6 +1029,7 @@ export class GatewayService {
       remoteUiSurfaces: new Map(),
       remoteUiControls: new Map(),
       remoteUiOwners: new Map(),
+      openDialogs: new Map(),
       streamingUpdate: null,
       toolExecutionUpdates: new Map(),
       persistQueue: Promise.resolve(),
@@ -1609,6 +1520,21 @@ export class GatewayService {
       return;
     }
 
+    // pi is parked inside this dialog until a client answers it. It is live state, not
+    // transcript: keep it until answered so every client that attaches meanwhile can answer.
+    const dialogId = blockingDialogId(kind, event);
+    if (dialogId) {
+      session.openDialogs.delete(dialogId);
+      session.openDialogs.set(dialogId, openDialog(event));
+      while (session.openDialogs.size > MAX_OPEN_DIALOGS) {
+        const oldest = session.openDialogs.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        session.openDialogs.delete(oldest);
+      }
+      this.fanOutEphemeral(session, kind, event);
+      return;
+    }
+
     if (kind === "bash_execution_update") {
       const bashId = typeof (event as { id?: unknown }).id === "string" ? (event as { id: string }).id : null;
       const delta = typeof (event as { delta?: unknown }).delta === "string" ? (event as { delta: string }).delta : "";
@@ -1674,41 +1600,8 @@ export class GatewayService {
       const { seq, ts } = await this.persist(session, kind, persistablePayload(kind, event));
       this.fanOut(session, { type: "event", seq, kind, payload: event, ts });
       // pi owns the session name. Mirror /name and auto-name changes into the durable pod row
-      // without delaying interaction persistence or notifications on this event path.
+      // without delaying notifications on this event path.
       this.mirrorSessionName(session, kind, event);
-
-      const redacted = session.pod.resolved_config.notificationsRedacted;
-      if (isInteractionEvent(kind, event) && !(await this.interactionAlreadyRecorded(session.pod.id, event))) {
-        const interactionId = uuidv7();
-        await query(
-          `INSERT INTO pending_interactions (id, session_id, seq, kind, payload)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [interactionId, session.sessionId, seq, interactionKind(kind, event), JSON.stringify(event)],
-        );
-        this.fanOut(session, {
-          type: "interaction",
-          interactionId,
-          seq,
-          kind: interactionKind(kind, event),
-          payload: event,
-          ts,
-        });
-        if (session.clients.size === 0) {
-          await enqueuePush(session.pod.user_id, {
-            title: redacted ? "pi needs input" : `${session.pod.name}: approval needed`,
-            body: redacted ? "" : interactionSummary(interactionKind(kind, event), event),
-            interruptionLevel: "time-sensitive",
-            data: {
-              pod_id: session.pod.id,
-              org_id: session.pod.org_id,
-              session_id: session.sessionId,
-              seq,
-              interaction_id: interactionId,
-              kind: "interaction_pending",
-            },
-          });
-        }
-      }
 
       if (kind === "agent_settled") {
         // `agent_end` is not terminal: retries and automatic compaction may follow. A
@@ -1735,6 +1628,7 @@ export class GatewayService {
         }
 
         if (session.clients.size === 0) {
+          const redacted = session.pod.resolved_config.notificationsRedacted;
           await enqueuePush(session.pod.user_id, {
             title: redacted ? "pi finished a task" : `pi finished: ${session.pod.name}`,
             body: redacted ? "" : turnEndSummary(event, session.pod.name),
@@ -2286,7 +2180,6 @@ export class GatewayService {
         replayRows = rows.rows;
       }
       const firstReplayedSeq = replayRows.length > 0 ? Number(replayRows[0]!.seq) : null;
-      const unanswered = await unansweredInteractionFrames(session.sessionId);
       const truncation = await query<{ events_truncated_below_seq: string | null }>(
         "SELECT events_truncated_below_seq FROM sessions WHERE id = $1",
         [session.sessionId],
@@ -2348,9 +2241,11 @@ export class GatewayService {
           payload: { ...cached.input, gatewayReplay: true },
         });
       }
-      // Every attaching client, whatever it asked to replay: an approval nobody answered blocks
-      // the turn, and the answer may come from any surface the user is holding.
-      for (const frame of unanswered) args.sink.send(frame);
+      // Every attaching client, whatever it asked to replay: a dialog nobody answered blocks
+      // the turn, and the answer may come from any client the user is holding.
+      for (const request of liveDialogs(session.openDialogs)) {
+        args.sink.send({ type: "ephemeral", kind: "extension_ui_request", payload: request });
+      }
       // A mid-stream attach still renders the in-flight reply: the newest snapshot stands in
       // for every message_update the durable replay no longer carries.
       if (session.streamingUpdate) {
@@ -2416,19 +2311,6 @@ export class GatewayService {
         case "interrupt":
           await session.rpc.abort();
           break;
-        case "resolve": {
-          const outcome = await resolveInteraction(this, {
-            interactionId: message.interactionId,
-            response: message.response,
-            resolvedBy: null,
-            podId: session.pod.id,
-          });
-          if (outcome.status === "not_found") throw new Error("interaction not found");
-          if (outcome.status === "undeliverable") {
-            throw new Error("the interaction's session has ended; it can no longer be answered");
-          }
-          break;
-        }
         case "set":
           if (message.model) {
             try {
@@ -2643,9 +2525,13 @@ export class GatewayService {
               });
               break;
             }
-            await this.consumeInteractionForUiResponse(session, message.response);
           }
           session.rpc.respondExtensionUi(message.response as unknown as RpcExtensionUIResponse);
+          // The first answer wins; tell every other client holding the dialog to put it away.
+          const answered = (message.response as { id?: unknown }).id;
+          if (typeof answered === "string" && session.openDialogs.delete(answered)) {
+            this.fanOut(session, { type: "dialog_closed", id: answered });
+          }
           break;
         }
         case "ping":
@@ -2725,102 +2611,6 @@ export class GatewayService {
     }
     if (kind === "explicit") return session.activity.beginExplicitWork();
     return async () => {};
-  }
-
-  /**
-   * A full-fidelity client answered an extension-UI dialog directly (account-mode-spec §6.1):
-   * consume the matching pending interaction so other surfaces stop showing it. No matching
-   * row is normal — non-blocking UI methods never created one.
-   */
-  private async consumeInteractionForUiResponse(
-    session: ActiveSession,
-    response: Record<string, unknown>,
-  ): Promise<void> {
-    const uiRequestId = response["id"];
-    if (typeof uiRequestId !== "string") return;
-    const claimed = await query<{ id: string }>(
-      `UPDATE pending_interactions SET resolution = $3, resolved_at = now(), delivered_at = now()
-       WHERE session_id = $1 AND delivered_at IS NULL AND payload->>'id' = $2 RETURNING id`,
-      [session.sessionId, uiRequestId, JSON.stringify(response)],
-    );
-    const row = claimed.rows[0];
-    if (!row) return;
-    const { seq, ts } = await this.persist(session, "interaction_resolved", {
-      interactionId: row.id,
-      resolvedBy: null,
-    });
-    this.fanOut(session, {
-      type: "event",
-      seq,
-      kind: "interaction_resolved",
-      payload: { interactionId: row.id, resolvedBy: null },
-      ts,
-    });
-  }
-
-  /**
-   * Forward a recorded resolution to the live session. The atomic delivered_at claim is
-   * what consumes the approval: exactly one deliverer wins, and a failed send un-claims so
-   * the resolution stays retryable.
-   */
-  async deliverResolution(
-    session: ActiveSession,
-    args: { id: string; payload: Record<string, unknown>; resolution: unknown; resolvedBy: string | null },
-  ): Promise<boolean> {
-    const claim = await query(
-      "UPDATE pending_interactions SET delivered_at = now() WHERE id = $1 AND delivered_at IS NULL RETURNING id",
-      [args.id],
-    );
-    if ((claim.rowCount ?? 0) === 0) return false;
-    try {
-      const requestId = (args.payload as { id?: string }).id;
-      session.rpc.respondExtensionUi({
-        ...(typeof args.resolution === "object" && args.resolution !== null
-          ? args.resolution
-          : { value: args.resolution }),
-        id: requestId,
-      } as unknown as RpcExtensionUIResponse);
-    } catch (e) {
-      await query("UPDATE pending_interactions SET delivered_at = NULL WHERE id = $1", [args.id]).catch(
-        () => {},
-      );
-      throw e;
-    }
-    const { seq, ts } = await this.persist(session, "interaction_resolved", {
-      interactionId: args.id,
-      resolvedBy: args.resolvedBy,
-    });
-    this.fanOut(session, {
-      type: "event",
-      seq,
-      kind: "interaction_resolved",
-      payload: { interactionId: args.id, resolvedBy: args.resolvedBy },
-      ts,
-    });
-    return true;
-  }
-
-  /** Forward resolutions persisted by other roles (split deployments) to held sessions. */
-  private async deliverPendingResolutions(): Promise<void> {
-    if (this.sessions.size === 0) return;
-    const rows = await query<InteractionRow>(
-      `SELECT pi.id, s.pod_id, pi.payload, pi.resolution, pi.resolved_by, pi.delivered_at, s.ended_at
-       FROM pending_interactions pi JOIN sessions s ON s.id = pi.session_id
-       WHERE pi.resolved_at IS NOT NULL AND pi.delivered_at IS NULL AND s.pod_id = ANY($1)`,
-      [[...this.sessions.keys()]],
-    );
-    for (const row of rows.rows) {
-      const session = this.liveSession(row.pod_id);
-      if (!session) continue;
-      await this.deliverResolution(session, {
-        id: row.id,
-        payload: row.payload,
-        resolution: row.resolution,
-        resolvedBy: row.resolved_by,
-      }).catch((e) => {
-        this.deps.log.warn(`resolution delivery failed for ${row.id}: ${e instanceof Error ? e.message : e}`);
-      });
-    }
   }
 
   private async admitSessionHost(session: ActiveSession): Promise<void> {
@@ -3232,19 +3022,6 @@ export class GatewayService {
       return null;
     });
     observeJobRun("failed", failed?.rowCount ?? 0);
-  }
-
-  private async interactionAlreadyRecorded(podId: string, event: unknown): Promise<boolean> {
-    const podSeq = (event as { podSeq?: unknown }).podSeq;
-    if (typeof podSeq !== "number") return false;
-    const existing = await query(
-      `SELECT 1 FROM pending_interactions pi
-         JOIN sessions s ON s.id = pi.session_id
-        WHERE s.pod_id = $1 AND (pi.payload->>'podSeq')::int = $2
-        LIMIT 1`,
-      [podId, podSeq],
-    );
-    return (existing.rowCount ?? 0) > 0;
   }
 
   private async lookupClientRequest(sessionId: string, clientRequestId: string): Promise<unknown | null> {

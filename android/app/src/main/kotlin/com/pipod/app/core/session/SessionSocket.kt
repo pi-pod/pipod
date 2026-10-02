@@ -91,13 +91,8 @@ sealed interface SessionServerMessage {
 
     data class Ephemeral(val kind: String, val payload: JsonObject) : SessionServerMessage
 
-    data class Interaction(
-        val interactionId: String,
-        val seq: Long,
-        val kind: String,
-        val ts: String?,
-        val payload: JsonObject,
-    ) : SessionServerMessage
+    /** Some client answered the dialog with this pi request id. */
+    data class DialogClosed(val id: String) : SessionServerMessage
 
     data class ReplayGap(val fromSeq: Long, val toSeq: Long) : SessionServerMessage
 
@@ -157,7 +152,6 @@ interface SessionTransport {
     fun prompt(text: String, images: List<SessionImage>? = null): Boolean
     fun interrupt(): Boolean
     fun requestModels(): Boolean
-    fun resolve(interactionId: String, response: JsonObject): Boolean
     fun uiResponse(response: JsonObject): Boolean
     fun set(model: Map<String, String>? = null, thinkingLevel: String? = null): Boolean
 }
@@ -288,26 +282,9 @@ class SessionSocket(
     override fun requestModels(): Boolean = send(buildJsonObject { put("type", "get_models") })
 
     /**
-     * Answers a pending approval over the live socket.
-     *
-     * The gateway forwards `response` to the agent's `rpc.respondExtensionUi`
-     * unchanged, and the agent releases its prompt only on a frame carrying the
-     * `extension_ui_response` discriminator. The REST path normalises this in
-     * [ApiClient]; this path has to do the same or the card clears while the
-     * turn hangs until the agent's own 120s ask timeout.
-     */
-    override fun resolve(interactionId: String, response: JsonObject): Boolean = send(
-        buildJsonObject {
-            put("type", "resolve")
-            put("interactionId", interactionId)
-            put("response", ApiClient.extensionUiResponse(response))
-        },
-    )
-
-    /**
-     * Answers an extension UI request the pod is blocking on. Remote-UI surfaces
-     * ride this path; the gateway forwards the response to pi verbatim, and
-     * [remoteUiResponsePayload] already stamps the discriminator.
+     * Answers an extension UI request the pod is blocking on: a dialog, or a
+     * remote-UI surface. The gateway forwards the response to pi verbatim, so it
+     * must already be a complete `extension_ui_response` frame.
      */
     override fun uiResponse(response: JsonObject): Boolean = send(
         buildJsonObject {
@@ -381,13 +358,7 @@ class SessionSocket(
             payload = obj["payload"] as? JsonObject ?: JsonObject(emptyMap()),
         )
 
-        "interaction" -> SessionServerMessage.Interaction(
-            interactionId = obj.string("interactionId") ?: "",
-            seq = obj.integer("seq") ?: 0,
-            kind = obj.string("kind") ?: "extension_ui",
-            ts = obj.string("ts"),
-            payload = obj["payload"] as? JsonObject ?: JsonObject(emptyMap()),
-        )
+        "dialog_closed" -> SessionServerMessage.DialogClosed(id = obj.string("id") ?: "")
 
         "replay_gap" -> SessionServerMessage.ReplayGap(
             fromSeq = obj.integer("fromSeq") ?: 0,

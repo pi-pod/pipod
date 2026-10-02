@@ -16,9 +16,8 @@ signature is verified against the provider's JWKS with `Security`/`CryptoKit`.
   capacity waits, and archive/restore/delete.
 - **Session** — the live agent conversation: streaming transcript, markdown and ANSI
   output, tool cards, image attachments, interrupt, model and thinking-level switching,
-  queued prompts, reattach replay, and pod-side extension UI surfaces.
-- **Approvals** — the inbox of interactions an agent is blocked on, answerable inline in
-  the conversation or from the tab.
+  queued prompts, reattach replay, pod-side extension UI surfaces, and the questions an
+  extension asks (confirm, choose, type an answer), answered in the conversation.
 - **Jobs** — scheduled runs, their schedules read as sentences, and run history.
 - **Environments, settings and credentials** — environment templates, organization and
   personal config bundles with optimistic-concurrency saves, write-only secrets, and

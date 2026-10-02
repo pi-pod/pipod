@@ -32,8 +32,7 @@ async function attach(label: string, onOpen?: (ws: WebSocket, seen: Seen) => voi
     else if (payload.type === "extension_ui_request") {
       seen.frames.push(`${msg["type"]}:${payload.method}:${payload.id}`);
       seen.dialogIds.push(payload.id);
-    } else if (msg["type"] === "interaction") seen.frames.push(`interaction:${msg["kind"]}`);
-    else if (msg["type"] === "event") seen.frames.push(`event:${msg["kind"]}`);
+    } else if (msg["type"] === "event") seen.frames.push(`event:${msg["kind"]}`);
     else seen.frames.push(String(msg["type"]));
     if (msg["kind"] === "agent_settled") seen.settled = true;
   });

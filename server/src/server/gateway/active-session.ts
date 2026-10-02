@@ -3,6 +3,7 @@ import type { FrameChannel, RemoteRpcClient } from "../../core/client/rpc.js";
 import type { Sandbox } from "../../core/providers/types.js";
 import type { PodRow } from "../pods/service.js";
 import type { SessionActivityLease } from "./activity.js";
+import type { OpenDialog } from "./dialogs.js";
 import type { PiStartupCrash } from "./session-state.js";
 import type { WsSink } from "./stream-fanout.js";
 
@@ -23,6 +24,8 @@ export interface ActiveSession {
   remoteUiControls: Map<string, AgentSessionEvent>;
   /** A remote component is interactive from one websocket at a time. */
   remoteUiOwners: Map<string, WsSink>;
+  /** Blocking extension dialogs pi is waiting on, by request id, oldest first. */
+  openDialogs: Map<string, OpenDialog>;
   /** Newest in-flight assistant message snapshot; superseded by the durable message_end. */
   streamingUpdate: AgentSessionEvent | null;
   /** Newest in-flight output per tool call; superseded by the durable tool_execution_end. */

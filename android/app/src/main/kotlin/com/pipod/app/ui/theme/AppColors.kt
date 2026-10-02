@@ -43,7 +43,7 @@ data class AppColors(
     /** Errors and destructive actions. */
     val destructive: Color,
     val destructiveFill: Color,
-    /** Attention that is not an error, such as a pending approval. */
+    /** Attention that is not an error, such as a question pi is waiting on. */
     val notice: Color,
     val noticeFill: Color,
     /**
@@ -56,7 +56,7 @@ data class AppColors(
      * ends are therefore hand-pinned — like [StatusTone], and unlike the rest
      * of this palette — to clear 4.5:1 on every backdrop a notice string is
      * drawn on: [card], [background], [noticeFill], and the 12%-[notice] wash
-     * behind an approval card. `AppColorsContrastRound2Test` measures all of it.
+     * behind a dialog card. `AppColorsContrastRound2Test` measures all of it.
      */
     val noticeText: Color,
     /** Which end of the palette this instance resolves against. */
@@ -92,7 +92,7 @@ data class AppColors(
 
         /**
          * Byzantine darkened until it clears AA on ivory, on the tertiary
-         * container and through the approval wash — still recognisably the
+         * container and through the dialog-card wash — still recognisably the
          * brand's magenta rather than a generic warning brown.
          */
         private val LightNoticeText = Color(0xFF8A1874)

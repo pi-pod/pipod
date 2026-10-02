@@ -28,7 +28,6 @@ public final class SessionStore {
     public private(set) var billing: BillingSummary?
 
     public private(set) var isRestoringSession = true
-    public private(set) var pendingApprovalsCount = 0
     public private(set) var authNotice: String?
 
     /// A destination a notification or `pipod://` URL asked for while signed out
@@ -49,7 +48,6 @@ public final class SessionStore {
     /// `(count, announce)`. `announce` is false when the change was raised by a
     /// session this app is already rendering: the icon badge still moves, but a
     /// banner over the card the reader is looking at would repeat it.
-    private let onBadgeChanged: ((Int, Bool) async -> Void)?
     private let retryDelay: (Int) -> TimeInterval
     @ObservationIgnored private let credentialPersistenceLane: CredentialPersistenceLane
     @ObservationIgnored private let credentialPersistenceReady: Task<Void, Never>
@@ -59,10 +57,6 @@ public final class SessionStore {
     private var identityGeneration: UUID?
     private var pendingSessionExpiry: TokenVersion?
     private var attemptedDevToken = false
-    /// Kept alive for the life of the store; dropping them unsubscribes.
-    @ObservationIgnored private var approvalObservers: [NotificationToken] = []
-    @ObservationIgnored private var approvalsRefreshInFlight = false
-    @ObservationIgnored private var approvalsRefreshQueued = false
 
     /// How many extra attempts a transient restore failure is worth before the
     /// screen asks the person to wait. Bounded: a device with no network must
@@ -73,12 +67,10 @@ public final class SessionStore {
         api: APIClient,
         storage: SessionTokenStorage,
         authenticator: AuthService?,
-        onBadgeChanged: ((Int, Bool) async -> Void)? = nil,
         retryDelay: ((Int) -> TimeInterval)? = nil
     ) {
         self.api = api
         self.authenticator = authenticator
-        self.onBadgeChanged = onBadgeChanged
         self.retryDelay = retryDelay ?? { attempt in attempt <= 1 ? 1 : 4 }
         let credentialPersistenceLane = CredentialPersistenceLane(storage: storage, tokens: api.tokens)
         self.credentialPersistenceLane = credentialPersistenceLane
@@ -92,21 +84,6 @@ public final class SessionStore {
                 await self?.handleUnauthorized(version: version)
             }
         }
-        // Approvals are answered and raised inside live sessions far more often
-        // than in the inbox. Without these, the tab badge, the pod-list notice
-        // row and the app-icon badge all stayed at whatever count was read at
-        // sign-in: the server's push payload carries no `aps.badge`, so nothing
-        // else corrects them until the inbox is opened.
-        approvalObservers = [
-            SessionNotifications.interactionResolved.addObserver { [weak self] _ in
-                self?.scheduleApprovalsBadgeRefresh()
-            },
-            SessionNotifications.interactionPending.addObserver { [weak self] _ in
-                // The card is on screen in the session that raised it, so this
-                // count moves the badge without also banner-ing it.
-                self?.scheduleApprovalsBadgeRefresh(announce: false)
-            },
-        ]
     }
 
     public var isSignedIn: Bool { user != nil && identityGeneration != nil }
@@ -513,8 +490,6 @@ public final class SessionStore {
     private func resetSessionState() {
         SessionDraftStore.purgeAll()
         QueuedPromptAdmissionStore.purgeAll()
-        InteractionDraftStore.purgeAll()
-        InteractionReceiptStore.purgeAll()
         user = nil
         organization = nil
         currentOrgId = nil
@@ -524,7 +499,6 @@ public final class SessionStore {
         billing = nil
         authNotice = nil
         identityGeneration = nil
-        setApprovalsCount(0)
         onSessionReset?()
     }
 
@@ -541,50 +515,4 @@ public final class SessionStore {
     public func reportAuthorizationFailure(_ error: Error) {
         authNotice = FriendlyError.message(error)
     }
-
-    // MARK: - Badges
-
-    public func refreshApprovalsBadge(announce: Bool = true) async {
-        guard user != nil else {
-            setApprovalsCount(0)
-            return
-        }
-        // Keep the last trustworthy count on transient poll failures.
-        guard let interactions = try? await api.interactions() else { return }
-        setApprovalsCount(interactions.items.count, announce: announce)
-    }
-
-    /// Re-reads the count behind a single flight: answering four approvals in a
-    /// row costs one fetch plus one more to confirm, not four.
-    public func scheduleApprovalsBadgeRefresh(announce: Bool = true) {
-        guard user != nil else { return }
-        if approvalsRefreshInFlight {
-            approvalsRefreshQueued = true
-            return
-        }
-        approvalsRefreshInFlight = true
-        Task { [weak self] in await self?.drainApprovalsBadgeRefresh(announce: announce) }
-    }
-
-    private func drainApprovalsBadgeRefresh(announce: Bool) async {
-        defer { approvalsRefreshInFlight = false }
-        await refreshApprovalsBadge(announce: announce)
-        while approvalsRefreshQueued {
-            approvalsRefreshQueued = false
-            await refreshApprovalsBadge(announce: announce)
-        }
-    }
-
-    /// A list screen that has just fetched knows the count already; taking it
-    /// directly keeps the badge honest without a second round trip.
-    public func setPendingApprovalsCount(_ count: Int) { setApprovalsCount(count) }
-
-    private func setApprovalsCount(_ count: Int, announce: Bool = true) {
-        guard count != pendingApprovalsCount else { return }
-        pendingApprovalsCount = count
-        if let onBadgeChanged {
-            Task { await onBadgeChanged(count, announce) }
-        }
-    }
-
 }

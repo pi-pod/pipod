@@ -14,7 +14,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.pipod.app.core.api.model.AuthUser
 import com.pipod.app.core.api.model.MeResponse
 import com.pipod.app.core.api.model.Organization
-import com.pipod.app.core.api.model.PendingInteraction
 import com.pipod.app.core.api.model.RefreshResponse
 import com.pipod.app.core.auth.OidcTransientException
 import com.pipod.app.core.session.SessionKeys
@@ -194,8 +193,5 @@ class AuthGateRestoreTest {
                 organization = Organization(id = "org", alias = "acme", name = "Org"),
             )
         }
-
-        override suspend fun interactions(): List<PendingInteraction> = emptyList()
-
     }
 }

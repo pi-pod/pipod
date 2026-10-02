@@ -205,7 +205,7 @@ export class Reaper {
    * Every candidate must pass the same genuine-idleness test as a normal idle stop: no CPU
    * movement this tick and, for a stop, past its own idle window (or a warm sandbox that has
    * been silent for at least the warm window when it has no idle timeout). A sandbox awaiting a
-   * model, approval or network reply is never stopped for pressure; when no candidate qualifies
+   * model, dialog or network reply is never stopped for pressure; when no candidate qualifies
    * the reaper reports it instead of guessing.
    */
   private async relieveHostPressure(now: number = Date.now(), busy: ReadonlySet<string> = new Set()): Promise<void> {

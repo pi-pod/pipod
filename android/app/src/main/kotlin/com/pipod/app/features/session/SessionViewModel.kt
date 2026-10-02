@@ -3,19 +3,15 @@ package com.pipod.app.features.session
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pipod.app.core.api.ApiClient
-import com.pipod.app.core.api.model.PendingInteraction
 import com.pipod.app.core.api.model.Pod
-import com.pipod.app.core.api.model.ResolveOutcome
-import com.pipod.app.core.config.RuntimeConfig
-import com.pipod.app.core.format.FriendlyError
 import com.pipod.app.core.session.ApiClientSessionApi
 import com.pipod.app.core.session.ChatAttachment
+import com.pipod.app.core.session.PiDialog
 import com.pipod.app.core.session.RemoteUiSnapshot
 import com.pipod.app.core.session.SessionApi
 import com.pipod.app.core.session.SessionStream
 import com.pipod.app.core.session.SessionStreamState
 import com.pipod.app.core.session.StreamItem
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,26 +20,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
-
-/**
- * The one server call an open session makes on its own behalf.
- *
- * A named seam rather than an [ApiClient] parameter, because the gateway
- * contract lives on the other side of it: `resolveInteraction` is what wraps an
- * object answer in `{"type": "extension_ui_response", …}`, and the agent
- * releases its blocked prompt only on a frame carrying that key. A screen that
- * built the request itself would answer the approval, clear the card, and leave
- * the turn hanging until the agent's own 120-second ask timeout.
- */
-fun interface InteractionResolver {
-    suspend fun resolve(id: String, response: JsonObject): ResolveOutcome
-}
-
-/** The production resolver: straight through [ApiClient.resolveInteraction]. */
-class ApiInteractionResolver(private val api: ApiClient) : InteractionResolver {
-    override suspend fun resolve(id: String, response: JsonObject): ResolveOutcome =
-        api.resolveInteraction(id = id, response = response)
-}
 
 /** Everything the session screen draws. */
 data class SessionState(
@@ -103,7 +79,7 @@ data class SessionState(
             !stream.isConnected -> if (stream.reconnecting) "Reconnecting…" else "Connecting…"
             // The inline typing indicator already says this next to the latest
             // turn; the title repeats it only while the transcript is empty.
-            stream.isRunning && stream.items.isEmpty() && stream.pendingInteractions.isEmpty() ->
+            stream.isRunning && stream.items.isEmpty() && stream.openDialogs.isEmpty() ->
                 "pi is working"
 
             else -> null
@@ -128,18 +104,10 @@ data class SessionState(
  */
 class SessionViewModel(
     val stream: SessionStream,
-    private val resolver: InteractionResolver,
     private val drafts: SessionDraftStore,
     initialPod: Pod,
     /** Null in a test that drives [stream] directly instead of opening a socket. */
     private val api: SessionApi? = null,
-    /**
-     * The server's still-pending approvals. Without it a card restored from a
-     * replay carries the pi request id and the server rejects a resolve posted
-     * with it.
-     */
-    pendingInteractionsFetcher: (suspend () -> List<PendingInteraction>)? = null,
-    private val serverHost: String? = RuntimeConfig.serverUrl,
     /** Set false by a test that owns the stream's lifetime itself. */
     private val ownsStream: Boolean = true,
 ) : ViewModel() {
@@ -157,17 +125,7 @@ class SessionViewModel(
             initialValue = local.value,
         )
 
-    /**
-     * Approvals whose answer is already in flight. A second tap — or a semantics
-     * action slipping past a disabled button — must not post the same answer
-     * twice, and the card is only allowed to clear once.
-     */
-    private val resolving = mutableSetOf<String>()
-
     init {
-        // Restored cards resolve through the gateway uuid from the pending
-        // listing; without this the inline Submit posts the pi request id.
-        pendingInteractionsFetcher?.let { stream.pendingInteractionsFetcher = it }
         if (api != null) viewModelScope.launch { runCatching { stream.open(api) } }
     }
 
@@ -252,67 +210,8 @@ class SessionViewModel(
 
     fun setToolExpanded(key: String, expanded: Boolean) = stream.setToolExpanded(key, expanded)
 
-    fun dismissStaleInteraction(id: String) {
-        stream.removeInteraction(id)
-    }
-
-    // --- approvals ----------------------------------------------------------
-
-    /**
-     * Answers one approval, exactly once.
-     *
-     * The card is registered as locally resolved *before* the POST: the server's
-     * `interaction_resolved` fan-out normally beats the POST's own response, and
-     * the registered intent is what lets the racing event phrase "You confirmed
-     * …" instead of the generic "Resolved …".
-     *
-     * Restored cards carry the pi request id until the pending listing adopts
-     * the gateway uuid. Resolving with a request id is a 404 that surfaces as a
-     * bare "validation failed", so one reconcile is attempted first and the
-     * failure is re-phrased into something a reader can act on.
-     */
-    suspend fun resolveInteraction(interaction: PendingInteraction, response: JsonObject) {
-        val guard = interaction.id
-        synchronized(resolving) { if (!resolving.add(guard)) return }
-        try {
-            var targetId = stream.resolvableIdFor(interaction.id)
-            // The card may already be gone — answered from the Approvals tab,
-            // or by another device — in which case the fan-out has cleared it
-            // here too. Posting again would answer a request the agent has
-            // moved past and emit a second receipt for one decision.
-            if (stream.pendingInteractions.none { it.id == interaction.id || it.id == targetId }) {
-                return
-            }
-            if (!SessionStream.isGatewayUuid(targetId)) {
-                // Keep the card if this fails; the submit below surfaces the error.
-                runCatching { stream.reconcilePendingWithServer() }
-                targetId = stream.resolvableIdFor(interaction.id)
-            }
-            stream.beginLocalResolve(targetId, response)
-            if (targetId != interaction.id) stream.beginLocalResolve(interaction.id, response)
-            try {
-                val outcome = resolver.resolve(targetId, response)
-                stream.markInteractionResolved(
-                    id = targetId,
-                    deliveryPending = outcome.isDeliveryPending,
-                    response = response,
-                )
-            } catch (cancelled: CancellationException) {
-                stream.cancelLocalResolve(targetId)
-                if (targetId != interaction.id) stream.cancelLocalResolve(interaction.id)
-                throw cancelled
-            } catch (error: Throwable) {
-                stream.cancelLocalResolve(targetId)
-                if (targetId != interaction.id) stream.cancelLocalResolve(interaction.id)
-                if (!SessionStream.isGatewayUuid(targetId) && looksLikeUnknownInteraction(error, serverHost)) {
-                    throw IllegalStateException(UNKNOWN_INTERACTION_MESSAGE)
-                }
-                throw error
-            }
-        } finally {
-            synchronized(resolving) { resolving.remove(guard) }
-        }
-    }
+    /** Answers a dialog pi is waiting on. False while disconnected; pi keeps waiting. */
+    fun answer(dialog: PiDialog, response: JsonObject): Boolean = stream.answer(dialog, response)
 
     override fun onCleared() {
         if (ownsStream) stream.dispose()
@@ -331,28 +230,10 @@ class SessionViewModel(
             val stream = SessionStream(podId = pod.id, fromSeq = fromSeq, sessionId = sessionId)
             return SessionViewModel(
                 stream = stream,
-                resolver = ApiInteractionResolver(client),
                 drafts = drafts,
                 initialPod = pod,
                 api = ApiClientSessionApi(client),
-                pendingInteractionsFetcher = { client.interactions().items },
             )
         }
-
-        const val UNKNOWN_INTERACTION_MESSAGE: String =
-            "Couldn’t find this approval on the server. Reopen the session to refresh, then try again."
-
-        /**
-         * The server answers an unknown interaction id — a pi request id posted
-         * where only the gateway uuid resolves — with a 404/`not_found` that
-         * otherwise surfaces as a bare "validation failed".
-         */
-        internal fun looksLikeUnknownInteraction(error: Throwable, serverHost: String? = null): Boolean {
-            val friendly = FriendlyError.message(error, serverHost).lowercase()
-            val raw = error.toString().lowercase()
-            return MARKERS.any { friendly.contains(it) || raw.contains(it) }
-        }
-
-        private val MARKERS = listOf("validation failed", "not_found", "not found", "404")
     }
 }

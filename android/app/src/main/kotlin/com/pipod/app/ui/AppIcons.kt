@@ -17,7 +17,7 @@ import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.FindInPage
 import androidx.compose.material.icons.outlined.Forum
-import androidx.compose.material.icons.outlined.GppGood
+import androidx.compose.material.icons.outlined.QuestionAnswer
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Inventory2
@@ -45,7 +45,6 @@ import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.ExploreOff
 import androidx.compose.material.icons.rounded.FilterList
 import androidx.compose.material.icons.rounded.FilterListOff
-import androidx.compose.material.icons.rounded.GppMaybe
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Memory
@@ -148,8 +147,7 @@ object AppIcons {
     val secret: ImageVector get() = Icons.Rounded.Key
     val person: ImageVector get() = Icons.Rounded.Person
     val conversation: ImageVector get() = Icons.Outlined.Forum
-    val approval: ImageVector get() = Icons.Rounded.GppMaybe
-    val approvalGranted: ImageVector get() = Icons.Outlined.GppGood
+    val question: ImageVector get() = Icons.Outlined.QuestionAnswer
     val inspect: ImageVector get() = Icons.Outlined.FindInPage
     val attach: ImageVector get() = Icons.Outlined.Image
     val suggestion: ImageVector get() = Icons.Rounded.AutoAwesome

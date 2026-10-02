@@ -32,13 +32,11 @@ import com.pipod.app.core.api.model.Pod
 import com.pipod.app.core.api.model.WorkstationDemand
 import com.pipod.app.core.config.RuntimeConfig
 import com.pipod.app.core.format.FriendlyError
-import com.pipod.app.core.push.PushController
 import com.pipod.app.core.workstation.WorkstationStatusSource
 import com.pipod.app.core.workstation.WorkstationWaitOutcome
 import com.pipod.app.core.workstation.WorkstationWaitSession
 import com.pipod.app.core.workstation.WorkstationWaitState
 import com.pipod.app.features.common.WorkstationWaitCard
-import com.pipod.app.features.interactions.InteractionResponseControls
 import com.pipod.app.features.pods.ModelPickerScreen
 import com.pipod.app.ui.AppActivityIndicator
 import com.pipod.app.ui.AppButton
@@ -64,7 +62,6 @@ fun SessionRoute(
     initialPod: Pod? = null,
     fromSeq: Long? = null,
     sessionId: String? = null,
-    push: PushController? = null,
     onOpenPodDetails: (Pod) -> Unit = {},
     onBack: () -> Unit = {},
 ) {
@@ -143,16 +140,6 @@ fun SessionRoute(
                 onOpenPodDetails = onOpenPodDetails,
                 onOpenModelPicker = { isPickingModel = true },
                 onNavigateBack = onBack,
-                push = push,
-                approvalControls = { interaction ->
-                    // Embedded use: no draft guard here, so a back navigation
-                    // simply exits the session instead of stacking one dialog
-                    // per mounted approval.
-                    InteractionResponseControls(
-                        interaction = interaction,
-                        onResolve = { response -> viewModel.resolveInteraction(interaction, response) },
-                    )
-                },
             )
             // A sheet over the conversation rather than a route: it acts on the
             // live stream, which does not survive a navigation, and the

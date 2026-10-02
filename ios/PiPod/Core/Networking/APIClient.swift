@@ -421,39 +421,6 @@ public final class APIClient: @unchecked Sendable {
         return try JSONCoding.decode(ConversationEventsPage.self, from: data)
     }
 
-    // MARK: - Interactions
-
-    /// Every waiting approval, following the same `limit`/`before` cursor the
-    /// pod list does. A page cap here is worse than a truncated list: an
-    /// approval the app never fetched blocks its agent turn until pi times out.
-    public func interactions(pendingOnly: Bool = true) async throws -> DecodedList<PendingInteraction> {
-        try await pagedList(
-            PendingInteraction.self,
-            path: "interactions", key: "interactions", resourceName: "interaction",
-            query: [
-                "pending": pendingOnly ? "true" : "false",
-                "limit": "\(APIClient.listPageSize)",
-            ],
-            id: \.id,
-            cursor: { $0.createdAt }
-        )
-    }
-
-    /// Answers a blocked interaction.
-    ///
-    /// The answer is normalized on the way out: the gateway forwards it verbatim
-    /// to pi, which needs `type: "extension_ui_response"` to release the prompt.
-    /// See `InteractionResponse`.
-    public func resolveInteraction(id: String, response: JSONValue) async throws -> ResolveOutcome {
-        // Null is a valid interaction answer, so this key is always present.
-        let data = try await request(
-            "POST", "interactions/\(escaped(id))/resolve",
-            body: .object(["response": InteractionResponse.normalized(response)])
-        )
-        return (try? JSONCoding.decode(ResolveOutcome.self, from: data))
-            ?? ResolveOutcome(resolved: true)
-    }
-
     // MARK: - Jobs
 
     /// Every job, not just the newest page.

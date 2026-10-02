@@ -1252,7 +1252,7 @@ export class GatewayRpcClient extends RpcClientBase {
       case "aux_complete_result":
         this.acceptAuxResult(message);
         break;
-      case "interaction":
+      case "dialog_closed":
       case "replay_gap":
       case "pong":
         break;

@@ -105,7 +105,7 @@ const OUTAGE_MS = Number(process.env.OUTAGE_MS ?? 15000);
 const KEEP_TMP = process.env.KEEP_TMP === "1";
 const POD_ID = "pod-manual-verify";
 // Optional live postgres: when set, attaches run the FULL durable path (client hello
-// + event replay + unanswered interactions) instead of stopping at ready-db-tail.
+// + event replay + open dialogs) instead of stopping at ready-db-tail.
 // Fixtures use unique uuidv7 IDs; only own rows are deleted afterwards.
 const DB_URL = process.env.PI_POD_TEST_DATABASE_URL || "";
 
@@ -170,6 +170,11 @@ function fakeSession(sessionId: string, rpc: RemoteRpcClient, podId = POD_ID) {
     // Success-tail surface (only reached when get_state passes):
     remoteUiControls: new Map(),
     remoteUiSurfaces: new Map(),
+    // One dialog pi is still waiting on, which every attaching client must be shown.
+    openDialogs: new Map([["dlg-1", {
+      request: { type: "extension_ui_request", id: "dlg-1", method: "confirm", title: "Proceed?" },
+      expiresAt: null,
+    }]]),
     streamingUpdate: null,
     toolExecutionUpdates: new Map(),
     bashSnapshots: new Map(),
@@ -202,7 +207,6 @@ async function teardownDb(ctx: DbCtx): Promise<void> {
   try {
     if (ctx.sessionIds.length) {
       await query("DELETE FROM session_events WHERE session_id = ANY($1)", [ctx.sessionIds]).catch(() => {});
-      await query("DELETE FROM pending_interactions WHERE session_id = ANY($1)", [ctx.sessionIds]).catch(() => {});
       await query("DELETE FROM sessions WHERE id = ANY($1)", [ctx.sessionIds]).catch(() => {});
     }
     await query("DELETE FROM pods WHERE id = $1", [ctx.podUuid]).catch(() => {});
@@ -218,11 +222,6 @@ async function seedReplayEvents(sessionId: string): Promise<void> {
     `INSERT INTO session_events (session_id, seq, kind, payload)
      VALUES ($1, 1, 'message_end', $2), ($1, 2, 'tool_execution_start', $3)`,
     [sessionId, JSON.stringify({ text: "a prior turn" }), JSON.stringify({ tool: "bash", id: "call-1" })],
-  );
-  await query(
-    `INSERT INTO pending_interactions (id, session_id, seq, kind, payload, resolution, delivered_at)
-     VALUES ($1, $2, 1, 'confirm', $3, NULL, NULL)`,
-    [uuidv7(), sessionId, JSON.stringify({ type: "extension_ui_request", id: "dlg-1", method: "confirm", title: "Proceed?" })],
   );
 }
 
@@ -491,7 +490,7 @@ async function partReal() {
     };
 
     // A. healthy attach: readiness must pass, no kill. With DB this is a FULL
-    // attach: client hello + durable replay + unanswered interaction delivery.
+    // attach: client hello + durable replay + open dialog delivery.
     // readyOk means "readiness passed without retiring" in either db mode.
     const readyOk = (cls: string) => (db ? cls === "success" : cls === "ready-db-tail" || cls === "success");
     if (want("attach-healthy")) {

@@ -41,11 +41,6 @@ public struct RootView: View {
         guard let destination = push.pendingDestination else { return }
         push.pendingDestination = nil
         deliver(destination)
-        // A notification is the server telling us something changed while the
-        // app was away. The payload carries no `aps.badge`, so the tab badge,
-        // the app icon and the pod list's approvals row are all stale until
-        // something asks — and this is the moment we know to ask.
-        Task { await session.refreshApprovalsBadge() }
     }
 
     private func handle(_ url: URL) {
@@ -98,14 +93,12 @@ struct AppShell: View {
                     .navigationDestination(for: PodRoute.self, destination: podDestination)
             }
             .tabItem { Label(AppTab.pods.title, systemImage: AppTab.pods.systemImage) }
-            .badge(session.pendingApprovalsCount)
             .tag(AppTab.pods)
 
             NavigationStack(path: $router.jobsPath) {
                 JobsListView()
                     .navigationDestination(for: JobRoute.self, destination: jobDestination)
             }
-            // No badge: jobs have no draft state left to wait for a decision on.
             .tabItem { Label(AppTab.jobs.title, systemImage: AppTab.jobs.systemImage) }
             .tag(AppTab.jobs)
 
@@ -117,7 +110,6 @@ struct AppShell: View {
             .tag(AppTab.settings)
         }
         .environment(streams)
-        .task { await session.refreshApprovalsBadge() }
     }
 
     @ViewBuilder
@@ -139,10 +131,6 @@ struct AppShell: View {
             LaunchPodView()
         case .retryLaunch(let templateId):
             LaunchPodView(templateId: templateId, isRetry: true)
-        case .approvals:
-            InteractionListView()
-        case .approvalDetail(let interaction):
-            InteractionDetailView(interaction: interaction)
         case .modelPicker(let podId):
             modelPicker(podId: podId)
         }

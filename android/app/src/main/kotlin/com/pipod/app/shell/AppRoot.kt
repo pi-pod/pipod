@@ -47,8 +47,8 @@ fun AppRoot(
 
     // Signing out has to take the back stack with it. Without this the entries
     // behind the current one survive, and so do their `ViewModelStore`s: the
-    // next person to sign in on this device lands on a pod list, an approvals
-    // inbox and a settings screen still holding the previous account's data,
+    // next person to sign in on this device lands on a pod list and a settings
+    // screen still holding the previous account's data,
     // and pressing back walks straight into it.
     var hadUser by remember { mutableStateOf(user != null) }
     LaunchedEffect(user) {

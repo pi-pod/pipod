@@ -20,7 +20,6 @@ import { registerTemplateRoutes } from "./templates/routes.js";
 import { registerJobRoutes } from "./jobs/routes.js";
 import { registerPodRoutes } from "./pods/routes.js";
 import { registerGatewayRoutes } from "./gateway/routes.js";
-import { registerInteractionRoutes } from "./interactions/routes.js";
 import {
   HttpError,
   isLaunchAdmissionHeldError,
@@ -292,7 +291,6 @@ export async function buildApp(deps: AppDeps) {
       registerTemplateRoutes(v1);
       registerJobRoutes(v1);
       registerPodRoutes(v1, deps.podDeps, deps.gateway);
-      registerInteractionRoutes(v1, deps.gateway);
     }
     if (deps.roles.gateway) {
       registerGatewayRoutes(v1, deps.gateway!);

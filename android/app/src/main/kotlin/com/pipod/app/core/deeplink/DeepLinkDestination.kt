@@ -4,8 +4,7 @@ import android.net.Uri
 
 /**
  * Destinations a link or a push payload can name: a pod session (optionally
- * resumed at `fromSeq`), a pending interaction, or a job that never spawned a
- * pod.
+ * resumed at `fromSeq`), or a job that never spawned a pod.
  *
  * Port of `pi-pod-flutter/lib/core/deeplink/deep_link.dart`. [location] is a
  * navigation route in the same path vocabulary the Flutter router uses, so the
@@ -16,16 +15,15 @@ data class DeepLinkDestination(
     val orgId: String? = null,
     val sessionId: String? = null,
     val fromSeq: Long? = null,
-    val interactionId: String? = null,
     val jobId: String? = null,
 ) {
 
     val isEmpty: Boolean
-        get() = podId.isNullOrEmpty() && interactionId == null && jobId == null
+        get() = podId.isNullOrEmpty() && jobId == null
 
     /**
-     * Where to navigate. An interaction without a pod lands on the inbox; a job
-     * without a pod lands on the job; everything else opens the session.
+     * Where to navigate: a pod opens its session, a job without a pod opens the
+     * job, and anything else lands on the pod list.
      */
     val location: String
         get() {
@@ -50,23 +48,10 @@ data class DeepLinkDestination(
                 return "/pods/${Uri.encode(podId)}/session$query"
             }
             if (!jobId.isNullOrEmpty()) return "/jobs/${Uri.encode(jobId)}"
-            if (interactionId != null) {
-                // The inbox is the destination either way, but the id travels
-                // with it: a notification names one request, and dropping the
-                // name leaves the reader to find the row the banner was holding.
-                if (interactionId == INBOX) return "/pods/approvals"
-                return "/pods/approvals?interactionId=${Uri.encode(interactionId)}"
-            }
             return "/pods"
         }
 
     companion object {
-
-        /**
-         * "the inbox, no particular request" — what a link to `/pods/approvals`
-         * with no id means. Not a real interaction id, and never routed as one.
-         */
-        const val INBOX = "inbox"
 
         /**
          * Navigation location for a platform URI.
@@ -98,7 +83,7 @@ data class DeepLinkDestination(
         }
 
         /**
-         * `pipod://pod/<id>`, `pipod://interaction/<id>`, `pipod://job/<id>`,
+         * `pipod://pod/<id>`, `pipod://job/<id>`,
          * plus the triple-slash spelling and in-app http(s) paths.
          */
         fun fromUri(uri: Uri): DeepLinkDestination? {
@@ -135,7 +120,6 @@ data class DeepLinkDestination(
                     ),
                 )
 
-                "interaction" -> DeepLinkDestination(interactionId = id)
                 "job" -> DeepLinkDestination(jobId = id)
                 else -> null
             }
@@ -151,28 +135,19 @@ data class DeepLinkDestination(
                 )
             }
             if (parts.size >= 2 && parts[0] == "jobs") return DeepLinkDestination(jobId = parts[1])
-            if (parts.size >= 2 && parts[0] == "pods" && parts[1] == "approvals") {
-                return DeepLinkDestination(
-                    interactionId = uri.getQueryParameter("interactionId")
-                        ?.takeIf { it.isNotEmpty() }
-                        ?: INBOX,
-                )
-            }
             return null
         }
 
         /** Push payload (spec §11 keys). */
         fun fromPayload(payload: Map<String, Any?>): DeepLinkDestination? {
             val podId = payload["pod_id"] as? String ?: ""
-            val interactionId = payload["interaction_id"] as? String
             val jobId = payload["job_id"] as? String
-            if (podId.isEmpty() && interactionId == null && jobId == null) return null
+            if (podId.isEmpty() && jobId == null) return null
             return DeepLinkDestination(
                 podId = podId.ifEmpty { null },
                 orgId = payload["org_id"] as? String,
                 sessionId = payload["session_id"] as? String,
                 fromSeq = integer(payload["seq"]),
-                interactionId = interactionId,
                 jobId = jobId,
             )
         }

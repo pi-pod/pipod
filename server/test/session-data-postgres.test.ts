@@ -27,9 +27,8 @@ describe("pod session purge (postgres)", { skip: databaseUrl ? false : "set PI_P
     );
   }
 
-  async function seedPod(podId: string): Promise<{ sessionId: string; interactionId: string; promptId: string }> {
+  async function seedPod(podId: string): Promise<{ sessionId: string; promptId: string }> {
     const sessionId = uuidv7();
-    const interactionId = uuidv7();
     const promptId = uuidv7();
     await query(
       `INSERT INTO sessions (id, pod_id, user_id, started_at, ended_at, end_reason)
@@ -42,16 +41,11 @@ describe("pod session purge (postgres)", { skip: databaseUrl ? false : "set PI_P
       [sessionId],
     );
     await query(
-      `INSERT INTO pending_interactions (id, session_id, seq, kind, payload)
-       VALUES ($1, $2, 1, 'tool_approval', '{}'::jsonb)`,
-      [interactionId, sessionId],
-    );
-    await query(
       `INSERT INTO queued_prompts (id, pod_id, user_id, text, status)
        VALUES ($1, $2, $3, 'queued', 'delivered')`,
       [promptId, podId, userId],
     );
-    return { sessionId, interactionId, promptId };
+    return { sessionId, promptId };
   }
 
   before(async () => {
@@ -70,9 +64,6 @@ describe("pod session purge (postgres)", { skip: databaseUrl ? false : "set PI_P
 
   after(async () => {
     for (const podId of [parentId, childId, otherId]) {
-      await query("DELETE FROM pending_interactions WHERE session_id IN (SELECT id FROM sessions WHERE pod_id = $1)", [
-        podId,
-      ]);
       await query("DELETE FROM session_events WHERE session_id IN (SELECT id FROM sessions WHERE pod_id = $1)", [podId]);
       await query("DELETE FROM queued_prompts WHERE pod_id = $1", [podId]);
       await query("DELETE FROM sessions WHERE pod_id = $1", [podId]);
@@ -83,7 +74,7 @@ describe("pod session purge (postgres)", { skip: databaseUrl ? false : "set PI_P
     await closePool();
   });
 
-  it("removes only the deleted pod's sessions, events, interactions, and queued prompts", async () => {
+  it("removes only the deleted pod's sessions, events, and queued prompts", async () => {
     const target = await seedPod(parentId);
     const kept = await seedPod(otherId);
 
@@ -93,21 +84,19 @@ describe("pod session purge (postgres)", { skip: databaseUrl ? false : "set PI_P
       `SELECT
          (SELECT count(*) FROM sessions WHERE id = $1) AS sessions,
          (SELECT count(*) FROM session_events WHERE session_id = $1) AS events,
-         (SELECT count(*) FROM pending_interactions WHERE id = $2) AS interactions,
-         (SELECT count(*) FROM queued_prompts WHERE id = $3) AS prompts`,
-      [target.sessionId, target.interactionId, target.promptId],
+         (SELECT count(*) FROM queued_prompts WHERE id = $2) AS prompts`,
+      [target.sessionId, target.promptId],
     );
-    assert.deepEqual(gone.rows[0], { sessions: "0", events: "0", interactions: "0", prompts: "0" });
+    assert.deepEqual(gone.rows[0], { sessions: "0", events: "0", prompts: "0" });
 
     const still = await query(
       `SELECT
          (SELECT count(*) FROM sessions WHERE id = $1) AS sessions,
          (SELECT count(*) FROM session_events WHERE session_id = $1) AS events,
-         (SELECT count(*) FROM pending_interactions WHERE id = $2) AS interactions,
-         (SELECT count(*) FROM queued_prompts WHERE id = $3) AS prompts`,
-      [kept.sessionId, kept.interactionId, kept.promptId],
+         (SELECT count(*) FROM queued_prompts WHERE id = $2) AS prompts`,
+      [kept.sessionId, kept.promptId],
     );
-    assert.deepEqual(still.rows[0], { sessions: "1", events: "1", interactions: "1", prompts: "1" });
+    assert.deepEqual(still.rows[0], { sessions: "1", events: "1", prompts: "1" });
 
     const tombstone = await query("SELECT id FROM pods WHERE id = $1", [parentId]);
     assert.equal(tombstone.rows[0]?.id, parentId);
@@ -126,17 +115,14 @@ describe("pod session purge (postgres)", { skip: databaseUrl ? false : "set PI_P
        UNION ALL
        SELECT 'events', count(*)::text FROM session_events WHERE session_id = ANY($1)
        UNION ALL
-       SELECT 'interactions', count(*)::text FROM pending_interactions WHERE id = ANY($2)
-       UNION ALL
-       SELECT 'prompts', count(*)::text FROM queued_prompts WHERE id = ANY($3)`,
+       SELECT 'prompts', count(*)::text FROM queued_prompts WHERE id = ANY($2)`,
       [
         [parent.sessionId, child.sessionId, other.sessionId],
-        [parent.interactionId, child.interactionId, other.interactionId],
         [parent.promptId, child.promptId, other.promptId],
       ],
     );
     const counts = Object.fromEntries(remaining.rows.map((row) => [row.kind, Number(row.n)]));
-    assert.deepEqual(counts, { sessions: 1, events: 1, interactions: 1, prompts: 1 });
+    assert.deepEqual(counts, { sessions: 1, events: 1, prompts: 1 });
 
     const otherLeft = await query("SELECT id FROM sessions WHERE id = $1", [other.sessionId]);
     assert.equal(otherLeft.rows[0]?.id, other.sessionId);

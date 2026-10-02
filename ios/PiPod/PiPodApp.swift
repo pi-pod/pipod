@@ -63,10 +63,7 @@ final class AppEnvironment {
         self.session = SessionStore(
             api: api,
             storage: storage,
-            authenticator: auth,
-            onBadgeChanged: { [push] count, announce in
-                await push.onPendingCount(count, announce: announce)
-            }
+            authenticator: auth
         )
         // Navigation belongs to the session that opened it. Without this, signing
         // out and back in — or switching organization — came back to whatever
@@ -74,9 +71,7 @@ final class AppEnvironment {
         // fetched rows the new session may not even be allowed to see.
         session.onSessionReset = { [router, push] in
             router.reset()
-            // Including what push has already announced: the next session's
-            // first approval count belongs to a different person.
-            push.resetBadgeState()
+            push.resetForNewSession()
         }
         session.onSignOut = { [push] cleanupClient in
             await push.unregister(using: cleanupClient)

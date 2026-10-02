@@ -138,6 +138,7 @@ export const SYNTHETIC_EVENT_KINDS = new Set([
   "user_prompt",
   "session_started",
   "session_ended",
+  // Recorded by servers that kept approvals; still present in older transcripts.
   "interaction_resolved",
   "control",
 ]);

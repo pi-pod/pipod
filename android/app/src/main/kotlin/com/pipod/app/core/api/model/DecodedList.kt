@@ -65,9 +65,8 @@ private const val LOG_TAG = "pi_pod.api.decode"
  * What a failed row is allowed to say in logcat.
  *
  * Never the throwable and never its message: the kotlinx-serialization tree
- * decoder embeds the offending element in both (`JSON input: {…}`), and for an
- * interaction row that element is the approval payload — commands, paths,
- * prompts — while for a pod it is the resolved config. Logcat is readable by
+ * decoder embeds the offending element in both (`JSON input: {…}`), and for a
+ * pod row that element is the resolved config. Logcat is readable by
  * anyone with a cable, and this is the app's only [Log] call. The resource, the
  * row id and the exception type say which shape failed, which is all a log can
  * honestly offer.

@@ -7,7 +7,7 @@ import type { PodRow } from "./types.js";
 type Caller = Pick<AuthContext, "userId" | "permissions">;
 
 /**
- * Who may act on a pod or read what it recorded (sessions, transcripts, approvals): its
+ * Who may act on a pod or read what it recorded (sessions, transcripts): its
  * owner, or a holder of `pods:manage_any` when host custody allows it. Organization
  * membership only makes a pod visible in listings; it never reaches the pod's contents.
  */
