@@ -564,6 +564,7 @@ export async function resolveForProvider(
   }
 
   const hosts = dedupe(resolved.flatMap((r) => r.enforced));
+  const names = Object.fromEntries(buildHostsEntries(resolved).map((entry) => [entry.hostname, entry.addresses]));
 
   // Providers cap how many networks an allowlist may contain, and a hostname list routinely
   // resolves past it. Merge the cheapest pairs until it fits, rather than truncating (which
@@ -603,14 +604,14 @@ export async function resolveForProvider(
     }
 
     return {
-      policy: { mode: "allowlist", hosts: aggregated.cidrs },
+      policy: { mode: "allowlist", hosts: aggregated.cidrs, names },
       resolved,
       warnings,
       aggregation: { from: hosts.length, to: aggregated.cidrs.length, cidrs: aggregated.cidrs },
     };
   }
 
-  return { policy: { mode: "allowlist", hosts }, resolved, warnings };
+  return { policy: { mode: "allowlist", hosts, names }, resolved, warnings };
 }
 
 async function defaultLookup(host: string, family: EgressAddressFamily): Promise<string[]> {

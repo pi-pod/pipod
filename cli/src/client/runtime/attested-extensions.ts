@@ -66,6 +66,36 @@ export function attestedPackages(
   return { specs, refused };
 }
 
+/**
+ * The attested set says which packages the server recorded, not that this person agreed to
+ * run them: a template someone else edits, or one a pod wrote, chooses them. Each exact
+ * package runs locally only once its user has said yes to it on this machine; without a
+ * terminal to ask, rendering stays generic.
+ */
+export async function trustAttestedPackages(
+  specs: AttestedPackage[],
+  opts: { cacheRoot: string; ask: (question: string) => Promise<boolean> },
+): Promise<{ trusted: AttestedPackage[]; declined: AttestedPackage[] }> {
+  const file = path.join(opts.cacheRoot, "trusted-extensions.json");
+  const key = (spec: AttestedPackage) => `${spec.name}@${spec.version}`;
+  let known: string[] = [];
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (Array.isArray(parsed)) known = parsed.filter((entry): entry is string => typeof entry === "string");
+  } catch {
+    // No decisions yet.
+  }
+  const unknown = specs.filter((spec) => !known.includes(key(spec)));
+  if (unknown.length === 0) return { trusted: specs, declined: [] };
+  const yes = await opts.ask(
+    `This pod renders with Pi extensions that would run on this machine as you: ${unknown.map(key).join(", ")}. Run them?`,
+  );
+  if (!yes) return { trusted: specs.filter((spec) => !unknown.includes(spec)), declined: unknown };
+  fs.mkdirSync(opts.cacheRoot, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, `${JSON.stringify([...known, ...unknown.map(key)], null, 2)}\n`, { mode: 0o600 });
+  return { trusted: specs, declined: [] };
+}
+
 function storeSegment(spec: AttestedPackage): string {
   return `${spec.name.replace("/", "__")}@${spec.version}`.replace(/[^A-Za-z0-9._@~-]/g, "_");
 }

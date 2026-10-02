@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { inspect } from "node:util";
+import { PiPodError } from "../errors.js";
 import { registerSecret } from "../redact.js";
 
 export type WorkspaceSeedPlan =
@@ -181,7 +182,20 @@ export function gitIgnoredPaths(root: string, git?: GitRunner): Set<string> {
     "--directory",
   ]);
   const paths = new Set<string>();
-  if (listed.status !== 0) return paths;
+  if (listed.status !== 0) {
+    // Outside a repository there are no ignore rules. Inside one, an empty set would seed
+    // exactly what the rules keep out (.env files, keys) into the pod.
+    const inside = runner(["rev-parse", "--is-inside-work-tree"]);
+    const repository = inside.status === 0
+      ? inside.stdout.trim() === "true"
+      : fs.existsSync(path.join(root, ".git")); // git itself failed: assume the rules apply
+    if (repository) {
+      throw new PiPodError(`could not list the files git ignores in ${root}; nothing was seeded`, {
+        hint: "fix the repository (run `git status` there), or seed explicitly with `pipod send`",
+      });
+    }
+    return paths;
+  }
   for (const raw of listed.stdout.split("\0")) {
     const relPath = raw.endsWith("/") ? raw.slice(0, -1) : raw;
     if (relPath !== "") paths.add(relPath);

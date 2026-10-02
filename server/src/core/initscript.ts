@@ -25,6 +25,8 @@ export interface RunInitOptions {
   onFailure: InitOnFailure;
   /** Extra env (markers) applied to this exec. */
   env?: Record<string, string>;
+  /** Values the script inherits from the sandbox itself; its output must not show them either. */
+  inherited?: Record<string, string>;
   /** Included in the failure hint when egress is restricted (§10). */
   egressRestricted: boolean;
   /** Remote path to upload to. Defaults to {@link INIT_SCRIPT_REMOTE_PATH}. */
@@ -147,9 +149,10 @@ export async function runInitScript(opts: RunInitOptions): Promise<RunInitResult
 
   const prefix = opts.logPrefix ?? "[init]";
   const env = opts.env ?? {};
+  const secrets = { ...opts.inherited, ...env };
   const tail = new BoundedOutputTail();
-  const stdout = new ScopedStreamRedactor(env, prefixedStreamer(prefix));
-  const stderr = new ScopedStreamRedactor(env, prefixedStreamer(prefix));
+  const stdout = new ScopedStreamRedactor(secrets, prefixedStreamer(prefix));
+  const stderr = new ScopedStreamRedactor(secrets, prefixedStreamer(prefix));
   const onOutput = (stream: ScopedStreamRedactor) => (chunk: Uint8Array): void => {
     tail.append(chunk);
     stream.push(chunk);
@@ -174,8 +177,8 @@ export async function runInitScript(opts: RunInitOptions): Promise<RunInitResult
       onStderr: onOutput(stderr),
     });
   } catch (error) {
-    const outputTail = tail.text(env);
-    const causeMessage = redactInitOutput(error instanceof Error ? error.message : String(error), env);
+    const outputTail = tail.text(secrets);
+    const causeMessage = redactInitOutput(error instanceof Error ? error.message : String(error), secrets);
     throw new InitScriptFailure(
       `${scriptName} could not run: ${causeMessage}`,
       -1,
@@ -190,7 +193,7 @@ export async function runInitScript(opts: RunInitOptions): Promise<RunInitResult
   if (tail.empty && result.output) tail.append(Buffer.from(result.output, "utf8"));
   if (result.exitCode === 0) return { ran: true, exitCode: 0 };
 
-  const outputTail = tail.text(env);
+  const outputTail = tail.text(secrets);
   const timedOut = looksLikeTimeout(result);
   const detail = timedOut
     ? `${scriptName} exceeded initTimeoutSeconds (${opts.timeoutSeconds}s)`

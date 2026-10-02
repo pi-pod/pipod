@@ -91,6 +91,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     },
     async (req) => {
       if (req.params.id !== req.auth.userId) throw forbidden("settings of another user");
+      requirePermission(req.auth, "settings:own:write");
       const version = await writeLayer({
         scopeType: "user_defaults",
         scopeId: req.auth.userId,

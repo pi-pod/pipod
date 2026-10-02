@@ -1623,10 +1623,10 @@ export class Manager {
     const resolvConfPath = path.join(etcDir, "resolv.conf");
     const hostsPath = path.join(etcDir, "hosts");
     fs.writeFileSync(resolvConfPath, this.network.resolvConf());
-    fs.writeFileSync(hostsPath, `127.0.0.1 localhost ${id}\n::1 localhost ip6-localhost ip6-loopback\n`);
 
     await this.network.create(id, row.netIndex);
-    await this.network.applyEgress(id, row.egress, this.cfg.apiHost ? [this.cfg.apiHost] : []);
+    const egress = await this.network.applyEgress(id, row.egress, this.cfg.apiHost ? [this.cfg.apiHost] : []);
+    fs.writeFileSync(hostsPath, this.network.hostsFile(id, egress.names));
 
     // Owned sandboxes live under their tenant's equal-weight parent (§7.2); the layout is
     // chosen per launch, so a legacy flat sandbox migrates at its next controlled start.

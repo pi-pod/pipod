@@ -11,6 +11,7 @@ import {
   type NormalizedReference,
   type OciDescriptor,
   type RegistryRequest,
+  type HostRegistryAuth,
   type RegistryAuth,
 } from "./registry.js";
 
@@ -188,10 +189,18 @@ export class OciImageStore implements ImageStore {
   readonly #registry: RegistryClient;
   readonly #log: (message: string) => void;
   readonly #blobTasks = new Map<string, Promise<string>>();
-  readonly #layerTasks = new Map<string, Promise<void>>();
+  readonly #layerTasks = new Map<string, Promise<number>>();
+  readonly #maxImageBytes: number;
   readonly #verifiedLayers = new Map<string, string>();
 
-  constructor(options: { stateDir: string; auth?: RegistryAuth; log?: (message: string) => void }) {
+  constructor(options: {
+    stateDir: string;
+    auth?: HostRegistryAuth;
+    log?: (message: string) => void;
+    /** Largest image a pull may store, compressed or extracted. */
+    maxImageBytes?: number;
+  }) {
+    this.#maxImageBytes = options.maxImageBytes ?? Number.POSITIVE_INFINITY;
     this.#stateDir = path.resolve(options.stateDir);
     this.#blobsDir = path.join(this.#stateDir, "images", "blobs");
     this.#layersDir = path.join(this.#stateDir, "layers");
@@ -309,12 +318,18 @@ export class OciImageStore implements ImageStore {
       throw new Error(`image config has invalid rootfs.diff_ids for ${normalized.ref}`);
     }
 
+    // The registry declares every layer's size; refuse an oversized image before downloading.
+    const declared = fetched.manifest.layers.reduce((sum, layer) => sum + (layer.size ?? 0), 0);
+    if (declared > this.#maxImageBytes) {
+      throw new Error(`${normalized.ref} is ${declared} bytes compressed, over the ${this.#maxImageBytes}-byte image limit`);
+    }
+    let extractable = this.#maxImageBytes;
     const emptyDiffs = new Set<string>();
     for (let index = 0; index < fetched.manifest.layers.length; index += 1) {
       const descriptor = fetched.manifest.layers[index]!;
       const diffDigest = diffIds[index]!;
       const blob = await this.#ensureBlob(registry, normalized, descriptor, emit);
-      await this.#ensureLayer(blob, descriptor.mediaType, diffDigest, emit);
+      extractable -= await this.#ensureLayer(blob, descriptor.mediaType, diffDigest, emit, extractable);
       if ((await readdir(this.layerDir(diffDigest))).length === 0) emptyDiffs.add(diffDigest);
     }
     // BuildKit legitimately repeats its empty diff layer. Giving OverlayFS the same directory
@@ -384,7 +399,7 @@ export class OciImageStore implements ImageStore {
   ): Promise<string> {
     const existing = this.#blobTasks.get(descriptor.digest);
     if (existing) return existing;
-    const task = this.#downloadBlob(registry, reference, descriptor.digest, emit);
+    const task = this.#downloadBlob(registry, reference, descriptor.digest, emit, descriptor.size);
     this.#blobTasks.set(descriptor.digest, task);
     try {
       return await task;
@@ -398,8 +413,11 @@ export class OciImageStore implements ImageStore {
     reference: NormalizedReference,
     digest: string,
     emit: (message: string) => void,
+    declaredSize?: number,
   ): Promise<string> {
     const { algorithm, hex } = parseDigest(digest);
+    // A blob may not outgrow what its descriptor declared, nor the image limit.
+    const maxBytes = Math.min(declaredSize ?? Number.POSITIVE_INFINITY, this.#maxImageBytes);
     const destination = path.join(this.#blobsDir, algorithm, hex);
     if (await isFile(destination)) {
       if (await fileDigest(destination, algorithm) === hex) {
@@ -419,7 +437,10 @@ export class OciImageStore implements ImageStore {
       const response = await registry.fetchBlob(reference, digest);
       if (!response.body) throw new Error(`registry returned an empty body for blob ${digest}`);
       const hash = createHash(algorithm);
+      let bytes = 0;
       for await (const chunk of response.body) {
+        bytes += chunk.length;
+        if (bytes > maxBytes) throw new Error(`blob ${digest} is larger than its ${maxBytes}-byte limit`);
         hash.update(chunk);
         await output.write(chunk);
       }
@@ -455,13 +476,20 @@ export class OciImageStore implements ImageStore {
     return false;
   }
 
-  async #ensureLayer(blobPath: string, mediaType: string, digest: string, emit: (message: string) => void): Promise<void> {
+  /** Extracts and verifies a layer; returns the bytes it newly extracted (0 when already present). */
+  async #ensureLayer(
+    blobPath: string,
+    mediaType: string,
+    digest: string,
+    emit: (message: string) => void,
+    maxBytes = this.#maxImageBytes,
+  ): Promise<number> {
     const target = this.layerDir(digest);
-    if (await this.#layerStillVerified(digest)) return;
+    if (await this.#layerStillVerified(digest)) return 0;
     const existing = this.#layerTasks.get(digest);
     if (existing) return existing;
     const task = (async () => {
-      await verifyDiffDigest(blobPath, mediaType, digest);
+      const size = await verifyDiffDigest(blobPath, mediaType, digest, maxBytes);
       // Reconstruct a trusted comparison tree from the digest-verified blob. Even an
       // intentionally empty OCI layer is valid only if its expected tree is also empty.
       const rebuilt = `${target}.tmp-verify-${randomUUID()}`;
@@ -479,13 +507,14 @@ export class OciImageStore implements ImageStore {
           if (await layerTreeDigest(target) !== expected) throw new Error(`layer repair verification failed: ${digest}`);
         }
         this.#verifiedLayers.set(digest, expected);
+        return size;
       } finally {
         await rm(rebuilt, { recursive: true, force: true });
       }
     })();
     this.#layerTasks.set(digest, task);
     try {
-      await task;
+      return await task;
     } finally {
       if (this.#layerTasks.get(digest) === task) this.#layerTasks.delete(digest);
     }

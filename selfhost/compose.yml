@@ -223,6 +223,9 @@ services:
       PI_POD_SANDBOX_HOST_ID: local
       # The bridge gateway the in-pod keepalive dials.
       PI_POD_SANDBOX_API_HOST: 10.77.0.1
+      # Pods are kept off private addresses except these: the server on the `pods` network
+      # below, and whatever .env adds (a PUBLIC_URL on a private address, for one).
+      PI_POD_SANDBOX_PRIVATE_EGRESS: 10.79.0.10${PI_POD_SANDBOX_PRIVATE_EGRESS:+,${PI_POD_SANDBOX_PRIVATE_EGRESS}}
       # What admission keeps back for the rest of this host (Postgres, Zitadel, the server), and
       # a kernel-enforced ceiling over all sandboxes: `auto` is the host's total less the reserve,
       # so a bigger host runs more pods. See "Sizing" in the guide.
@@ -256,8 +259,9 @@ services:
 networks:
   default:
   # Pods reach the server here, from inside the sandbox, at an address no change to this
-  # host's own addresses can move. If 10.79.0.0/24 is taken on this host, override the subnet
-  # and the server's ipv4_address in compose.override.yml, and PUBLIC_URL in .env.
+  # host's own addresses can move. If 10.79.0.0/24 is taken on this host, override the subnet,
+  # the server's ipv4_address and the sandbox's PI_POD_SANDBOX_PRIVATE_EGRESS in
+  # compose.override.yml, and PUBLIC_URL in .env.
   pods:
     ipam:
       config:

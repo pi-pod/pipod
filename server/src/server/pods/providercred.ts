@@ -5,7 +5,7 @@ import { HttpError } from "../httperrors.js";
 import type { KekProvider } from "../secrets/crypto.js";
 import { resolveProviderCredential } from "../secrets/store.js";
 import type { ServerEnv } from "../env.js";
-import { currentHostUrl, hostForPod, hostById, providerForHost, requireHostAwake, type PodHostIdentity } from "./hostidentity.js";
+import { assertOperatorSandboxUrl, currentHostUrl, hostForPod, hostById, providerForHost, requireHostAwake, type PodHostIdentity } from "./hostidentity.js";
 
 /** A launch says 400 (fix the request); an attach to an existing pod says 409. */
 export class MissingCredentialError extends HttpError {
@@ -173,20 +173,21 @@ export async function withProviderCredential<T>(args: {
   const envVar = PROVIDER_CREDENTIAL_VARS[args.provider];
   const platformEnv = args.platformEnv;
   let providerConfig = args.providerConfig;
-  if (args.pod || args.sandboxHostId) {
-    const host = args.pod ? await hostForPod(args.pod) : await hostById(args.sandboxHostId!);
-    if (args.sandboxHostId && !host) throw new HttpError(409, "host registration is missing");
-    if (host) {
-      if (host.owner_user_id != null && host.owner_user_id !== (args.pod?.user_id ?? args.ownerUserId)) {
-        throw new HttpError(409, "host custody mismatch");
-      }
-      requireHostAwake(host);
-      if (host.auth_ciphertext !== null || host.owner_user_id !== null) {
-        const built = providerForHost(host, args.kek, providerConfig ?? {}, platformEnv.PI_POD_SANDBOX_TOKEN ?? null);
-        return args.fn(built.provider, built.credentialScope);
-      }
-      providerConfig = { ...providerConfig, url: currentHostUrl(host) };
+  const host = args.pod ? await hostForPod(args.pod)
+    : args.sandboxHostId ? await hostById(args.sandboxHostId) : null;
+  if (args.sandboxHostId && !host) throw new HttpError(409, "host registration is missing");
+  if (host) {
+    if (host.owner_user_id != null && host.owner_user_id !== (args.pod?.user_id ?? args.ownerUserId)) {
+      throw new HttpError(409, "host custody mismatch");
     }
+    requireHostAwake(host);
+    if (host.auth_ciphertext !== null || host.owner_user_id !== null) {
+      const built = providerForHost(host, args.kek, providerConfig ?? {}, platformEnv.PI_POD_SANDBOX_TOKEN ?? null);
+      return args.fn(built.provider, built.credentialScope);
+    }
+    providerConfig = { ...providerConfig, url: currentHostUrl(host) };
+  } else if (args.provider === "sandbox") {
+    await assertOperatorSandboxUrl(providerConfig?.["url"]);
   }
   return withCredential({
     provider: args.provider,

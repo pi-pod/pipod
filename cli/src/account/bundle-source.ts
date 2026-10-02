@@ -533,10 +533,23 @@ class LayerWriter {
   readonly written: string[] = [];
   readonly removed: string[] = [];
   readonly warnings: string[] = [];
-  constructor(readonly root: string) {}
+  /**
+   * `confined`: every directory between the root and a written file must be a real one. A
+   * project root is a checkout, and its author can make any of them a symlink elsewhere.
+   */
+  constructor(readonly root: string, private readonly confined = false) {}
 
   /** `null` content removes the file. Identical content is left untouched. */
   put(file: string, content: string | null): void {
+    if (this.confined) {
+      let ancestor = this.root;
+      for (const part of path.relative(this.root, path.dirname(file)).split(path.sep).filter(Boolean)) {
+        if (part === "..") throw new PiPodError(`${file} is outside ${this.root}`);
+        ancestor = path.join(ancestor, part);
+        const stat = refuseSymlink(ancestor);
+        if (stat && !stat.isDirectory()) throw new PiPodError(`${ancestor} must be a directory`);
+      }
+    }
     const stat = refuseSymlink(file);
     const relative = path.relative(this.root, file);
     if (content === null) {
@@ -569,12 +582,21 @@ class LayerWriter {
 function writePulledAgents(writer: LayerWriter, piDir: string, agents: Record<string, string> | undefined): void {
   const directory = path.join(piDir, "agents");
   const keep = new Set<string>();
+  refuseSymlink(directory);
   for (const [relative, content] of Object.entries(agents ?? {})) {
     const parts = relative.split("/");
     if (path.isAbsolute(relative) || parts.some((part) => part === "" || part === "." || part === "..")) {
       throw new PiPodError(`server agents/${relative} is not a safe relative path`);
     }
     keep.add(parts.join(path.sep));
+    // The server names the subdirectories; one that is a symlink in this checkout would
+    // carry the write outside it.
+    let ancestor = directory;
+    for (const part of parts.slice(0, -1)) {
+      ancestor = path.join(ancestor, part);
+      const stat = refuseSymlink(ancestor);
+      if (stat && !stat.isDirectory()) throw new PiPodError(`${ancestor} must be a directory`);
+    }
     writer.put(path.join(directory, ...parts), content);
   }
   const stat = refuseSymlink(directory);
@@ -623,7 +645,7 @@ export function writeBundleSource(args: {
     configPath = userPath;
     root = path.dirname(path.dirname(userPath));
   }
-  const writer = new LayerWriter(root);
+  const writer = new LayerWriter(root, kind === "project");
   const retired = nonBundleKeysFound(bundle.config);
   if (retired.length > 0) {
     writer.warnings.push(`the server bundle still carries non-bundle keys (${retired.join(", ")}) — they are dropped, not written`);

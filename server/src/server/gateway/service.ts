@@ -403,7 +403,7 @@ interface InteractionRow {
  */
 export async function resolveInteraction(
   gateway: GatewayService | null,
-  args: { interactionId: string; response: unknown; resolvedBy: string | null },
+  args: { interactionId: string; response: unknown; resolvedBy: string | null; podId?: string },
 ): Promise<ResolveOutcome> {
   const rows = await query<InteractionRow>(
     `SELECT pi.id, s.pod_id, pi.payload, pi.resolution, pi.resolved_by, pi.delivered_at, s.ended_at
@@ -412,7 +412,8 @@ export async function resolveInteraction(
     [args.interactionId],
   );
   const row = rows.rows[0];
-  if (!row) return { status: "not_found" };
+  // A session client may answer only its own pod's interactions.
+  if (!row || (args.podId !== undefined && row.pod_id !== args.podId)) return { status: "not_found" };
   if (row.delivered_at) return { status: "already_resolved", podId: row.pod_id };
 
   const session = gateway?.liveSession(row.pod_id) ?? null;
@@ -2420,6 +2421,7 @@ export class GatewayService {
             interactionId: message.interactionId,
             response: message.response,
             resolvedBy: null,
+            podId: session.pod.id,
           });
           if (outcome.status === "not_found") throw new Error("interaction not found");
           if (outcome.status === "undeliverable") {

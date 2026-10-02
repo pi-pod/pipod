@@ -39,7 +39,10 @@ class AuthInterceptor(
 ) : Interceptor {
 
     private val lock = Any()
-    private var inFlight: CompletableDeferred<Unit>? = null
+    private var inFlight: Flight? = null
+
+    /** One refresh of one refresh token; resolves to the access token it committed, if any. */
+    private class Flight(val refreshToken: String, val result: CompletableDeferred<String?>)
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
@@ -59,8 +62,8 @@ class AuthInterceptor(
         // Refresh runs off the interceptor's own thread pool; blocking here is
         // what OkHttp's interceptor contract expects, and the call itself was
         // already dispatched from a coroutine on Dispatchers.IO.
-        try {
-            runBlocking { refreshSingleFlight() }
+        val retryToken = try {
+            runBlocking { refreshSingleFlight(stored) }
         } catch (error: Throwable) {
             response.close()
             throw when (error) {
@@ -69,43 +72,50 @@ class AuthInterceptor(
             }
         }
 
-        val retryToken = accessToken()
+        // Null when sign-in, sign-out or an organization switch replaced the session
+        // this request was sent under: replaying it would act for another account.
         if (retryToken.isNullOrEmpty()) return response
         response.close()
         return chain.proceed(request.newBuilder().header("Authorization", "Bearer $retryToken").build())
     }
 
-    private suspend fun refreshSingleFlight() {
-        val existing: CompletableDeferred<Unit>?
-        val mine: CompletableDeferred<Unit>?
+    private suspend fun refreshSingleFlight(stored: String): String? {
+        val existing: Flight?
+        val mine: Flight?
         synchronized(lock) {
-            if (inFlight != null) {
-                existing = inFlight
+            val current = inFlight
+            if (current != null) {
+                existing = current
                 mine = null
             } else {
                 existing = null
-                mine = CompletableDeferred<Unit>().also { inFlight = it }
+                mine = Flight(stored, CompletableDeferred()).also { inFlight = it }
             }
         }
-        if (existing != null) return existing.await()
+        if (existing != null) {
+            val committed = existing.result.await()
+            return if (existing.refreshToken == stored) committed else null
+        }
 
-        val gate = requireNotNull(mine)
+        val flight = requireNotNull(mine)
         try {
-            performRefresh()
-            gate.complete(Unit)
+            val committed = performRefresh(stored)
+            flight.result.complete(committed)
+            return committed
         } catch (error: Throwable) {
-            gate.completeExceptionally(error)
+            flight.result.completeExceptionally(error)
             throw error
         } finally {
-            synchronized(lock) { if (inFlight === gate) inFlight = null }
+            synchronized(lock) { if (inFlight === flight) inFlight = null }
         }
     }
 
-    private suspend fun performRefresh() {
-        val token = refreshToken()
-        if (token.isNullOrEmpty()) throw ApiError(error = "not signed in")
-        val tokens = refresh.refresh(token)
+    /** Commits the rotated pair only while the session it came from is still current. */
+    private suspend fun performRefresh(stored: String): String? {
+        val tokens = refresh.refresh(stored)
+        if (refreshToken() != stored) return null
         updateTokens(tokens.accessToken, tokens.refreshToken, tokens.idToken)
+        return tokens.accessToken
     }
 
     companion object {

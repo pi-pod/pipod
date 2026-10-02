@@ -27,6 +27,7 @@ import { installPodTerminalTitle } from "../client/pod-title.js";
 import {
   attestedPackages,
   installAttestedPackages,
+  trustAttestedPackages,
   unattestedPackageNotice,
   type AttestedPackage,
 } from "../client/runtime/attested-extensions.js";
@@ -566,9 +567,19 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
     for (const refusal of attested.refused) {
       attestedNotices.push({ message: `pod extension not run locally: ${refusal}`, type: "warning" });
     }
-    if (attested.specs.length > 0) {
+    const { trusted, declined } = await trustAttestedPackages(attested.specs, {
+      cacheRoot,
+      ask: (question) => confirm(question, { nonInteractiveDefault: false }),
+    });
+    if (declined.length > 0) {
+      attestedNotices.push({
+        message: `pod extensions not run locally (not trusted on this machine): ${declined.map((spec) => `${spec.name}@${spec.version}`).join(", ")}`,
+        type: "info",
+      });
+    }
+    if (trusted.length > 0) {
       try {
-        const installed = await installAttestedPackages(attested.specs, { cacheRoot });
+        const installed = await installAttestedPackages(trusted, { cacheRoot });
         attestedPaths = installed.paths;
         for (const warning of installed.warnings) attestedNotices.push({ message: warning, type: "warning" });
       } catch (error) {

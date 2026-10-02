@@ -382,6 +382,12 @@ function normalizeServerUrl(raw: string | undefined): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new PiPodError(`--server must be http(s), got ${url.protocol}`);
   }
+  // Every request carries a bearer token; only loopback may carry it in cleartext.
+  if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
+    throw new PiPodError("--server must use HTTPS except for loopback development", {
+      hint: "put the server behind TLS, or reach it through an SSH tunnel to 127.0.0.1",
+    });
+  }
   return url.origin;
 }
 
