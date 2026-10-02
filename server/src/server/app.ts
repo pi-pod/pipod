@@ -20,6 +20,7 @@ import { registerTemplateRoutes } from "./templates/routes.js";
 import { registerJobRoutes } from "./jobs/routes.js";
 import { registerPodRoutes } from "./pods/routes.js";
 import { registerGatewayRoutes } from "./gateway/routes.js";
+import { registerDashboard } from "./dashboard.js";
 import {
   HttpError,
   isLaunchAdmissionHeldError,
@@ -279,6 +280,7 @@ export async function buildApp(deps: AppDeps) {
   }
   registerHealthAndMetrics(app, deps);
   app.get("/v1/openapi.json", async () => app.swagger());
+  if (deps.roles.api) await app.register(async (scope) => registerDashboard(scope, deps.env));
 
   await app.register(async (v1) => {
     if (deps.roles.api) {

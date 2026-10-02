@@ -79,8 +79,8 @@ docker push "$target"
 compose up -d
 
 # Zitadel's pipod project: created on the first run, then only checked unless --apply-zitadel.
-# The server needs its id
-# as the token audience, and publishes the CLI's and the phone apps' client ids to sign-in.
+# The server needs its id as the token audience, and publishes the CLI's, the phone apps' and
+# the dashboard's client ids to sign-in.
 wait_healthy zitadel
 mode=--check
 if [ -z "$(env_get ZITADEL_API_AUDIENCE)" ] || $apply_zitadel; then mode=--apply; fi
@@ -90,21 +90,25 @@ if [ "$status" = 0 ]; then
   audience="$(sed -n 's/^project id (API audience): //p' <<<"$report")"
   client="$(sed -n 's/^client id pipod-cli: //p' <<<"$report")"
   mobile="$(sed -n 's/^client id pipod-mobile: //p' <<<"$report")"
-  if [ -z "$audience" ] || [ -z "$client" ] || [ -z "$mobile" ]; then
+  dashboard="$(sed -n 's/^client id pipod-dashboard: //p' <<<"$report")"
+  if [ -z "$audience" ] || [ -z "$client" ] || [ -z "$mobile" ] || [ -z "$dashboard" ]; then
     echo "$report" >&2
     echo "upgrade: Zitadel did not report the pipod project's ids" >&2
     exit 1
   fi
   if [ "$audience" != "$(env_get ZITADEL_API_AUDIENCE)" ] || [ "$client" != "$(env_get ZITADEL_CLI_CLIENT_ID)" ] ||
-    [ "$mobile" != "$(env_get ZITADEL_MOBILE_CLIENT_ID)" ]; then
+    [ "$mobile" != "$(env_get ZITADEL_MOBILE_CLIENT_ID)" ] ||
+    [ "$dashboard" != "$(env_get ZITADEL_DASHBOARD_CLIENT_ID)" ]; then
     env_set ZITADEL_API_AUDIENCE "$audience"
     env_set ZITADEL_CLI_CLIENT_ID "$client"
     env_set ZITADEL_MOBILE_CLIENT_ID "$mobile"
+    env_set ZITADEL_DASHBOARD_CLIENT_ID "$dashboard"
     compose up -d server
   fi
 elif [ "$status" = 2 ]; then
-  # Drift: this release changed the project (a new redirect, say), or someone changed it in
-  # the Console. Applying is not automatic because it also resets Console changes.
+  # Drift: this release changed the project (a new app or redirect, say), SERVER_URL moved,
+  # or someone changed it in the Console. Applying is not automatic because it also resets
+  # Console changes.
   echo "$report" >&2
   echo "upgrade: warning: Zitadel's pipod project differs from this release (above). Apply this" >&2
   echo "upgrade: release's version with: selfhost/upgrade --apply-zitadel" >&2
@@ -128,5 +132,8 @@ pi pod is running. Give yourself an account, then sign in from this machine:
 
   selfhost/add-user you@example.com --owner
   pipod login --server http://127.0.0.1:8080
+
+The dashboard, for organization, personal and template settings, is at
+http://127.0.0.1:8080/dashboard/ (from another machine, through an SSH tunnel to 8080 and 8081).
 EOF
 fi

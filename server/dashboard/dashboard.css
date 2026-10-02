@@ -1,0 +1,133 @@
+/* pi pod palette: Simple Purple on Ivory Porcelain; the dark scaffold and its lightened accent
+   in dark mode. Status tones are the native apps' StatusTone values. */
+:root {
+  color-scheme: light dark;
+  --bg: #ede4d1;
+  --card: #f6efe0;
+  --text: #241426;
+  --muted: #574450;
+  --line: #d3c1a4;
+  --accent: #6d2598;
+  --on-accent: #ffffff;
+  --link: #aa1c7d;
+  --code-bg: #fcf8f0;
+  --ok: #1b5e20;
+  --danger: #a32017;
+  --notice: #8a4300;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #160a1f;
+    --card: #201230;
+    --text: #f1e6ee;
+    --muted: #cdb9ce;
+    --line: #3b2b45;
+    --accent: #c38ce3;
+    --on-accent: #350a52;
+    --link: #e79acb;
+    --code-bg: #100617;
+    --ok: #7fd98c;
+    --danger: #f2a29a;
+    --notice: #ffb77a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a { color: var(--link); }
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-decoration: none;
+}
+
+nav { display: flex; gap: 1rem; }
+nav[hidden] { display: none; }
+nav a { color: var(--muted); text-decoration: none; padding: 0.25rem 0; }
+nav a.current { color: var(--accent); border-bottom: 2px solid var(--accent); }
+
+#account { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; color: var(--muted); }
+
+main { max-width: 960px; margin: 1.5rem auto; padding: 0 1.5rem; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.card.narrow { max-width: 480px; margin: 4rem auto; }
+.card h2 { margin: 0 0 0.5rem; font-size: 1.25rem; }
+
+.intro, .hint, .empty, .loading { color: var(--muted); }
+.hint { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+.notice { color: var(--notice); font-weight: 600; }
+
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.75rem 0; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+
+.field { display: block; margin: 1rem 0; }
+.label { display: block; font-weight: 600; }
+
+input[type="text"], select, textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font: inherit;
+}
+textarea { resize: vertical; }
+.code, textarea.code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85rem; }
+textarea[readonly], input[readonly], select:disabled { opacity: 0.75; }
+
+.actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
+
+button, .button {
+  display: inline-block;
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+button.primary, .button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: 0.6; cursor: progress; }
+
+.status { margin-top: 0.75rem; }
+.status:empty { display: none; }
+.status.ok { color: var(--ok); }
+.status.error { color: var(--danger); }
+.status ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.5rem 0.5rem 0.5rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }

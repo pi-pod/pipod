@@ -14,7 +14,7 @@
     "build": "tsup && node scripts/check-dist-sandbox-provider.mjs",
     "check:core": "node --import tsx scripts/check-core-sync.ts",
     "check:pi-pin": "node scripts/check-pi-pin.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p dashboard",
     "dev": "ROLE=all node --import tsx src/server/main.ts",
     "start": "node dist/main.js",
     "migrate": "node --import tsx src/server/db/migrate-main.ts",

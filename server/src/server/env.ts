@@ -203,6 +203,14 @@ export const serverEnvShape = {
       .string()
       .optional()
       .transform((value) => value?.trim() || undefined),
+    /**
+     * Client id of the `pipod-dashboard` app, published at GET /v1/auth/config for the web
+     * dashboard this server serves at /dashboard/. Unset, the dashboard cannot sign in.
+     */
+    ZITADEL_DASHBOARD_CLIENT_ID: z
+      .string()
+      .optional()
+      .transform((value) => value?.trim() || undefined),
     /** Override for tests / local signer; defaults to `<issuer>/oauth/v2/keys`. */
     ZITADEL_JWKS_URL: z.string().url().optional(),
     /** Optional self-service console URL; derived from the issuer when omitted. */

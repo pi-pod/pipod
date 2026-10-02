@@ -27,6 +27,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/image ./image
 COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/package.json ./
+# The web dashboard's static files, served at /dashboard/.
+COPY dashboard ./dashboard
 # Zitadel setup scripts, which selfhost/upgrade and selfhost/add-user run in this image.
 COPY zitadel ./zitadel
 USER 10001:10001
