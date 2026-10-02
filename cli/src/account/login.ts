@@ -3,7 +3,9 @@
  *
  * The browser flow is loopback PKCE against Zitadel directly. The CLI discovers
  * OIDC endpoints, opens the authorization endpoint with the Zitadel resource-owner
- * and project-role scopes, and exchanges the code itself. The server never sees a code, verifier, or refresh token.
+ * and project-role scopes, and exchanges the code itself. Where no browser can open on
+ * this machine, the device flow (RFC 8628) asks for the same scopes and the person finishes
+ * on any other device with a short code. The server never sees a code, verifier, or refresh token.
  */
 import * as http from "node:http";
 import { spawn } from "node:child_process";
@@ -14,6 +16,7 @@ import {
   accountConsoleUrl,
   adminConsoleUrl,
   authorizeUrl,
+  awaitDeviceTokens,
   createNonce,
   createPkce,
   createState,
@@ -22,10 +25,13 @@ import {
   exchangeCode,
   organizationFromAccessToken,
   revokeToken,
+  startDeviceAuthorization,
   timingSafeEqualString,
   DEFAULT_CLIENT_ID,
   DEFAULT_ISSUER,
   OIDC_NETWORK_TIMEOUT_MS,
+  type OidcMetadata,
+  type TokenSet,
 } from "./oidc.js";
 import {
   accountAuthPath,
@@ -47,6 +53,8 @@ export interface LoginFlags {
   org?: string | undefined;
   token?: string | undefined;
   issuer?: string | undefined;
+  /** Sign in with a code on another device even where a browser could open here. */
+  device?: boolean | undefined;
   home?: string | undefined;
 }
 
@@ -79,7 +87,7 @@ export async function runLogin(flags: LoginFlags): Promise<number> {
   if (flags.token) {
     accessToken = flags.token;
   } else {
-    const pair = await browserLogin({ issuer, clientId, orgAlias: flags.org });
+    const pair = await interactiveLogin({ issuer, clientId, orgAlias: flags.org, device: flags.device === true });
     accessToken = pair.accessToken;
     refreshToken = pair.refreshToken;
     idToken = pair.idToken;
@@ -234,12 +242,56 @@ async function openConsole(flags: { home?: string | undefined }, which: "account
   return 0;
 }
 
-async function browserLogin(args: {
+/**
+ * Sign a person in. Where no browser can open on this machine (an SSH session, a headless
+ * server, a container), or with --device, they finish on any other device with a short code.
+ * An identity provider that does not allow that for this client falls back to the browser
+ * flow, unless --device asked for the code explicitly.
+ */
+async function interactiveLogin(args: {
   issuer: string;
   clientId: string;
-  orgAlias?: string;
-}): Promise<{ accessToken: string; refreshToken?: string; idToken?: string }> {
+  orgAlias?: string | undefined;
+  device: boolean;
+}): Promise<TokenSet> {
   const meta = await discover(args.issuer);
+  const browserHere = canOpenBrowserHere();
+  if (args.device || !browserHere) {
+    const authorization = await startDeviceAuthorization(meta, { clientId: args.clientId, orgAlias: args.orgAlias });
+    if (authorization) {
+      const page = authorization.verificationUriComplete ?? authorization.verificationUri;
+      const verb = authorization.verificationUriComplete ? "confirm" : "enter";
+      info(`to sign in, open this page on any device and ${verb} the code ${authorization.userCode}:\n  ${page}`);
+      info("waiting for you to finish signing in…");
+      return awaitDeviceTokens(meta, { clientId: args.clientId, authorization });
+    }
+    if (args.device) {
+      throw new PiPodError(`${args.issuer} does not allow this CLI to sign in with a code`, {
+        hint: "on a self-hosted server the operator enables it with `selfhost/upgrade --apply-zitadel`; until then run `pipod login` without --device",
+      });
+    }
+    info("this identity provider does not offer sign-in with a code; using the browser flow");
+  }
+  return browserLogin(meta, { clientId: args.clientId, orgAlias: args.orgAlias, browserHere });
+}
+
+/**
+ * Whether `openBrowser` can show a page to the person at this terminal. Over SSH a Mac or
+ * Windows host opens it on its own screen; elsewhere a browser needs a display (X11
+ * forwarding brings one over SSH) or a $BROWSER.
+ */
+function canOpenBrowserHere(): boolean {
+  const env = process.env;
+  if (process.platform === "darwin" || process.platform === "win32") {
+    return !env["SSH_CONNECTION"] && !env["SSH_TTY"];
+  }
+  return Boolean(env["DISPLAY"] || env["WAYLAND_DISPLAY"] || env["BROWSER"]);
+}
+
+async function browserLogin(
+  meta: OidcMetadata,
+  args: { clientId: string; orgAlias?: string | undefined; browserHere: boolean },
+): Promise<TokenSet> {
   const pkce = createPkce();
   const state = createState();
   const nonce = createNonce();
@@ -256,9 +308,14 @@ async function browserLogin(args: {
       orgAlias: args.orgAlias,
     });
 
-    info("opening your browser to sign in…");
-    info(`if nothing opens, visit:\n  ${url}`);
-    openBrowser(url);
+    if (args.browserHere) {
+      info("opening your browser to sign in…");
+      info(`if nothing opens, visit:\n  ${url}`);
+      openBrowser(url);
+    } else {
+      info(`to sign in, open this page in a browser that reaches port ${port} on this machine:\n  ${url}`);
+      hint(`over SSH, forward it first: ssh -L ${port}:127.0.0.1:${port} <this host>`);
+    }
 
     const code = await waitForCallback(server, state);
     return exchangeCode(meta, {

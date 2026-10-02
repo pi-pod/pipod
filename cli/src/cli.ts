@@ -173,10 +173,12 @@ Run \`pipod <command> --help\` for command-specific usage.
 `;
 
 const SUBCOMMAND_HELP: Record<Subcommand, string> = {
-  login: `Usage: pipod login [--server <url>] [--issuer <url>] [--org <alias>] [--token <jwt>]
+  login: `Usage: pipod login [--server <url>] [--issuer <url>] [--org <alias>] [--device] [--token <jwt>]
 
 Sign this machine in to a pi pod server via Zitadel (authorization code + PKCE,
-in your browser). The session is stored in ~/.pi-pod/auth.json.
+in your browser). Where no browser can open here (over SSH, on a headless
+server), it prints a page and a code to confirm on any other device instead.
+The session is stored in ~/.pi-pod/auth.json.
 
 Options:
   --server <url>   Server to sign in to (default: the previous session's server,
@@ -186,6 +188,8 @@ Options:
                    publish its own
   --org <alias>    Only sign in to the organization with this primary domain;
                    omit it to sign in to your own organization
+  --device         Sign in with a code on another device even if a browser
+                   could open here
   --token <jwt>    Use an existing access token instead of the browser flow (dev/CI)
 `,
   account: `Usage: pipod account
@@ -566,6 +570,7 @@ export interface GlobalFlags {
   token?: string;
   session?: string;
   issuer?: string;
+  device?: boolean;
 }
 
 export interface ParsedArgs {
@@ -597,6 +602,7 @@ const FLAG_SCOPE: Record<string, ReadonlySet<string>> = {
   "--org": new Set(["login", "jobs"]),
   "--token": new Set(["login"]),
   "--issuer": new Set(["login"]),
+  "--device": new Set(["login"]),
 };
 
 function resolveSubcommand(positional: string | undefined): Subcommand | null {
@@ -706,6 +712,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--token": flags.token = takeValue(); break;
       case "--session": flags.session = takeValue(); break;
       case "--issuer": flags.issuer = takeValue(); break;
+      case "--device": flags.device = true; break;
       default:
         throw new PiPodError(`unknown pi pod option "${name}"`, {
           hint: "pass Pi options after `--`, for example: pipod -- --model claude-opus",
@@ -772,7 +779,7 @@ export async function main(argv: string[]): Promise<number> {
     case "init":
       return runInit(flags);
     case "login":
-      return runLogin({ server: flags.server, org: flags.org, token: flags.token, issuer: flags.issuer });
+      return runLogin({ server: flags.server, org: flags.org, token: flags.token, issuer: flags.issuer, device: flags.device });
     case "whoami":
       return runWhoami({});
     case "logout":

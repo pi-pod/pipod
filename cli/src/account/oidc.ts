@@ -22,6 +22,7 @@ export interface OidcMetadata {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  device_authorization_endpoint?: string;
   end_session_endpoint?: string;
   revocation_endpoint?: string;
   jwks_uri: string;
@@ -106,6 +107,7 @@ export async function discover(issuer: string): Promise<OidcMetadata> {
     authorization_endpoint: body.authorization_endpoint,
     token_endpoint: body.token_endpoint,
     jwks_uri: body.jwks_uri,
+    device_authorization_endpoint: body.device_authorization_endpoint,
     end_session_endpoint: body.end_session_endpoint,
     revocation_endpoint: body.revocation_endpoint,
   })) {
@@ -121,6 +123,9 @@ export async function discover(issuer: string): Promise<OidcMetadata> {
     authorization_endpoint: body.authorization_endpoint,
     token_endpoint: body.token_endpoint,
     jwks_uri: body.jwks_uri,
+    ...(body.device_authorization_endpoint
+      ? { device_authorization_endpoint: body.device_authorization_endpoint }
+      : {}),
     ...(body.end_session_endpoint ? { end_session_endpoint: body.end_session_endpoint } : {}),
     ...(body.revocation_endpoint ? { revocation_endpoint: body.revocation_endpoint } : {}),
   };
@@ -163,6 +168,14 @@ export function organizationScope(alias?: string): string {
   return `urn:zitadel:iam:org:domain:primary:${alias}`;
 }
 
+/** The scopes of every interactive sign-in, whichever grant carries it. */
+function loginScopes(orgAlias?: string): string {
+  const scopes = ["openid", "profile", "email", OFFLINE_ACCESS_SCOPE, RESOURCE_OWNER_SCOPE, PROJECT_ROLES_SCOPE];
+  const orgScope = organizationScope(orgAlias);
+  if (orgScope) scopes.push(orgScope);
+  return scopes.join(" ");
+}
+
 export function authorizeUrl(
   meta: OidcMetadata,
   args: {
@@ -178,10 +191,7 @@ export function authorizeUrl(
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", args.clientId);
   url.searchParams.set("redirect_uri", args.redirectUri);
-  const scopes = ["openid", "profile", "email", OFFLINE_ACCESS_SCOPE, RESOURCE_OWNER_SCOPE, PROJECT_ROLES_SCOPE];
-  const orgScope = organizationScope(args.orgAlias);
-  if (orgScope) scopes.push(orgScope);
-  url.searchParams.set("scope", scopes.join(" "));
+  url.searchParams.set("scope", loginScopes(args.orgAlias));
   url.searchParams.set("code_challenge", args.challenge);
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", args.state);
@@ -230,10 +240,157 @@ export async function exchangeCode(
       hint: String(e instanceof Error ? e.message : e),
     });
   });
-  const tokens = await readTokenResponse(res);
+  return verifiedLoginTokens(meta, await readTokenResponse(res), args.clientId, args.nonce);
+}
+
+/** A sign-in token set must carry an ID token that names this client (and this attempt's nonce). */
+async function verifiedLoginTokens(
+  meta: OidcMetadata,
+  tokens: TokenSet,
+  clientId: string,
+  nonce?: string,
+): Promise<TokenSet> {
   if (!tokens.idToken) throw new PiPodError("the identity provider returned no ID token");
-  await verifyIdToken(meta, tokens.idToken, args.clientId, tokens.accessToken, args.nonce);
+  await verifyIdToken(meta, tokens.idToken, clientId, tokens.accessToken, nonce);
   return tokens;
+}
+
+const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+/** RFC 8628 §3.5: without an interval from the provider, poll every 5 seconds; slow_down adds 5. */
+const DEVICE_POLL_SECONDS = 5;
+
+/** A sign-in finished on another device, by entering `userCode` at `verificationUri` (RFC 8628). */
+export interface DeviceAuthorization {
+  userCode: string;
+  verificationUri: string;
+  /** The same page with the code already filled in, when the provider offers one. */
+  verificationUriComplete?: string;
+  deviceCode: string;
+  intervalSeconds: number;
+  expiresAt: number;
+}
+
+/**
+ * Start a device sign-in. Null when this identity provider will not complete one for this
+ * client: it has no device endpoint, or the client lacks the device-code grant. Zitadel
+ * checks that grant only at the token endpoint, so one poll here finds out before anyone is
+ * asked to type a code.
+ */
+export async function startDeviceAuthorization(
+  meta: OidcMetadata,
+  args: { clientId: string; orgAlias?: string | undefined },
+): Promise<DeviceAuthorization | null> {
+  if (!meta.device_authorization_endpoint) return null;
+  const res = await fetch(meta.device_authorization_endpoint, {
+    method: "POST",
+    redirect: "error",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: args.clientId, scope: loginScopes(args.orgAlias) }),
+    signal: AbortSignal.timeout(OIDC_NETWORK_TIMEOUT_MS),
+  }).catch((e) => {
+    throw new PiPodError("cannot reach the identity provider device endpoint", {
+      hint: String(e instanceof Error ? e.message : e),
+    });
+  });
+  if (!res.ok) {
+    if ((await oauthError(res)) === "unauthorized_client") return null;
+    throw new PiPodError("the identity provider refused to start a device sign-in", {
+      hint: `HTTP ${res.status} — run \`pipod login\` again`,
+    });
+  }
+  const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  const deviceCode = body?.["device_code"];
+  const userCode = body?.["user_code"];
+  const verificationUri = body?.["verification_uri"];
+  const verificationUriComplete = body?.["verification_uri_complete"];
+  const expiresIn = body?.["expires_in"];
+  const interval = body?.["interval"];
+  if (
+    typeof deviceCode !== "string" ||
+    typeof userCode !== "string" ||
+    typeof verificationUri !== "string" ||
+    typeof expiresIn !== "number"
+  ) {
+    throw new PiPodError("the identity provider returned an invalid device sign-in");
+  }
+  parseSecureOidcUrl(verificationUri, "verification_uri");
+  if (typeof verificationUriComplete === "string") {
+    parseSecureOidcUrl(verificationUriComplete, "verification_uri_complete");
+  }
+  const authorization: DeviceAuthorization = {
+    userCode,
+    verificationUri,
+    ...(typeof verificationUriComplete === "string" ? { verificationUriComplete } : {}),
+    deviceCode,
+    intervalSeconds: typeof interval === "number" && interval > 0 ? interval : DEVICE_POLL_SECONDS,
+    expiresAt: Date.now() + expiresIn * 1000,
+  };
+
+  const probe = await pollDeviceToken(meta, args.clientId, deviceCode);
+  if ("error" in probe && probe.error === "unauthorized_client") return null;
+  if ("error" in probe && probe.error === "slow_down") authorization.intervalSeconds += DEVICE_POLL_SECONDS;
+  return authorization;
+}
+
+/** Wait for the person to finish a device sign-in, then return its verified tokens. */
+export async function awaitDeviceTokens(
+  meta: OidcMetadata,
+  args: { clientId: string; authorization: DeviceAuthorization },
+): Promise<TokenSet> {
+  let intervalSeconds = args.authorization.intervalSeconds;
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
+    if (Date.now() >= args.authorization.expiresAt) throw deviceCodeExpired();
+    const poll = await pollDeviceToken(meta, args.clientId, args.authorization.deviceCode);
+    if ("tokens" in poll) return verifiedLoginTokens(meta, poll.tokens, args.clientId);
+    switch (poll.error) {
+      case "authorization_pending":
+      case "unreachable":
+        continue;
+      case "slow_down":
+        intervalSeconds += DEVICE_POLL_SECONDS;
+        continue;
+      case "access_denied":
+        throw new PiPodError("the sign-in was declined", { hint: "run `pipod login` again" });
+      case "expired_token":
+        throw deviceCodeExpired();
+      default:
+        throw new PiPodError(`the identity provider refused the device sign-in (${poll.error})`, {
+          hint: "run `pipod login` again",
+        });
+    }
+  }
+}
+
+function deviceCodeExpired(): PiPodError {
+  return new PiPodError("the sign-in code expired before it was used", { hint: "run `pipod login` again" });
+}
+
+/**
+ * One token request for a device code. A network failure is "unreachable" rather than an
+ * exception: the person may still be signing in, and the next poll can succeed.
+ */
+async function pollDeviceToken(
+  meta: OidcMetadata,
+  clientId: string,
+  deviceCode: string,
+): Promise<{ tokens: TokenSet } | { error: string }> {
+  const res = await fetch(meta.token_endpoint, {
+    method: "POST",
+    redirect: "error",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: DEVICE_CODE_GRANT, client_id: clientId, device_code: deviceCode }),
+    signal: AbortSignal.timeout(OIDC_NETWORK_TIMEOUT_MS),
+  }).catch(() => null);
+  if (!res) return { error: "unreachable" };
+  if (res.ok) return { tokens: await readTokenResponse(res) };
+  return { error: (await oauthError(res)) ?? `HTTP ${res.status}` };
+}
+
+/** The `error` code of an OAuth error response, if it has one. */
+async function oauthError(res: Response): Promise<string | null> {
+  const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+  return typeof body?.error === "string" ? body.error : null;
 }
 
 async function verifyIdToken(
