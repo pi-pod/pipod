@@ -51,6 +51,7 @@ import {
 import { platformProviderEnv } from "./providercred.js";
 import { SANDBOX_PROVIDER_NAME } from "./sandboxfleet.js";
 import { assertOperatorSandboxUrl, staticHostForUrl, hostById, currentHostUrl, requireHostAwake, openHostAuth, providerForHost } from "./hostidentity.js";
+import { assertDelegatedTemplate, delegateCredentials, type ParentDelegation } from "./lineage.js";
 import { getSandboxHostBackend } from "./hostbackend/index.js";
 import { buildCreateOwner } from "./owner-identity.js";
 import { platformToken } from "./operations.js";
@@ -407,6 +408,8 @@ export async function planPodLaunch(
     launchContext?: LaunchContext;
     /** False only for organization-scoped jobs, which launch without the owner's bundle. */
     includeUserBundle?: boolean;
+    /** Set for a pod-requested launch: the child gets no more than its parent was given. */
+    delegation?: ParentDelegation | null;
     templateId?: string | null;
     project?: LaunchProject | null;
     /** Project config layer without the rest of a launch project — the resolve endpoint's form. */
@@ -428,6 +431,7 @@ export async function planPodLaunch(
   let template: TemplateRow | null = null;
   if (args.templateId) {
     template = await getTemplate(args.orgId, args.templateId, args.userId);
+    assertDelegatedTemplate(template, args.delegation);
   }
   // A launch names its project: that identity scopes the project's pod listing and reuse,
   // and names the pod until its session does. Older clients also sent settings with it;
@@ -442,19 +446,20 @@ export async function planPodLaunch(
 
   // Secret scopes, stored credential metadata, and org settings are independent database
   // reads. Keep the launch plan on the longest branch instead of paying for all three in series.
+  const includeUserBundle = (args.includeUserBundle ?? true) && (args.delegation?.includeUserBundle ?? true);
   const [secrets, credentialMetas, resolved] = await Promise.all([
     resolveSecrets({
       kek: deps.kek,
       orgId: args.orgId,
       userId: args.userId,
-      includeUserLayer: args.includeUserBundle,
+      includeUserLayer: includeUserBundle,
       templateId: template?.id ?? null,
     }),
     listCredentialMeta({ orgId: args.orgId, userId: args.userId }),
     resolveSettings({
       orgId: args.orgId,
       userId: args.userId,
-      includeUserLayer: args.includeUserBundle,
+      includeUserLayer: includeUserBundle,
       templateConfigRaw: template?.config ?? null,
       templatePiFilesRaw: template?.pi_settings ?? null,
       templateScope: template ? (template.owner_user_id === null ? "org" : "user") : null,
@@ -475,11 +480,12 @@ export async function planPodLaunch(
       workdir: config.workdir,
     },
   );
-  const { piAuth, credentialContract } = planLaunchCredentials({
+  const planned = planLaunchCredentials({
     metas: credentialMetas,
     config,
     piSettings,
   });
+  const { piAuth, credentialContract } = args.delegation ? delegateCredentials(planned, args.delegation) : planned;
 
   const providerName = args.provider ?? (config.provider || null) ?? platformDefaultProvider(deps.env);
   assertProviderPermitted(policy, providerName);

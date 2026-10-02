@@ -7,6 +7,7 @@ import { query, tx } from "../db/index.js";
 import { badRequest, conflict, forbidden, notFound } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import { stripRetiredConfigKeys } from "../settings/merge.js";
+import { delegatesTemplate, parentDelegation, type ParentDelegation } from "../pods/lineage.js";
 import {
   TemplatePiSettingsInputSchema,
   canonicalizePiSettingsForStorage,
@@ -90,6 +91,11 @@ export function assertTemplateWrite(
   if (org) requirePermission(auth, "org:manage");
 }
 
+/** For a pod token, what its own launch was given; null for a person. */
+async function podDelegation(auth: AuthContext): Promise<ParentDelegation | null> {
+  return auth.podId ? parentDelegation({ query }, { orgId: auth.orgId, parentPodId: auth.podId }) : null;
+}
+
 export function registerTemplateRoutes(app: FastifyInstance): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
@@ -106,6 +112,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       },
     },
     async (req) => {
+      const delegation = await podDelegation(req.auth);
       const rows = await query<TemplateRow>(
         `SELECT * FROM pod_templates WHERE org_id = $1 AND archived_at IS NULL
            AND (owner_user_id IS NULL OR owner_user_id = $2)
@@ -113,7 +120,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
          ORDER BY created_at DESC LIMIT $4`,
         [req.auth.orgId, req.auth.userId, req.query.before ?? null, req.query.limit],
       );
-      return { templates: rows.rows.map(toApi) };
+      return { templates: rows.rows.filter((row) => delegatesTemplate(row, delegation)).map(toApi) };
     },
   );
 
@@ -190,7 +197,11 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       config: { allowPodToken: true },
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
-    async (req) => toApi(await getTemplate(req.auth.orgId, req.params.id, req.auth.userId)),
+    async (req) => {
+      const template = await getTemplate(req.auth.orgId, req.params.id, req.auth.userId);
+      if (!delegatesTemplate(template, await podDelegation(req.auth))) throw notFound("template not found");
+      return toApi(template);
+    },
   );
 
   const updateOpts = {

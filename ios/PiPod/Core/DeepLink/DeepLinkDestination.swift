@@ -162,10 +162,12 @@ public struct DeepLinkDestination: Hashable, Sendable {
         )
     }
 
-    /// Whether a URL is the OIDC redirect rather than an in-app destination.
-    public static func isAuthCallback(_ url: URL) -> Bool {
-        if url.host == "auth" { return true }
-        let path = url.path
-        return path.contains("auth/callback") || path == "/callback" || path.hasSuffix("/callback")
+    /// Whether a URL is the OIDC redirect rather than an in-app destination: exactly the
+    /// registered redirect's scheme, host and path, since anything can open a pipod:// URL.
+    public static func isAuthCallback(_ url: URL, redirectURI: String = Config.oidcRedirectURI) -> Bool {
+        guard let registered = URL(string: redirectURI) else { return false }
+        return url.scheme?.lowercased() == registered.scheme?.lowercased()
+            && url.host?.lowercased() == registered.host?.lowercased()
+            && url.path == registered.path
     }
 }

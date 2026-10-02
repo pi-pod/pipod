@@ -319,6 +319,11 @@ class SessionStore(
         // for the new one answers; leaving it would attribute someone else's
         // pending count to an organization the reader has just arrived in.
         setApprovals(0, emptyMap())
+        // Everything else the old organization left behind goes the way a sign-out
+        // sends it: its live sessions would keep streaming under the new identity,
+        // and its drafts, receipts and deep links would act in the wrong tenant.
+        publish { it.copy(pendingDeepLink = null) }
+        notifySessionCleared()
         applyAuthorization(response)
     }
 
@@ -586,6 +591,10 @@ class SessionStore(
         // previous account's approval count stayed on the launcher icon until
         // somebody else signed in and polled.
         notifyBadge(ApprovalBadge(count = 0, byPod = emptyMap()))
+        notifySessionCleared()
+    }
+
+    private fun notifySessionCleared() {
         for (listener in sessionClearedListeners) {
             try {
                 listener()
