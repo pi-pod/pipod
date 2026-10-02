@@ -15,8 +15,7 @@ import type { ListedObject, ObjectStore, PutOptions, StoredObject } from "./type
  * Cross-host and cross-prefix access is refused server-side; the client-side
  * key check below is defense in depth, never the boundary.
  *
- * Wire protocol (server implements; mirrored in pi-pod-server
- * src/server/archive/proxy.ts):
+ * Wire protocol (implemented by the hosted edition's archive proxy):
  *   PUT  /v1/host-archives/{host}/objects/{key…}   streamed bytes
  *        headers: authorization, content-length, x-pipod-sha256 (hex, optional)
  *        → 200 { key, size, sha256? } (sha256 only when the server verified it)

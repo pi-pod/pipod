@@ -14,7 +14,7 @@ const HOST = "boat-testuser";
 const OTHER_HOST = "boat-someoneelse";
 const KEY = (sha: string) => `pod-1/upper-${sha}.tar.zst`;
 
-/** In-memory stub of the server proxy protocol (pi-pod-server src/server/archive/proxy.ts).
+/** In-memory stub of the hosted edition's archive proxy protocol.
  * Enforces token equality, host-path binding, key shape, and upload checksums —
  * the same contract the real server enforces, minus persistence. */
 function startStub(options: { token: string } = { token: TOKEN }): Promise<{
