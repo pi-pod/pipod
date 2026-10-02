@@ -27,7 +27,7 @@
     "secrets:maintenance:dist": "node dist/secrets-maintenance.js"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@earendil-works/pi-coding-agent": "1.0.0",
     "@earendil-works/pi-tui": "0.84.4",
     "@fastify/cors": "^11.3.0",
     "@fastify/swagger": "^9.4.0",
