@@ -2,6 +2,10 @@
 
 Self-hosted sandbox service: one container hosting N isolated sandboxes for pi pod.
 
+To run your own pi pod, follow [`../docs/self-host.md`](../docs/self-host.md): it builds and
+runs this service beside the server, and its Sizing section covers the settings that matter
+there. The rest of this file is for working on the sandbox or running it as a separate host.
+
 Configuration is environment-only. See `src/config.ts` for the full set. The process
 listens on `PI_POD_SANDBOX_HOST`:`PI_POD_SANDBOX_PORT` (default `0.0.0.0:8433`).
 `docker-compose.yml` publishes that port on loopback.

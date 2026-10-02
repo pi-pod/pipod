@@ -2,3 +2,4 @@
 backups/
 # Your own additions; Compose merges it and releases never ship one.
 compose.override.yml
+Caddyfile

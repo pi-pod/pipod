@@ -3,6 +3,9 @@
 The native Android client for [pi pod](https://pipod.dev) — run every pi session
 inside a fresh pod, from your phone.
 
+To use it with your own server, see
+[the phone apps in the self-hosting guide](../docs/self-host.md#the-phone-apps).
+
 This app replaces the Flutter mobile client. It is Kotlin 2.4 / Jetpack Compose
 on `minSdk 26`. The object graph is wired explicitly in `AppContainer` without
 a dependency-injection framework; HTTP and the session transport use OkHttp, JSON is

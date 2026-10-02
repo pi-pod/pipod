@@ -4,6 +4,9 @@ The control plane for pi pod clients: authenticated pod lifecycle APIs, durable 
 resumable gateway WebSockets, encrypted settings and secrets, and workers for reconciliation,
 retention, capacity, and notifications.
 
+To run your own instance, follow [`../docs/self-host.md`](../docs/self-host.md): it builds and
+runs this server for you. The rest of this file is for working on it.
+
 ## Providers and hosts
 
 The server has one pod provider: **`sandbox`**, the native runtime in [`../sandbox`](../sandbox).
@@ -34,8 +37,6 @@ npx tsx dev/main-fake.mts
 The fake provider registers on the `sandbox` slot and uses `PI_POD_SANDBOX_TOKEN`
 (`fake-dev-sandbox-token` by default). The manual WebSocket driver takes its public base URL from
 `PI_POD_WS_DRIVE_URL`.
-
-To run your own instance, follow [`../docs/self-host.md`](../docs/self-host.md).
 
 ## Layout
 

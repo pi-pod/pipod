@@ -1,8 +1,8 @@
 # Deployment shape for a single sandbox host.
 #
 # `privileged` is not decoration: the service mounts overlayfs, writes cgroup limits, creates
-# network namespaces, and runs crun. The blast radius is stated plainly in docs/threat-model.md
-# — this host runs sandboxes and nothing else.
+# network namespaces, and runs crun. The blast radius is stated plainly in the "Sizing" section
+# of ../docs/self-host.md — this host runs sandboxes and nothing else.
 services:
   sandbox:
     build: .

@@ -7,8 +7,12 @@ plane), and the **native sandbox** the server launches pods into.
 checked out: installing is `selfhost/upgrade`, and upgrading is
 `git pull && selfhost/upgrade`.
 
-You need **8 GB of RAM**, Docker with the Compose plugin, `git`, `openssl`, and Node 22+ (for
-the CLI). Pods may use the host's memory and CPU less a reserve kept for everything else, and
+Steps 1–3 give you a working instance used from this host. [Going public](#going-public) is
+the later step that lets other machines and the phone apps in.
+
+You need a Linux host with **8 GB of RAM** and cgroup v2 (the default on current Debian and
+Ubuntu), Docker with the Compose plugin, `git`, `openssl`, and Node 22.19 or later (for the
+CLI). Pods may use the host's memory and CPU less a reserve kept for everything else, and
 a standard pod (2 vCPU / 4 GiB) needs its whole 4 GiB of that, so 8 GB runs one standard pod
 at a time and 16 GB runs three. A 4 GB host works with smaller pods — see
 [Sizing](#sizing-the-host-and-the-pod-shape). On Debian stable, whose own `nodejs` is
@@ -47,9 +51,11 @@ anywhere — **back both up offline now**, separately from the database dumps (s
 - **`SECRETS_KEK`** encrypts stored secrets; lose it and every one is unreadable.
 
 Only two ports are published. 8080 (the server) listens on every interface for clients on
-other machines; firewall it from the internet until you [go public](#going-public).
-Zitadel's 8081 and the base-image registry's 5000 are bound to `127.0.0.1`, and Postgres is
-not published at all. Pods reach the server inside the deployment, so nothing about this
+other machines; keep it off the internet until you [go public](#going-public). Docker
+publishes ports past host firewalls such as `ufw`, so block it in your cloud provider's
+firewall, or bind it to loopback as [Going public](#going-public) does. Zitadel's 8081 and
+the base-image registry's 5000 are bound to `127.0.0.1`, and Postgres is not published at
+all. Pods reach the server inside the deployment, so nothing about this
 host's own addresses needs configuring.
 
 Run every `docker compose` command in this guide from `selfhost/`.
@@ -116,7 +122,8 @@ on the sign-in screen tap **Server · Change**, enter the address the CLI signs 
 (`api.example.com`), then **Sign in**. The app asks the server where to sign in, as the CLI
 does, and remembers it until you choose again; **Use pi pod cloud** goes back. They need
 HTTPS — a phone cannot reach `127.0.0.1`, and the apps never send sign-in tokens in the
-clear.
+clear. This repository does not publish app builds; build one from [`ios/`](../ios) or
+[`android/`](../android) as their READMEs describe.
 
 ### Zitadel
 
@@ -205,6 +212,23 @@ start against a database a newer release migrated, and says so in its log. Roll
 back with the dump the upgrade took first (see [Restore](#restore)), then check out
 the commit you upgraded from and run `selfhost/upgrade`.
 
+## Running it
+
+Docker restarts every service after a crash, and after a reboot once Docker itself starts at
+boot (the `get.docker.com` install sets that up). From `selfhost/`:
+
+```bash
+docker compose ps                  # what is running
+docker compose logs -f server      # follow one service: server, sandbox, zitadel or db
+docker compose restart server
+docker compose down                # stop everything; data stays in Docker volumes
+docker compose up -d               # start it again, taking a backup first
+```
+
+To remove pi pod from the host for good, `docker compose down -v` deletes every volume with
+it: the database, Zitadel, and every pod's workspace. Copy `selfhost/backups/` and
+`selfhost/.env` off the host first if you might want any of it back.
+
 ## Back up and restore
 
 Every `docker compose up` writes `selfhost/backups/pipod-<UTC time>.sql.gz`, a
@@ -245,9 +269,12 @@ connected as.
 
 ## Going public
 
-Terminate TLS at a reverse proxy and give Zitadel and the server their own
-names. With Caddy on the same Compose network (a `caddy` service in
-`selfhost/compose.override.yml`), change the domains in:
+Give the server and Zitadel their own HTTPS names, served by a reverse proxy on this host.
+The examples use `api.example.com` and `auth.example.com`; point DNS records for both at
+this host and open ports 80 and 443.
+
+With Caddy, which gets the certificates itself, write `selfhost/Caddyfile` with your
+domains:
 
 ```caddyfile
 api.example.com {
@@ -260,6 +287,30 @@ auth.example.com {
 	# Zitadel serves gRPC and HTTP on one cleartext HTTP/2 port.
 	reverse_proxy h2c://zitadel:8080
 }
+```
+
+and add Caddy to the deployment in `selfhost/compose.override.yml`. This also binds 8080 to
+loopback, since Caddy reaches the server over the Compose network:
+
+```yaml
+services:
+  server:
+    ports: !override
+      - "127.0.0.1:8080:8080"
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
 ```
 
 Then set these together in `.env` and run `selfhost/upgrade` — they must agree, and
@@ -279,8 +330,9 @@ right scheme. The server still fetches signing keys over the Compose network
 (`ZITADEL_JWKS_URL`, default `http://zitadel:8080/oauth/v2/keys`); set it only if
 that route stops working.
 
-Changing `ZITADEL_EXTERNALDOMAIN` after first boot does not move an existing
-instance. Decide the domain before step 1 if you know it.
+Zitadel adds a changed `ZITADEL_EXTERNALDOMAIN` to the existing instance when it next
+starts, so going public after you have used the instance on loopback keeps its users and
+settings.
 
 Serve every public endpoint over HTTPS. Never copy `SECRETS_KEK` or database
 credentials to another machine — sandboxes receive plaintext secret *values* at

@@ -4,15 +4,16 @@ Run [pi](https://github.com/earendil-works/pi) coding-agent sessions in server-m
 
 ```bash
 npm install -g @pipod/cli    # or from a checkout of this directory: npm ci && npm run build && npm install -g .
-pipod login --server <url>   # sign in to a pi pod server (the hosted one without --server)
+pipod login --server <url>   # sign in to your pi pod server
 pipod                        # launch a pod for the current directory and attach
 pipod --help                 # every command and launch option
 pipod update                 # upgrade the way it was installed
 ```
 
 Running your own server: [docs/self-host.md](https://github.com/pi-pod/pipod/blob/main/docs/self-host.md).
-A self-hosted server is deployed from a checkout; install the CLI from the same checkout so the
-two match.
+The npm release works with any server at least as new as it; a CLI newer than its server is
+refused, so upgrade the server first. Building the CLI from the server's own checkout always
+matches.
 
 ## Secrets
 
@@ -53,12 +54,12 @@ Details, limits and a manual test checklist: [docs/workspace-seeding.md](docs/wo
 Local images named in a prompt (clipboard pastes, `@shot.png`, file paths) are
 attached inline for the pod agent: [docs/image-attachments.md](docs/image-attachments.md).
 
-## Personal workstations (SaaS)
+## Personal workstations (hosted service)
 
-On the hosted service each user gets a whole machine of their own, which sleeps when idle. The
-first command after it sleeps waits for it to come back — measured at 243 to 708 seconds in
-production, so the CLI shows elapsed progress and says "several minutes" rather than promising
-a number. Nothing is lost while it sleeps: every workspace stays on the workstation's disk.
+This section does not apply to a self-hosted server. On the hosted service (coming soon) each
+user gets a whole machine of their own, which sleeps when idle. The first command after it
+sleeps waits for it to come back — measured at 243 to 708 seconds in production, so the CLI
+shows elapsed progress and says "several minutes" rather than promising a number. Nothing is lost while it sleeps: every workspace stays on the workstation's disk.
 
 The hosted service also reports the account's plan, active hours and spend cap, which `pipod
 list` prints under the pods. A self-hosted server reports none of that, and the client then

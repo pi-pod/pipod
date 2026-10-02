@@ -20,13 +20,27 @@ pod into the sandbox service on the same host; inside a pod it runs pi behind a 
 clients drive that session over the server's gateway. Identity is [Zitadel](https://zitadel.com)
 (OIDC); the server stores no passwords.
 
-To run your own instance, follow [docs/self-host.md](docs/self-host.md); upgrading it later is
-`git pull && selfhost/upgrade`.
+## Run your own
+
+On a Linux host with 8 GB of RAM, Docker with the Compose plugin, `git`, `openssl` and Node
+22.19 or later:
+
+```sh
+git clone https://github.com/pi-pod/pipod.git && cd pipod
+selfhost/upgrade                            # install: generates secrets, builds, starts
+selfhost/add-user you@example.com --owner   # your account
+(cd cli && npm ci && npm run build) && npm install -g ./cli
+pipod login --server http://127.0.0.1:8080
+```
+
+Upgrading later is `git pull && selfhost/upgrade`. [docs/self-host.md](docs/self-host.md)
+is the full guide: signing in from a server without a browser, HTTPS for other machines and
+the phone apps, sizing, backups, and what to do when something fails.
 
 ## Install the CLI
 
-The CLI is published to npm as [`@pipod/cli`](https://www.npmjs.com/package/@pipod/cli) and
-needs Node 22.19 or later:
+On any other machine, install the CLI from npm, where it is published as
+[`@pipod/cli`](https://www.npmjs.com/package/@pipod/cli). It needs Node 22.19 or later:
 
 ```sh
 npm install -g @pipod/cli

@@ -3,6 +3,9 @@
 The native iOS client for [pi pod](https://pipod.dev) — run every pi session inside a
 fresh pod, from your phone.
 
+To use it with your own server, see
+[the phone apps in the self-hosting guide](../docs/self-host.md#the-phone-apps).
+
 This app replaces the Flutter mobile client. It is Swift 6 toolchain / Swift 5 language
 mode, SwiftUI + Observation, iOS 17+, iPhone only, and has **no third-party
 dependencies**: networking is `URLSession`, the session transport is
