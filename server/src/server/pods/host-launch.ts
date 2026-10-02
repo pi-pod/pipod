@@ -34,7 +34,15 @@ import { withHostMachineProvider } from "./hostmachine.js";
 import { runPodInitSteps } from "./initialization.js";
 import { composePodEnv, savePodLaunchEnv, type LaunchEnvLayers } from "./launchenv.js";
 import { ensureProviderPodStarted } from "./lifecycle.js";
-import { lockLineageRoot, nestedPodsPolicy, planChildLineage, type LineagePlacement } from "./lineage.js";
+import {
+  assertDelegatedTemplate,
+  delegateCredentials,
+  lockLineageRoot,
+  nestedPodsPolicy,
+  parentDelegation,
+  planChildLineage,
+  type LineagePlacement,
+} from "./lineage.js";
 import {
   applyPiLaunchOverrides,
   buildInitSteps,
@@ -124,17 +132,24 @@ export async function launchHostChild(
     template = await getTemplate(args.orgId, args.templateId, args.userId);
   }
 
+  const delegation = args.parentPodId
+    ? await parentDelegation({ query }, { orgId: args.orgId, parentPodId: args.parentPodId })
+    : null;
+  if (template) assertDelegatedTemplate(template, delegation);
+  const includeUserLayer = delegation?.includeUserBundle ?? true;
   const [secrets, credentialMetas, resolved] = await Promise.all([
     resolveSecrets({
       kek: deps.kek,
       orgId: args.orgId,
       userId: args.userId,
+      includeUserLayer,
       templateId: template?.id ?? null,
     }),
     listCredentialMeta({ orgId: args.orgId, userId: args.userId }),
     resolveSettings({
       orgId: args.orgId,
       userId: args.userId,
+      includeUserLayer,
       templateConfigRaw: template?.config ?? null,
       templatePiFilesRaw: template?.pi_settings ?? null,
       templateScope: template ? (template.owner_user_id === null ? "org" : "user") : null,
@@ -156,11 +171,12 @@ export async function launchHostChild(
       workdir: config.workdir,
     },
   );
-  const { piAuth, credentialContract } = planLaunchCredentials({
+  const planned = planLaunchCredentials({
     metas: credentialMetas,
     config,
     piSettings,
   });
+  const { piAuth, credentialContract } = delegation ? delegateCredentials(planned, delegation) : planned;
 
   // Machine-shaped ambient bundle config cannot be honored on someone else's machine.
   // Legacy request project config is already ignored, like every other launch path.

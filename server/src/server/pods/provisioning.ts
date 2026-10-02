@@ -110,6 +110,7 @@ import {
   MAX_LINEAGE_DEPTH,
   lockLineageRoot,
   nestedPodsPolicy,
+  parentDelegation,
   planChildLineage,
   type LineagePlacement,
 } from "./lineage.js";
@@ -353,8 +354,11 @@ export async function launchPod(
     launchTemplateId = inherited.templateId;
     launchProject = inherited.project;
   }
+  const delegation = args.parentPodId
+    ? await parentDelegation({ query }, { orgId: args.orgId, parentPodId: args.parentPodId })
+    : null;
   const plan = await planPodLaunch(deps, { ...args, launchContext: args.launchContext,
-    templateId: launchTemplateId, project: launchProject });
+    templateId: launchTemplateId, project: launchProject, delegation });
   if (forkSource && piArgsHaveSessionSteering(plan.config.pi.args)) {
     throw badRequest(
       "cannot fork into a pod whose Pi config already chooses a session (--resume, --continue, --fork, --session, or --no-session)",

@@ -102,6 +102,15 @@ public final class ZitadelAuthService: NSObject, AuthService, @unchecked Sendabl
         }
 
         guard let code = parameter("code"), !code.isEmpty else {
+            // Any app or page can open a pipod:// URL. Only the attempt's own callback may
+            // end it; a forged error must not discard the proof the real callback needs.
+            var pending = state
+            if pending == nil {
+                pending = AuthorizationProof.decode(await storage.read(Self.authorizationProofKey))?.state
+            }
+            guard let pending, !pending.isEmpty, parameter("state") == pending else {
+                throw APIError(error: "the sign-in redirect did not match this login attempt")
+            }
             await storage.delete(Self.authorizationProofKey)
             if let error = parameter("error") {
                 throw AuthorizationRejected(

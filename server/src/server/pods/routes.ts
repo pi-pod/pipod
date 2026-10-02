@@ -42,6 +42,7 @@ import {
   assertPodTokenReach,
   liveChildren,
   nestedPodsPolicy,
+  parentDelegation,
   reparentChildren,
   subtreeDeepestFirst,
 } from "./lineage.js";
@@ -844,6 +845,9 @@ export function registerPodRoutes(
       const plan = await planPodLaunch(deps, {
         orgId: req.auth.orgId,
         userId: req.auth.userId,
+        delegation: req.auth.podId
+          ? await parentDelegation({ query }, { orgId: req.auth.orgId, parentPodId: req.auth.podId })
+          : null,
         templateId: req.body.templateId ?? null,
         projectConfigRaw: req.body.projectConfig ?? null,
         legacyLaunchInputsPresent:
@@ -1121,7 +1125,8 @@ export function registerPodRoutes(
     async (req, reply) => {
       const pod = await getPod(req.auth.orgId, req.params.id);
       await assertPodAccess(pod, req.auth);
-      await assertPodTokenScope(pod, req.auth, "inspect", { allowSelf: true });
+      // Usable credentials: a pod leases its own, never a descendant's.
+      if (req.auth.podId && req.auth.podId !== pod.id) throw forbidden("pods lease only their own model credentials");
       const providerIds = pod.credential_providers ?? [];
       const { lease } = await acquireLease(
         deps.kek,

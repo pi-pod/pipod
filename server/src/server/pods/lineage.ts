@@ -239,3 +239,68 @@ export async function assertPodTokenReach(
       : `a pod token may only ${args.action} pods it launched`,
   );
 }
+
+/**
+ * What a pod-requested launch may carry: no more than its parent pod was given. The parent
+ * holds its owner's bundle and model credentials as of its own launch; its child must not
+ * reach a layer the parent lacked (an org job runs without the owner's bundle) or a model
+ * provider outside the parent's credential contract. A parent that predates contracts
+ * delegates no providers.
+ */
+export interface ParentDelegation {
+  parentPodId: string;
+  includeUserBundle: boolean;
+  credentialProviders: ReadonlySet<string>;
+}
+
+export async function parentDelegation(
+  db: LineageDb,
+  args: { orgId: string; parentPodId: string },
+): Promise<ParentDelegation> {
+  const rows = await db.query<{ layer_order: unknown; credential_providers: string[] | null }>(
+    `SELECT resolved_config->'layerOrder' AS layer_order, credential_providers
+       FROM pods WHERE id = $1 AND org_id = $2`,
+    [args.parentPodId, args.orgId],
+  );
+  const parent = rows.rows[0];
+  if (!parent) throw notFound("parent pod not found");
+  return {
+    parentPodId: args.parentPodId,
+    includeUserBundle: !Array.isArray(parent.layer_order) || parent.layer_order.includes("user"),
+    credentialProviders: new Set(parent.credential_providers ?? []),
+  };
+}
+
+/**
+ * A parent launched without its owner's bundle has none of the owner's personal templates
+ * either (their scripts and template secrets), except the ones it wrote itself.
+ */
+export function delegatesTemplate(
+  template: { owner_user_id: string | null; created_from_pod: string | null },
+  delegation: ParentDelegation | null | undefined,
+): boolean {
+  return !delegation || delegation.includeUserBundle || template.owner_user_id === null ||
+    template.created_from_pod === delegation.parentPodId;
+}
+
+export function assertDelegatedTemplate(
+  template: { owner_user_id: string | null; created_from_pod: string | null },
+  delegation: ParentDelegation | null | undefined,
+): void {
+  if (!delegatesTemplate(template, delegation)) {
+    throw forbidden("this pod runs without its owner's settings and cannot use their personal templates");
+  }
+}
+
+/** Narrows a planned launch's model credentials to what its parent may delegate. */
+export function delegateCredentials(
+  planned: { piAuth: { providers: string[] } | null; credentialContract: string[] },
+  delegation: ParentDelegation,
+): { piAuth: { providers: string[] } | null; credentialContract: string[] } {
+  const allowed = (id: string) => delegation.credentialProviders.has(id);
+  const providers = planned.piAuth?.providers.filter(allowed) ?? [];
+  return {
+    piAuth: providers.length > 0 ? { providers } : null,
+    credentialContract: planned.credentialContract.filter(allowed),
+  };
+}
