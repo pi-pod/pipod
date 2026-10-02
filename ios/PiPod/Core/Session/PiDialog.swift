@@ -72,8 +72,9 @@ public struct PiDialog: Identifiable, Hashable, Sendable {
     @MainActor
     public func receipt(for response: JSONValue) -> String {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Quoted, because the title is usually the question itself ("Run this command?").
         func withTitle(_ action: String) -> String {
-            title.isEmpty ? "\(action)." : "\(action) \(title)."
+            title.isEmpty ? "\(action)." : "\(action) “\(title)”"
         }
         if response["cancelled"]?.boolValue == true { return withTitle("You cancelled") }
         if let confirmed = response["confirmed"]?.boolValue {
@@ -87,7 +88,7 @@ public struct PiDialog: Identifiable, Hashable, Sendable {
             ? String(value.prefix(80)).trimmingCharacters(in: .whitespaces) + "…"
             : value
         if case .select = style {
-            return title.isEmpty ? "You chose \(shown)." : "You chose \(shown) for \(title)."
+            return title.isEmpty ? "You chose \(shown)." : "You chose \(shown) for “\(title)”"
         }
         if SessionStream.redactingSecrets(raw) != raw { return withTitle("You answered") }
         return "You answered \(shown)."

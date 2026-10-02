@@ -56,7 +56,8 @@ class PiDialog private constructor(
      */
     fun receipt(response: JsonObject): String {
         val title = title.trim()
-        fun withTitle(action: String) = if (title.isEmpty()) "$action." else "$action $title."
+        // Quoted, because the title is usually the question itself ("Run this command?").
+        fun withTitle(action: String) = if (title.isEmpty()) "$action." else "$action “$title”"
         if ((response["cancelled"] as? JsonPrimitive)?.content == "true") return withTitle("You cancelled")
         (response["confirmed"] as? JsonPrimitive)?.let {
             return withTitle(if (it.content == "true") "You confirmed" else "You declined")
@@ -66,7 +67,7 @@ class PiDialog private constructor(
         val value = raw.split(Regex("\\s+")).joinToString(" ")
         val shown = if (value.length > 80) value.take(80).trimEnd() + "…" else value
         if (style is Style.Select) {
-            return if (title.isEmpty()) "You chose $shown." else "You chose $shown for $title."
+            return if (title.isEmpty()) "You chose $shown." else "You chose $shown for “$title”"
         }
         if (SessionStream.redactingSecrets(raw) != raw) return withTitle("You answered")
         return "You answered $shown."

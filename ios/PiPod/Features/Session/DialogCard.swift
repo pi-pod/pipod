@@ -6,10 +6,16 @@ struct DialogCard: View {
     /// Sends the answer; false when the conversation is not connected.
     let onAnswer: (JSONValue) -> Bool
 
-    @State private var response = ""
+    @State private var response: String
     @State private var selectedOption = ""
     @State private var showsDetails = false
     @State private var errorMessage: String?
+
+    init(dialog: PiDialog, onAnswer: @escaping (JSONValue) -> Bool) {
+        self.dialog = dialog
+        self.onAnswer = onAnswer
+        _response = State(initialValue: dialog.prefill)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -45,7 +51,6 @@ struct DialogCard: View {
         .background(AppColors.noticeFill, in: RoundedRectangle(cornerRadius: 16))
         .padding(.vertical, 6)
         .accessibilityIdentifier("session.dialogCard")
-        .onAppear { if response.isEmpty { response = dialog.prefill } }
     }
 
     @ViewBuilder
