@@ -266,12 +266,7 @@ public struct SettingsView: View {
                     )
                 }
             } footer: {
-                Text(
-                    """
-                    Applied under every environment for everyone in your organization. \
-                    Agents can propose changes here from inside a pod.
-                    """
-                )
+                Text("Applied under every environment for everyone in your organization.")
             }
         }
         if let user = session.user {

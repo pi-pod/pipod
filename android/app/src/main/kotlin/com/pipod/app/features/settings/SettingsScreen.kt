@@ -531,8 +531,7 @@ private fun OrganizationDefaultsCard(state: SettingsState, bundle: (@Composable 
     SettingsCard(
         modifier = Modifier.testTag(SettingsTestTags.ORG_DEFAULTS_CARD),
         title = "Organization defaults",
-        footer = "Applied under every environment for everyone in your organization. " +
-            "Agents can propose changes here from inside a pod.",
+        footer = "Applied under every environment for everyone in your organization.",
     ) {
         bundle?.invoke()
     }
