@@ -479,6 +479,9 @@ private fun Transcript(
                 }
             }
 
+            // A failed launch's banner says why; inviting a first message would be a lie.
+            session.podRecord?.didFail == true -> Unit
+
             session.items.isEmpty() && session.pendingInteractions.isEmpty() ->
                 item(key = "empty-conversation") {
                     ConversationEmptyState(onChooseSuggestion = onChooseSuggestion)

@@ -596,9 +596,8 @@ private fun EnvironmentsCard(actions: SettingsActions) {
     SettingsCard(
         modifier = Modifier.testTag(SettingsTestTags.ENVIRONMENTS_CARD),
         title = "Every pod you launch",
-        footer = "An environment is a template config bundle: the setup script, bake " +
-            "script and network policy pods start from. Pods you launch from this app " +
-            "also get the Claude Agent SDK and Meta OAuth providers.",
+        footer = "An environment is what a pod starts from: a setup script, a bake script " +
+            "and a network policy. Model providers you connect work in every pod.",
     ) {
         AppListTile(
             modifier = Modifier
@@ -619,8 +618,7 @@ private fun OrganizationDefaultsCard(state: SettingsState, bundle: (@Composable 
     SettingsCard(
         modifier = Modifier.testTag(SettingsTestTags.ORG_DEFAULTS_CARD),
         title = "Organization defaults",
-        footer = "Applied under every environment for everyone in " +
-            "${organization.name ?: organization.alias ?: "this organization"}. " +
+        footer = "Applied under every environment for everyone in your organization. " +
             "Agents can propose changes here from inside a pod.",
     ) {
         bundle?.invoke()
@@ -652,7 +650,7 @@ private fun AccountCard(
     )
 
     SettingsCard(modifier = Modifier.testTag(SettingsTestTags.ACCOUNT_CARD), title = "Account") {
-        SettingsLabeledValue(label = "Email", value = user.email ?: user.id)
+        SettingsLabeledValue(label = "Signed in as", value = user.email ?: user.displayName ?: user.id)
         state.organization?.let { organization ->
             SettingsLabeledValue(
                 label = "Organization",

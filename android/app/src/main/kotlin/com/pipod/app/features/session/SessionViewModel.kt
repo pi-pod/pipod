@@ -67,12 +67,17 @@ data class SessionState(
             isRunning = stream.isRunning,
             isInterrupting = stream.isInterrupting,
             isConnected = stream.isConnected,
-            canAttach = !isPickingImages,
+            canAttach = !isPickingImages && !launchFailed,
+            isDisabled = launchFailed,
         )
+
+    /** The pod's launch failed, so it will never hold a conversation; the error says why. */
+    val launchFailed: Boolean get() = stream.podRecord?.didFail == true
 
     /** What the field hints at, which is also where a message will go. */
     val composerPlaceholder: String
         get() = when {
+            launchFailed -> "This pod couldn’t start"
             stream.isConnected -> "Message pi…"
             stream.preparingPod != null -> "Message pi (sends when ready)…"
             // A workstation wait is minutes, not a keystroke: never present it

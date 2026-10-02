@@ -7,6 +7,7 @@ import { audit } from "../audit.js";
 import { badRequest } from "../httperrors.js";
 import { accountConsoleUrl, adminConsoleUrl } from "./consoles.js";
 import { edition } from "../edition.js";
+import { userEmail } from "./snapshots.js";
 
 /** Loopback PKCE: the CLI's redirect must land on this machine. */
 export function isLoopbackRedirect(redirectUri: string): boolean {
@@ -26,6 +27,7 @@ export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv): void {
   r.get("/auth/config", async () => ({
     issuer: env.ZITADEL_ISSUER,
     ...(env.ZITADEL_CLI_CLIENT_ID ? { cliClientId: env.ZITADEL_CLI_CLIENT_ID } : {}),
+    ...(env.ZITADEL_MOBILE_CLIENT_ID ? { mobileClientId: env.ZITADEL_MOBILE_CLIENT_ID } : {}),
   }));
 
   r.get(
@@ -39,6 +41,8 @@ export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv): void {
             name: req.auth.orgName ?? null,
           }
         : null;
+      const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? "";
+      const email = req.auth.email || (bearer ? await userEmail(env, req.auth.userId, bearer) : null);
       // The hosted edition adds its `workstation` block here. A self-hosted server adds
       // nothing: it has no plan, no meter and no cap to report, and clients key their
       // whole billing UI off the presence of that object.
@@ -46,7 +50,7 @@ export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv): void {
         ...(await edition().accountSummary(env, req.auth.userId)),
         user: {
           id: req.auth.userId,
-          ...(req.auth.email ? { email: req.auth.email } : {}),
+          ...(email ? { email } : {}),
           ...(req.auth.displayName ? { displayName: req.auth.displayName } : {}),
         },
         currentOrgId: req.auth.orgId || null,

@@ -447,6 +447,50 @@ export function registerJobRoutes(app: FastifyInstance): void {
     );
   }
 
+  // Run an active job once, now. The scheduler claims it on its next tick exactly as it claims a
+  // due occurrence, and counts the regular schedule on from now — so nothing about the schedule
+  // changes, and the run is recorded in the job's history like any other.
+  r.post(
+    "/jobs/:id/run",
+    {
+      preHandler: [app.authenticate],
+      schema: { params: z.object({ id: z.string().uuid() }) },
+    },
+    async (req) => {
+      const job = await tx(async (client) => {
+        const locked = await client.query<JobRow>(
+          `SELECT * FROM jobs
+           WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
+             AND (scope = 'org' OR user_id = $3)
+           FOR UPDATE`,
+          [req.params.id, req.auth.orgId, req.auth.userId],
+        );
+        const existing = locked.rows[0];
+        if (!existing) throw notFound("job not found");
+        assertJobTransition(req.auth, existing, "resume");
+        if (existing.status !== "active") {
+          throw badRequest(`only an active job can run now; this one is ${existing.status}`);
+        }
+        const running = await client.query(
+          `SELECT 1 FROM job_runs WHERE job_id = $1 AND status = 'running' LIMIT 1`,
+          [existing.id],
+        );
+        if ((running.rowCount ?? 0) > 0) throw conflict("this job is already running");
+        await client.query("UPDATE jobs SET next_run_at = now(), updated_at = now() WHERE id = $1", [existing.id]);
+        return existing;
+      });
+      await audit({
+        orgId: req.auth.orgId,
+        actorId: req.auth.userId,
+        action: "job.run",
+        targetType: "job",
+        targetId: job.id,
+        detail: {},
+      });
+      return { id: job.id, status: "active" };
+    },
+  );
+
   r.delete(
     "/jobs/:id",
     { preHandler: [app.authenticate], schema: { params: z.object({ id: z.string().uuid() }) } },

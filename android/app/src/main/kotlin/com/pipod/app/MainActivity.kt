@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
@@ -66,11 +67,14 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PiPodTheme {
-                AppRoot(
-                    container = container,
-                    location = pendingLocation,
-                    onLocationHandled = { pendingLocation = null },
-                )
+                // A new server means a new session object; everything below starts over on it.
+                key(container.generation) {
+                    AppRoot(
+                        container = container,
+                        location = pendingLocation,
+                        onLocationHandled = { pendingLocation = null },
+                    )
+                }
             }
         }
     }

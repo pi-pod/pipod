@@ -77,6 +77,7 @@
       "responseTypes": ["OIDC_RESPONSE_TYPE_CODE"],
       "grantTypes": ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE", "OIDC_GRANT_TYPE_REFRESH_TOKEN"],
       "redirectUris": ["pipod://auth/callback"],
+      "postLogoutRedirectUris": ["pipod://auth/callback"],
       "accessTokenType": "OIDC_TOKEN_TYPE_JWT",
       "accessTokenRoleAssertion": true,
       "idTokenRoleAssertion": true,

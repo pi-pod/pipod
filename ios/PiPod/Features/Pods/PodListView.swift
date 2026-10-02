@@ -264,7 +264,14 @@ public struct PodListView: View {
     private func podRow(
         _ pod: Pod, depth: Int, forcesLocation: Bool = false
     ) -> some View {
-        NavigationLink(value: PodRoute.detail(podId: pod.id, pod: pod)) {
+        // A pod you can talk to opens its conversation — that is what it is for, and the
+        // conversation links to the details. One that cannot (starting, failed, archived)
+        // opens the details, which say why and what to do.
+        NavigationLink(
+            value: pod.canOpenSession
+                ? PodRoute.session(podId: pod.id, pod: pod, fromSeq: nil, sessionId: nil)
+                : PodRoute.detail(podId: pod.id, pod: pod)
+        ) {
             PodRowView(
                 pod: pod,
                 depth: depth,
@@ -273,14 +280,12 @@ public struct PodListView: View {
             )
         }
         .accessibilityIdentifier("pod.row.\(pod.id)")
-        // Deliberately not a full swipe: a stray drag across the list must reveal
-        // the shortcut, not take you into a conversation.
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
             if pod.canOpenSession {
                 Button {
-                    router.openSession(podId: pod.id, pod: pod)
+                    router.openPod(pod.id, pod: pod)
                 } label: {
-                    Label("Open session", systemImage: "bubble.left.and.bubble.right")
+                    Label("Details", systemImage: "info.circle")
                 }
                 .tint(AppColors.accent)
             }

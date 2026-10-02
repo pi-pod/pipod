@@ -88,9 +88,11 @@ public struct PodPresentation: Hashable, Sendable {
             case "stopped":
                 return ("Stopped", "Local disk retained · restarts in seconds")
             case "archived":
+                // Not "Archived": that is the action that hides a pod, and this one is merely
+                // asleep with its disk in cold storage — the CLI says "stopped · cold storage".
                 return (
-                    "Archived",
-                    "Restores on next use · seconds-to-minutes depending on size"
+                    "Stopped",
+                    "In cold storage · restores on next use, in seconds to minutes"
                 )
             default:
                 return (lifecycle.label, nil)

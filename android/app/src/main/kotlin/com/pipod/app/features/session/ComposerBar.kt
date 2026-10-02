@@ -77,8 +77,10 @@ data class ComposerState(
     val isConnected: Boolean = false,
     /** False while a picker is already open, so the field never reflows under a thumb. */
     val canAttach: Boolean = true,
+    /** The pod's launch failed: nothing typed here could ever be delivered. */
+    val isDisabled: Boolean = false,
 ) {
-    val canSend: Boolean get() = text.trim().isNotEmpty() || attachments.isNotEmpty()
+    val canSend: Boolean get() = !isDisabled && (text.trim().isNotEmpty() || attachments.isNotEmpty())
 }
 
 /** Test handles the acceptance pass addresses the composer by. */
@@ -176,6 +178,7 @@ fun ComposerBar(
                         // field, and a wrapper would expose a second,
                         // value-less text-field node.
                         placeholder = state.placeholder,
+                        enabled = !state.isDisabled,
                         shape = AppFieldShape.Pill,
                         minLines = 1,
                         maxLines = 6,

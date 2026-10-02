@@ -131,8 +131,8 @@ public struct PodDetailView: View {
         } message: {
             Text(
                 """
-                This hides the pod without deleting it. It restores later; cold archive \
-                follows after 60 stopped minutes.
+                This stops the pod and hides it from your list. Its files are kept: \
+                restore it from the Archived filter whenever you need it.
                 """
             )
         }
@@ -451,7 +451,7 @@ public struct PodDetailView: View {
                 clamps(config.clamps, for: "idleTimeoutMinutes")
             }
             if let minutes = config.archiveAfterMinutes {
-                DetailRow("Archive after", value: "\(minutes) minutes")
+                DetailRow("Cold storage after", value: "\(minutes) minutes")
                 clamps(config.clamps, for: "archiveAfterMinutes")
             }
             if let created = Format.absolute(pod.createdAt) {
@@ -822,7 +822,11 @@ public struct PodDetailView: View {
         Task {
             do {
                 try await api.deletePod(id: podId, cascade: cascade)
-                dismiss()
+                if router.podsPath.contains(where: { $0.podID == podId }) {
+                    router.closePod(podId)
+                } else {
+                    dismiss()
+                }
             } catch {
                 isDeleting = false
                 // A pod hosting live co-located children is not a failed delete,

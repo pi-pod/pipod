@@ -378,19 +378,13 @@ class ApiClient(
      * Launches a pod on the single sandbox backend. There is no provider
      * choice: the server places every pod on the sandbox host.
      */
+    /**
+     * The body carries the environment and nothing else. `piSettings` is a retired launch
+     * input: the server applies none of it and warns about it in the launch report.
+     */
     suspend fun launch(templateId: String? = null): LaunchResponse {
         val body = buildJsonObject {
             templateId?.let { put("templateId", it) }
-            putJsonObject("piSettings") {
-                putJsonObject("user") {
-                    putJsonObject("settings") {
-                        putJsonArray("packages") {
-                            add(JsonPrimitive("npm:pi-claude-agent-sdk"))
-                            add(JsonPrimitive("npm:pi-meta-oauth"))
-                        }
-                    }
-                }
-            }
         }
         return ApiJson.decodeFromJsonElement(
             LaunchResponse.serializer(),
@@ -398,10 +392,18 @@ class ApiClient(
         )
     }
 
-    suspend fun queuePrompt(podId: String, text: String): QueuedPromptReceipt =
+    /** [model] ("provider/id") asks the pod to switch to it before the prompt, when its pi offers it. */
+    suspend fun queuePrompt(podId: String, text: String, model: String? = null): QueuedPromptReceipt =
         ApiJson.decodeFromJsonElement(
             QueuedPromptReceipt.serializer(),
-            request("POST", "pods/$podId/prompts", body = buildJsonObject { put("text", text) }).jsonObject,
+            request(
+                "POST",
+                "pods/$podId/prompts",
+                body = buildJsonObject {
+                    put("text", text)
+                    if (model != null) put("model", model)
+                },
+            ).jsonObject,
         )
 
     /**
@@ -595,7 +597,7 @@ class ApiClient(
     )
 
     suspend fun jobCommand(id: String, command: String): Job {
-        if (command != "activate" && command != "pause" && command != "resume") {
+        if (command !in setOf("activate", "pause", "resume", "run")) {
             throw ApiError(error = "Unsupported job action")
         }
         request("POST", "jobs/$id/$command", body = EMPTY_BODY)

@@ -12,8 +12,9 @@ import Foundation
 ///       -PIPOD_SERVER_URL http://127.0.0.1:18081 -PIPOD_DEV_TOKEN <jwt>
 ///
 /// `-Key value` pairs land in `UserDefaults`' argument domain, so they are read
-/// back by name. A Release build never consults them: a shipped app must not be
-/// re-pointable at another server, and a dev token must never bypass sign-in.
+/// back by name. A Release build never consults them: nothing outside the app may choose
+/// its server, and a dev token must never bypass sign-in. The person using it chooses the
+/// server on the sign-in screen instead (`serverChoice`).
 public enum Config {
     /// Launch-argument / defaults keys, DEBUG only.
     public enum DevOverride {
@@ -33,6 +34,12 @@ public enum Config {
             return url
         }
         #endif
+        if let choice = serverChoice { return choice.serverURL }
+        return builtInServerURL
+    }
+
+    /// The server this build signs in to unless the user picks another one.
+    public static var builtInServerURL: URL {
         // The fallback is production, not localhost. It is only reached when the
         // Info.plist key is missing, and a shipped build that quietly pointed at a
         // loopback address would fail every request with nothing to explain it.
@@ -48,6 +55,11 @@ public enum Config {
         #if DEBUG
         if let override = devOverride(DevOverride.oidcIssuer) { return override }
         #endif
+        if let choice = serverChoice { return choice.issuer }
+        return builtInOidcIssuer
+    }
+
+    static var builtInOidcIssuer: String {
         let value = infoString("OIDC_ISSUER")
         return value.isEmpty ? "https://auth.pipod.dev" : value
     }
@@ -57,8 +69,45 @@ public enum Config {
         #if DEBUG
         if let override = devOverride(DevOverride.oidcClientID) { return override }
         #endif
+        if let choice = serverChoice { return choice.clientID }
+        return builtInOidcClientID
+    }
+
+    static var builtInOidcClientID: String {
         let value = infoString("OIDC_CLIENT_ID")
         return value.isEmpty ? "388199923079774215" : value
+    }
+
+    /// A server the user picked on the sign-in screen instead of the built-in one — their own
+    /// self-hosted pi pod — with the identity provider and client id it publishes. Kept across
+    /// launches; nil means the built-in server. Only the signed-out screen changes it, so tokens
+    /// never cross from one server to another.
+    public struct ServerChoice: Codable, Equatable, Sendable {
+        public let serverURL: URL
+        public let issuer: String
+        public let clientID: String
+
+        public init(serverURL: URL, issuer: String, clientID: String) {
+            self.serverURL = serverURL
+            self.issuer = issuer
+            self.clientID = clientID
+        }
+    }
+
+    private static let serverChoiceKey = "pipod.serverChoice"
+
+    public static var serverChoice: ServerChoice? {
+        get {
+            UserDefaults.standard.data(forKey: serverChoiceKey)
+                .flatMap { try? JSONDecoder().decode(ServerChoice.self, from: $0) }
+        }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: serverChoiceKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: serverChoiceKey)
+            }
+        }
     }
 
     /// Exact redirect registered on the mobile OIDC client.

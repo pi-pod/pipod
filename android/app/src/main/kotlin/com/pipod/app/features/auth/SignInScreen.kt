@@ -1,6 +1,8 @@
 package com.pipod.app.features.auth
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,9 +18,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,15 +37,19 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.pipod.app.core.config.ServerDiscovery
 import com.pipod.app.core.format.FriendlyError
 import com.pipod.app.ui.AppActivityIndicator
 import com.pipod.app.ui.AppButton
 import com.pipod.app.ui.AppButtonKind
 import com.pipod.app.ui.AppIcons
 import com.pipod.app.ui.AppScaffold
+import com.pipod.app.ui.AppTextField
 import com.pipod.app.ui.theme.appColors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -59,7 +67,14 @@ fun SignInScreen(
     modifier: Modifier = Modifier,
     notice: String? = null,
     initialError: String? = null,
+    serverName: String = "",
+    hasServerChoice: Boolean = false,
+    onChooseServer: suspend (address: String) -> Unit = {},
+    onUseCloud: () -> Unit = {},
+    /** The chosen server as the field should show it; see [ServerDiscovery.address]. */
+    serverAddress: String = "",
 ) {
+    var choosingServer by remember { mutableStateOf(false) }
     // Deliberately not `rememberSaveable`: the only thing that clears this flag
     // is the `finally` of a coroutine in `rememberCoroutineScope`, which dies
     // with the composition — and instance state is saved *before* the
@@ -70,6 +85,19 @@ fun SignInScreen(
     var isSigningIn by remember { mutableStateOf(false) }
     var error by remember(initialError) { mutableStateOf(initialError) }
     val scope = rememberCoroutineScope()
+
+    if (choosingServer) {
+        ServerDialog(
+            initial = if (hasServerChoice) serverAddress else "",
+            hasServerChoice = hasServerChoice,
+            onChoose = onChooseServer,
+            onUseCloud = {
+                onUseCloud()
+                choosingServer = false
+            },
+            onDismiss = { choosingServer = false },
+        )
+    }
 
     AppScaffold(modifier = modifier.testTag("sign-in-screen")) { padding ->
         Box(
@@ -145,6 +173,21 @@ fun SignInScreen(
                         Text(if (isSigningIn) "Signing in…" else "Sign in")
                     }
                 }
+                if (serverName.isNotEmpty()) {
+                    TextButton(
+                        onClick = { choosingServer = true },
+                        enabled = !isSigningIn,
+                        modifier = Modifier
+                            .testTag("sign-in-server")
+                            .semantics { contentDescription = "Server: $serverName. Change server" },
+                    ) {
+                        Text(
+                            text = "Server: $serverName · Change",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = appColors.accent,
+                        )
+                    }
+                }
                 notice?.let {
                     Spacer(Modifier.height(18.dp))
                     Text(
@@ -173,4 +216,93 @@ fun SignInScreen(
             }
         }
     }
+}
+
+/**
+ * Where to sign in: pi pod cloud, or an organization's own self-hosted server, found from its
+ * address alone.
+ */
+@Composable
+private fun ServerDialog(
+    initial: String,
+    hasServerChoice: Boolean,
+    onChoose: suspend (String) -> Unit,
+    onUseCloud: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var address by remember { mutableStateOf(initial) }
+    var checking by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    fun check() {
+        if (checking || address.isBlank()) return
+        checking = true
+        error = null
+        scope.launch {
+            try {
+                onChoose(address)
+                onDismiss()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                error = (failure as? ServerDiscovery.Failure)?.message ?: FriendlyError.message(failure)
+            } finally {
+                checking = false
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("server-dialog"),
+        title = { Text("Server") },
+        text = {
+            Column {
+                Text(
+                    "If your organization runs pi pod itself, enter the address its CLI signs in to.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = appColors.secondaryLabel,
+                )
+                Spacer(Modifier.height(12.dp))
+                AppTextField(
+                    value = address,
+                    onValueChange = { address = it },
+                    placeholder = "pipod.example.com",
+                    enabled = !checking,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        autoCorrectEnabled = false,
+                        imeAction = ImeAction.Go,
+                    ),
+                    keyboardActions = KeyboardActions(onGo = { check() }),
+                    modifier = Modifier.fillMaxWidth().testTag("server-address"),
+                )
+                error?.let {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        it,
+                        color = appColors.destructive,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .testTag("server-error")
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
+                if (hasServerChoice) {
+                    TextButton(onClick = onUseCloud, modifier = Modifier.testTag("server-use-cloud")) {
+                        Text("Use pi pod cloud")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { check() },
+                enabled = !checking && address.isNotBlank(),
+                modifier = Modifier.testTag("server-continue"),
+            ) { Text(if (checking) "Checking…" else "Continue") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }

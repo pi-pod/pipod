@@ -10,7 +10,7 @@ public protocol SessionAPI: AnyObject, Sendable {
     ) async throws -> ConversationEventsPage
     func wsTicket(podId: String) async throws -> WsTicket
     func queuePrompt(
-        podId: String, text: String, requestID: String
+        podId: String, text: String, requestID: String, model: String?
     ) async throws -> QueuedPromptReceipt
     func queuedPrompt(podId: String, requestID: String) async throws -> QueuedPromptReceipt?
     /// The durable workstation status, for a wait that knows a host id. A server
@@ -350,6 +350,15 @@ public final class SessionStream: ModelSelecting {
         do {
             let current = try await api.pod(id: podId)
             setPodRecord(current)
+            // A launch the server refused after admitting it (a full host, say) is over before
+            // the screen opens. Attaching would only fail with a less useful message.
+            if current.didFail {
+                isLoadingHistory = false
+                error = current.friendlyStateReason
+                    .map { FriendlyError.message(serverText: $0) }
+                    ?? "This pod couldn’t start."
+                return
+            }
             if current.initializing {
                 preparingPod = current
                 isLoadingHistory = false
@@ -622,7 +631,8 @@ public final class SessionStream: ModelSelecting {
         // A workstation wait already re-issues the attach on its own schedule,
         // and it is not woken by a keystroke: arming the wake path here would
         // put "Waking pod…" over a wait that takes minutes.
-        guard let api, !isConnected, !waking, workstationWait == nil else { return }
+        guard let api, !isConnected, !waking, workstationWait == nil,
+              podRecord?.didFail != true else { return }
         waking = true
         Task { await attach(api) }
     }
@@ -1022,6 +1032,12 @@ public final class SessionStream: ModelSelecting {
             Task { await queueDurably(id: id, text: text) }
             return
         }
+        // A pod whose launch failed will never connect: parking the message would leave it
+        // "waiting" under the reason it failed, and waking would replace that reason.
+        if podRecord?.didFail == true {
+            setDelivery(id, .failed)
+            return
+        }
         // Image turns cannot ride the durable queue endpoint — it only persists
         // text — so they park in memory and flush on the next hello instead of
         // being silently downgraded to a text-only prompt.
@@ -1045,7 +1061,8 @@ public final class SessionStream: ModelSelecting {
         serverBoundItemIds.insert(id)
         do {
             let receipt = try await api.queuePrompt(
-                podId: podId, text: text, requestID: requestID
+                podId: podId, text: text, requestID: requestID,
+                model: ModelMemory.startingModel(podID: podId)
             )
             if receipt.id != requestID {
                 let itemID = queuedPromptItemIDs.removeValue(forKey: requestID) ?? id
@@ -1713,6 +1730,7 @@ public final class SessionStream: ModelSelecting {
             // acknowledgement. Keep the request pending and keep Send disabled.
             if selected == pending, confirmsPendingSelection {
                 currentModel = choices.first { $0 == selected } ?? pending
+                ModelMemory.remember(currentModel ?? pending)
                 setPendingModelSwitch(nil)
                 selectionNeedsAttention = false
                 credentialSettingsNeeded = false
@@ -1775,11 +1793,26 @@ public final class SessionStream: ModelSelecting {
         } else if let thinkingLevel {
             currentThinkingLevel = thinkingLevel
         }
+        startOnRememberedModel(choices)
         // A parked prompt may only cross the socket after the requested model
         // is confirmed on this connection.
         if pendingModel == nil, pendingThinkingLevel == nil {
             flushQueuedOffline()
         }
+    }
+
+    /// A pod this app just launched starts on the model last chosen here (see `ModelMemory`),
+    /// once its pi offers a catalog to choose from and only while nothing has been said in it.
+    private func startOnRememberedModel(_ choices: [ModelChoice]) {
+        guard !choices.isEmpty, pendingModel == nil, pendingThinkingLevel == nil,
+              let wanted = ModelMemory.startingModel(podID: podId) else { return }
+        ModelMemory.settled(podID: podId)
+        let id: (ModelChoice?) -> String? = { $0.map { "\($0.provider)/\($0.modelId)" } }
+        // Messages, not `transcriptHasConversation`: history is still loading when the first
+        // catalog arrives, and a pod this app just launched has none to load.
+        guard !items.contains(where: { $0.style != .status }), id(currentModel) != wanted,
+              let choice = choices.first(where: { id($0) == wanted }) else { return }
+        _ = requestModel(choice)
     }
 
     // MARK: - Event reduction
@@ -2243,6 +2276,9 @@ public final class SessionStream: ModelSelecting {
     }
 
     // MARK: - Pod record
+
+    /// The pod's launch failed, so it will never hold a conversation; the error says why.
+    public var launchFailed: Bool { podRecord?.didFail == true }
 
     private func setPodRecord(_ pod: Pod) {
         guard podRecord != pod else { return }

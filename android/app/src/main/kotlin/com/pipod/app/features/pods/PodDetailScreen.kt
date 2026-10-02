@@ -96,6 +96,7 @@ fun PodDetailScreen(
     onBackToPods: () -> Unit,
     modifier: Modifier = Modifier,
     showsOpenSession: Boolean = false,
+    onDeleted: () -> Unit = onBack,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     // The screen owns the host rather than reading the ambient one: AppScaffold
@@ -107,7 +108,7 @@ fun PodDetailScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is PodDetailEvent.Toast -> showAppToast(toasts, event.message)
-                PodDetailEvent.Deleted -> onBack()
+                PodDetailEvent.Deleted -> onDeleted()
             }
         }
     }
@@ -361,9 +362,8 @@ fun PodDetailScreen(
                     PodAction.Archive -> scope.launch {
                         val confirmed = dialogs.confirm(
                             title = "Archive this pod?",
-                            message = "This hides the pod without deleting it. It restores later; " +
-                                "cold archive follows after 60 stopped minutes. It does not " +
-                                "release compute now — use Stop sandbox for that.",
+                            message = "This stops the pod and hides it from your list. Its files " +
+                                "are kept: restore it from the Archived filter whenever you need it.",
                             confirmLabel = "Archive pod",
                             confirmSemanticsLabel = "Archive pod",
                             cancelSemanticsLabel = "Cancel archiving pod",
@@ -595,7 +595,7 @@ private fun StatusCard(
                                     "Restarts in seconds · files retained"
                                 }
                             } else {
-                                "Restores on next use · seconds-to-minutes depending on size"
+                                "In cold storage · restores on next use, in seconds to minutes"
                             },
                             textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.bodySmall,
@@ -641,7 +641,7 @@ private fun InfoCard(pod: Pod, templateLabel: String, onOpenHostPod: (String) ->
                         .forEach { PolicyMessage(it) }
                 }
                 pod.resolvedConfig.archiveAfterMinutes?.let { minutes ->
-                    LabeledValue(label = "Archive after", value = "$minutes minutes")
+                    LabeledValue(label = "Cold storage after", value = "$minutes minutes")
                     clampsFor(pod.resolvedConfig.clamps, "archiveAfterMinutes")
                         .forEach { PolicyMessage(it) }
                 }
@@ -649,7 +649,7 @@ private fun InfoCard(pod: Pod, templateLabel: String, onOpenHostPod: (String) ->
                 Spacer(Modifier.height(8.dp))
                 val retention = buildList {
                     pod.resolvedConfig.idleTimeoutMinutes?.let { add("$it min idle stop") }
-                    pod.resolvedConfig.archiveAfterMinutes?.let { add("$it min archive") }
+                    pod.resolvedConfig.archiveAfterMinutes?.let { add("$it min to cold storage") }
                 }.joinToString(" · ")
                 if (retention.isNotEmpty()) {
                     Text(

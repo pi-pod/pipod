@@ -199,6 +199,14 @@ data class Pod(
                 return FriendlyError.FLEET_PRESSURE_MESSAGE
             }
             val stripped = reason.replaceFirst(LAUNCH_FAILED, "")
+            if (code == "admission_denied") {
+                // "sandbox hosts at capacity (memory_capacity): 4.00 GiB required, 0.12 GiB
+                // available of 12.12 GiB budget" — the figures are worth keeping, the jargon is not.
+                val figures = ADMISSION_FIGURES.find(stripped)?.groupValues
+                val need = figures?.let { " (${gib(it[1])} needed, ${gib(it[2])} free)" } ?: ""
+                return "No room to start this pod: the server is full$need. Stop a pod you " +
+                    "aren\u2019t using, then launch again."
+            }
             val cleaned = FriendlyText.withoutOperatorInstructions(stripped)
             if (cleaned.isEmpty()) return null
             val prefix = "provisioning failed:"
@@ -216,6 +224,13 @@ data class Pod(
     companion object {
         /** `launch_failed:<code>: ` as `formatLaunchFailure` writes it. */
         private val LAUNCH_FAILED = Regex("^launch_failed:([a-z0-9_]+):\\s*")
+
+        private val ADMISSION_FIGURES = Regex("([0-9.]+) GiB required, ([0-9.]+) GiB available")
+
+        private fun gib(raw: String): String {
+            val value = raw.toDoubleOrNull() ?: return "$raw GiB"
+            return if (value == Math.rint(value)) "${value.toInt()} GiB" else "%.1f GiB".format(value)
+        }
 
         /**
          * A launch that timed out (or was orphaned) waiting for room is fleet

@@ -153,7 +153,7 @@ public struct SettingsView: View {
     private var accountSection: some View {
         if let user = session.user {
             Section("Account") {
-                DetailRow("Email", value: user.email ?? user.id)
+                DetailRow("Signed in as", value: user.email ?? user.label)
                 if let organization = session.organization {
                     DetailRow("Organization", value: organization.label)
                 }
@@ -314,9 +314,8 @@ public struct SettingsView: View {
         } footer: {
             Text(
                 """
-                An environment is a template config bundle: the setup script, bake script \
-                and network policy pods start from. Pods you launch from this app also get \
-                the Claude Agent SDK and Meta OAuth providers.
+                An environment is what a pod starts from: a setup script, a bake script and \
+                a network policy. Model providers you connect work in every pod.
                 """
             )
         }
@@ -337,7 +336,7 @@ public struct SettingsView: View {
             } footer: {
                 Text(
                     """
-                    Applied under every environment for everyone in \(organization.label). \
+                    Applied under every environment for everyone in your organization. \
                     Agents can propose changes here from inside a pod.
                     """
                 )

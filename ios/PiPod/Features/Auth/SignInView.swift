@@ -9,6 +9,8 @@ public struct SignInView: View {
 
     @State private var isSigningIn = false
     @State private var error: String?
+    @State private var serverName = ServerDiscovery.displayName(Config.serverURL)
+    @State private var isChoosingServer = false
 
     public init(
         notice: String? = nil,
@@ -53,6 +55,19 @@ public struct SignInView: View {
                 .accessibilityIdentifier("sign_in_button")
                 .accessibilityLabel("Sign in")
 
+                Button {
+                    isChoosingServer = true
+                } label: {
+                    (Text("Server: ").foregroundStyle(AppColors.secondaryLabel)
+                        + Text(serverName) + Text(" · Change").foregroundStyle(AppColors.accent))
+                        .font(.footnote)
+                }
+                .buttonStyle(.plain)
+                .disabled(isSigningIn)
+                .padding(.top, 14)
+                .accessibilityIdentifier("sign_in.server")
+                .accessibilityLabel("Server: \(serverName). Change server")
+
                 if let notice {
                     Text(notice)
                         .font(.subheadline)
@@ -78,6 +93,13 @@ public struct SignInView: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .background(AppColors.background)
+        .sheet(isPresented: $isChoosingServer) {
+            ServerPickerSheet { choice in
+                Config.serverChoice = choice
+                serverName = ServerDiscovery.displayName(Config.serverURL)
+                error = nil
+            }
+        }
         .onAppear { error = initialError }
         .onChange(of: initialError) { _, newValue in error = newValue }
     }
@@ -105,6 +127,86 @@ public struct SignInView: View {
                 self.error = FriendlyError.message(error)
             }
             isSigningIn = false
+        }
+    }
+}
+
+/// Where to sign in: pi pod cloud, or an organization's own self-hosted server, found from its
+/// address alone.
+private struct ServerPickerSheet: View {
+    let onChoose: (Config.ServerChoice?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var address = Config.serverChoice.map { ServerDiscovery.address($0.serverURL) } ?? ""
+    @State private var isChecking = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("pipod.example.com", text: $address)
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.continue)
+                        .onSubmit(check)
+                        .accessibilityIdentifier("server.address")
+                        .accessibilityLabel("Server address")
+                } header: {
+                    Text("Your server")
+                } footer: {
+                    Text("If your organization runs pi pod itself, enter the address its CLI signs in to.")
+                }
+                if let error {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(AppColors.destructive)
+                        .accessibilityIdentifier("server.error")
+                }
+                if Config.serverChoice != nil {
+                    Section {
+                        Button("Use pi pod cloud") {
+                            onChoose(nil)
+                            dismiss()
+                        }
+                        .accessibilityIdentifier("server.useCloud")
+                    }
+                }
+            }
+            .navigationTitle("Server")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isChecking {
+                        ProgressView()
+                    } else {
+                        Button("Continue", action: check)
+                            .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .accessibilityIdentifier("server.continue")
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func check() {
+        guard !isChecking else { return }
+        isChecking = true
+        error = nil
+        Task {
+            do {
+                onChoose(try await ServerDiscovery.resolve(address))
+                dismiss()
+            } catch {
+                self.error = (error as? LocalizedError)?.errorDescription ?? FriendlyError.message(error)
+            }
+            isChecking = false
         }
     }
 }

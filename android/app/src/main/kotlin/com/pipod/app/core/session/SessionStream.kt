@@ -55,7 +55,7 @@ interface SessionApi {
     suspend fun pod(id: String): Pod
     suspend fun conversationEvents(podId: String, before: String? = null, limit: Int = 200): ConversationEventsPage
     suspend fun wsTicket(podId: String): WsTicket
-    suspend fun queuePrompt(podId: String, text: String): QueuedPromptReceipt
+    suspend fun queuePrompt(podId: String, text: String, model: String? = null): QueuedPromptReceipt
 
     /**
      * The durable state of the reader's own workstation. Defaulted so a fake
@@ -73,8 +73,8 @@ class ApiClientSessionApi(private val client: ApiClient) : SessionApi {
 
     override suspend fun wsTicket(podId: String): WsTicket = client.wsTicket(podId)
 
-    override suspend fun queuePrompt(podId: String, text: String): QueuedPromptReceipt =
-        client.queuePrompt(podId = podId, text = text)
+    override suspend fun queuePrompt(podId: String, text: String, model: String?): QueuedPromptReceipt =
+        client.queuePrompt(podId = podId, text = text, model = model)
 
     override suspend fun workstation(hostId: String): WorkstationStatus? = client.workstation(hostId)
 }
@@ -420,6 +420,16 @@ class SessionStream(
             val branch = synchronized(lock) {
                 setPodRecord(current)
                 when {
+                    // A launch the server refused after admitting it (a full host, say) is
+                    // over before the screen opens; attaching would only fail less usefully.
+                    current.didFail -> {
+                        isLoadingHistory = false
+                        val reason = current.friendlyStateReason
+                        setError(if (reason == null) "This pod couldn’t start." else FriendlyError.message(reason))
+                        publish()
+                        OpenBranch.FAILED
+                    }
+
                     current.initializing -> {
                         preparingPod = current
                         isLoadingHistory = false
@@ -447,6 +457,8 @@ class SessionStream(
                     return
                 }
 
+                OpenBranch.FAILED -> return
+
                 OpenBranch.ATTACH -> Unit
             }
         } catch (cancelled: CancellationException) {
@@ -465,7 +477,7 @@ class SessionStream(
         attach(api)
     }
 
-    private enum class OpenBranch { PREPARING, ASLEEP, ATTACH }
+    private enum class OpenBranch { FAILED, PREPARING, ASLEEP, ATTACH }
 
     private suspend fun waitForPreparation(api: SessionApi) {
         while (synchronized(lock) { shouldReconnect || preparingPod != null }) {
@@ -780,7 +792,7 @@ class SessionStream(
 
     fun wake() {
         val api = synchronized(lock) {
-            if (activeApi == null || isConnected || waking) return
+            if (activeApi == null || isConnected || waking || podRecord?.didFail == true) return
             waking = true
             publish()
             activeApi
@@ -1059,6 +1071,12 @@ class SessionStream(
             }
             if (preparingPod != null && pendingAttachments[id] == null) {
                 true
+            } else if (podRecord?.didFail == true) {
+                // A pod whose launch failed will never connect: parking the message would
+                // leave it "waiting" under the reason it failed.
+                setDelivery(id, StreamItemDelivery.FAILED)
+                publish()
+                return
             } else {
                 // Image turns cannot ride the durable queue endpoint — it only
                 // persists text — so they park in memory and flush on the next
@@ -1081,7 +1099,7 @@ class SessionStream(
             return
         }
         try {
-            api.queuePrompt(podId = podId, text = text)
+            api.queuePrompt(podId = podId, text = text, model = ModelMemory.startingModel(podId))
             synchronized(lock) {
                 setDelivery(id, StreamItemDelivery.SAVED_ON_SERVER)
                 setError(null)
@@ -1098,7 +1116,7 @@ class SessionStream(
                 synchronized(lock) {
                     setDelivery(id, StreamItemDelivery.WAITING_FOR_CONNECTION)
                     startWorkstationWaitLocked(sendWait, api, demand, request = {
-                        api.queuePrompt(podId = podId, text = text)
+                        api.queuePrompt(podId = podId, text = text, model = ModelMemory.startingModel(podId))
                     }, onReady = {
                         setDelivery(id, StreamItemDelivery.SAVED_ON_SERVER)
                     })
@@ -1244,6 +1262,7 @@ class SessionStream(
         }
         pendingModelSwitch = model
         currentModel = model
+        ModelMemory.remember(model)
         appendStatus("Model switched to ${model.name}.")
         transport.requestModels()
         true
@@ -2004,7 +2023,9 @@ class SessionStream(
         }
         restoreSnapshotInteractions(state)
         socket?.requestModels()
-        flushQueuedOffline()
+        // A pod this app just launched first switches to the remembered model, which needs the
+        // catalog: its parked messages wait for that (see [startOnRememberedModel]).
+        if (ModelMemory.startingModel(podId) == null) flushQueuedOffline()
         scope.launch { refreshPodRecord() }
         // Restored cards that only carry the pi request id cannot resolve until
         // they adopt the gateway uuid from the pending listing.
@@ -2034,6 +2055,30 @@ class SessionStream(
             currentThinkingLevel = message.thinkingLevel
         }
         modelCatalogRevision += 1
+        if (ModelMemory.startingModel(podId) != null && choices.isNotEmpty()) {
+            startOnRememberedModel(choices)
+            // The socket keeps order, so these follow the switch.
+            flushQueuedOffline()
+        }
+    }
+
+    /**
+     * A pod this app just launched starts on the model last chosen here (see [ModelMemory]),
+     * once its pi offers a catalog to choose from and only while nothing has been said in it.
+     */
+    private fun startOnRememberedModel(choices: List<ModelChoice>) {
+        val wanted = ModelMemory.startingModel(podId) ?: return
+        ModelMemory.settled(podId)
+        if (choices.isEmpty() || pendingModelSwitch != null) return
+        fun id(model: ModelChoice?) = model?.let { "${it.provider}/${it.modelId}" }
+        if (transcript.any { it.style != StreamItemStyle.STATUS } || id(currentModel) == wanted) return
+        val choice = choices.firstOrNull { id(it) == wanted } ?: return
+        val transport = socket ?: return
+        if (transport.set(model = mapOf("provider" to choice.provider, "id" to choice.modelId))) {
+            pendingModelSwitch = choice
+            currentModel = choice
+            transport.requestModels()
+        }
     }
 
     private fun handleEvent(

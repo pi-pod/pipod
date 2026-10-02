@@ -648,6 +648,8 @@ export function registerPodRoutes(
         body: z.object({
           text: z.string().min(1).max(64 * 1024),
           id: z.string().uuid().optional(),
+          /** "provider/id" to run this prompt on, when pi in the pod offers it. */
+          model: z.string().regex(/^[^/\s]+\/\S+$/).max(512).optional(),
         }).strict(),
       },
     },
@@ -661,8 +663,8 @@ export function registerPodRoutes(
       // retained. Never overwrite status or text: the UUID is an idempotency
       // key, not a mutable queue row.
       const inserted = await query<{ created_at: string | Date; status: string }>(
-        `INSERT INTO queued_prompts (id, pod_id, user_id, text)
-         SELECT $1, $2, $3, $4
+        `INSERT INTO queued_prompts (id, pod_id, user_id, text, model)
+         SELECT $1, $2, $3, $4, $5
          WHERE EXISTS (
            SELECT 1 FROM pods
            WHERE id = $2 AND state = 'active'
@@ -670,7 +672,7 @@ export function registerPodRoutes(
          )
          ON CONFLICT (id) DO NOTHING
          RETURNING created_at, status`,
-        [id, pod.id, req.auth.userId, text],
+        [id, pod.id, req.auth.userId, text, req.body.model ?? null],
       );
       let row = inserted.rows[0];
       if (!row) {

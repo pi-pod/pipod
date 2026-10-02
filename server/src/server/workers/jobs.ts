@@ -277,7 +277,9 @@ async function waitForStarted(orgId: string, podId: string): Promise<void> {
   for (;;) {
     const pod = await getPod(orgId, podId);
     if (pod.provider_state === "started") return;
-    if (pod.provider_state === "error") {
+    // A launch refused after its row existed (a full fleet) leaves the pod gone, not errored;
+    // waiting on it would only end at the timeout, with a reason that hides the real one.
+    if (pod.provider_state === "error" || pod.provider_state === "gone") {
       throw new Error(`pod launch failed: ${pod.state_reason ?? "unknown error"}`);
     }
     if (Date.now() > deadline) {

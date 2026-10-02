@@ -175,27 +175,27 @@ struct CredentialLoginView: View {
                         Text(option.displayLabel).tag(option.id)
                     }
                 }
-                .accessibilityLabel("Sign-in choice for \(prompt.id)")
+                .accessibilityLabel(prompt.message)
                 .accessibilityIdentifier("Sign-in choice")
             } else if prompt.isSecret {
                 SecureField(prompt.placeholder ?? "Value", text: $answer)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .accessibilityLabel("Sign-in response for \(prompt.id)")
+                    .accessibilityLabel(prompt.message)
                     .accessibilityIdentifier("Sign-in response")
             } else {
                 TextField(prompt.placeholder ?? "Value", text: $answer)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.system(.body, design: .monospaced))
-                    .accessibilityLabel("Sign-in response for \(prompt.id)")
+                    .accessibilityLabel(prompt.message)
                     .accessibilityIdentifier("Sign-in response")
             }
 
             Button("Continue") { respond(prompt) }
                 .brandProminent()
                 .disabled(submitValue(prompt).isEmpty)
-                .accessibilityLabel("Submit sign-in response for \(prompt.id)")
+                .accessibilityLabel("Continue")
                 .accessibilityIdentifier("Submit sign-in response")
         }
     }

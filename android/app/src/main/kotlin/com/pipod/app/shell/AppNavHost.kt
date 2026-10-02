@@ -1,5 +1,6 @@
 package com.pipod.app.shell
 
+import com.pipod.app.core.config.ServerDiscovery
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -123,7 +124,12 @@ fun AppNavHost(
                 }
                 PodListScreen(
                     viewModel = viewModel,
-                    onOpenPod = { router.push(Routes.podDetail(it.id)) },
+                    // A pod you can talk to opens its conversation, which links to its
+                    // details; one that cannot (starting, failed, archived) opens the details,
+                    // which say why and what to do.
+                    onOpenPod = { pod ->
+                        router.push(if (pod.canOpenSession) Routes.session(pod.id) else Routes.podDetail(pod.id))
+                    },
                     onOpenApprovals = { router.push(Routes.approvals()) },
                     onLaunchNewPod = { router.push(Routes.launch()) },
                     pendingApprovalsCount = session.pendingApprovalsCount,
@@ -219,7 +225,9 @@ fun AppNavHost(
                     // The screen deliberately does not leave by itself; the route
                     // owns where a successful launch lands, and replaces so back
                     // does not return to a form that already launched.
-                    onLaunched = { router.replace(Routes.podDetail(it.id)) },
+                    // Straight into the conversation: it shows the sandbox coming up and
+                    // takes a first message while it does, as the iOS app does.
+                    onLaunched = { router.replace(Routes.session(it.id)) },
                     onCancel = { router.pop() },
                 )
             }
@@ -241,6 +249,7 @@ fun AppNavHost(
                     onEditAndRetry = { router.push(Routes.launch(retry = true, templateId = it)) },
                     onOpenHostPod = { router.push(Routes.podDetail(it)) },
                     onBackToPods = { router.selectTab(AppDestination.Pods) },
+                    onDeleted = { router.backToPodList() },
                     showsOpenSession = true,
                 )
             }
@@ -536,7 +545,17 @@ private fun SettingsRoute(container: AppContainer, onOpenEnvironments: () -> Uni
 
 @Composable
 private fun Gate(container: AppContainer, content: @Composable () -> Unit) {
-    AuthGate(session = container.session, content = content)
+    AuthGate(
+        session = container.session,
+        serverName = ServerDiscovery.displayName(RuntimeConfig.serverUrl),
+        hasServerChoice = RuntimeConfig.serverChoice != null,
+        onChooseServer = { address ->
+            container.useServer(ServerDiscovery.resolve(address, container.httpClient))
+        },
+        onUseCloud = { container.useServer(null) },
+        serverAddress = ServerDiscovery.address(RuntimeConfig.serverUrl),
+        content = content,
+    )
 }
 
 @Composable

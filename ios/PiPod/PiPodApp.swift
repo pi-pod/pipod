@@ -54,7 +54,7 @@ final class AppEnvironment {
 
     init() {
         let storage = KeychainTokenStorage()
-        let oidc = OIDCClient(clientID: Config.oidcClientID)
+        let oidc = OIDCClient()
         let api = APIClient(refresher: oidc)
         let push = PushController(api: api)
         self.api = api
