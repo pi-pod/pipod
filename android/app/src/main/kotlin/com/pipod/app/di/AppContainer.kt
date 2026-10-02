@@ -1,6 +1,9 @@
 package com.pipod.app.di
 
 import android.Manifest
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -27,6 +30,7 @@ import com.pipod.app.core.push.PushController
 import com.pipod.app.core.session.ApiClientSessionStoreApi
 import com.pipod.app.core.session.InteractionReceiptStore
 import com.pipod.app.core.session.LiveSessionStreams
+import com.pipod.app.core.session.ModelMemory
 import com.pipod.app.core.session.SecureSessionTokenStorage
 import com.pipod.app.core.session.SessionAuthenticator
 import com.pipod.app.core.session.SessionEnvironment
@@ -240,9 +244,22 @@ class AppContainer(
     /** Per-pod composer drafts. Losing typed work is the one thing a composer must not do. */
     val drafts: SessionDraftStore = SharedPreferencesSessionDraftStore(context)
 
+    init {
+        // A server chosen at sign-in outlives the process; every client below is built against it.
+        RuntimeConfig.restoreServerChoice(context.getSharedPreferences("server", Context.MODE_PRIVATE))
+        ModelMemory.attach(context.getSharedPreferences("models", Context.MODE_PRIVATE))
+    }
+
     /**
-     * Rebuilt whenever a debug launch extra repoints the app, so a `make android`
-     * run reaches the local server and the throwaway issuer without a reinstall.
+     * Bumped whenever the graph below is rebuilt, so the UI recomposes against the new
+     * session instead of the one it first collected.
+     */
+    var generation by mutableIntStateOf(0)
+        private set
+
+    /**
+     * Rebuilt whenever the server changes — chosen on the sign-in screen, or repointed by a
+     * debug launch extra — so the next request goes to the new server without a reinstall.
      */
     @Volatile
     var oidc: OidcClient = newOidcClient()
@@ -272,6 +289,18 @@ class AppContainer(
     fun applyLaunchExtras(intent: Intent?): Boolean {
         val changed = RuntimeConfig.applyLaunchExtras { key -> intent?.getStringExtra(key) }
         if (!changed) return false
+        rebuild()
+        return true
+    }
+
+    /** Signs in to [choice] next (null: the built-in server). Only the signed-out screen calls it. */
+    fun useServer(choice: RuntimeConfig.ServerChoice?) {
+        RuntimeConfig.chooseServer(choice)
+        rebuild()
+        startRestore()
+    }
+
+    private fun rebuild() {
         session.dispose()
         // The old graph's streams point at the old server; a repoint is a
         // sign-out in everything but name.
@@ -281,7 +310,7 @@ class AppContainer(
         authService = newAuthService()
         push = newPushController()
         session = newSessionStore()
-        return true
+        generation += 1
     }
 
     private fun newOidcClient() = OidcClient(

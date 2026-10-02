@@ -1235,9 +1235,10 @@ const SESSION_NAMING_SOURCE = `
           },
         ],
       },
-      // Some current Pi models (notably OpenAI Codex) reject temperature entirely. A title
-      // needs only a small output cap; provider defaults keep this portable across models.
-      { maxTokens: 64 },
+      // Some current Pi models (notably OpenAI Codex) reject temperature entirely, and reasoning
+      // models spend output tokens thinking before they answer: at 64 a reasoning model stopped
+      // mid-thought with no title, every time. The cap only bounds a runaway; a title is short.
+      { maxTokens: 2048 },
     );
     const text = (message.content || [])
       .filter((part) => part && part.type === "text")

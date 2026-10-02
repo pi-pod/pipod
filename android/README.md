@@ -101,10 +101,16 @@ adb shell am start -n com.pipod/.MainActivity \
 ```
 
 `RuntimeConfig.applyLaunchExtras` is a no-op in a release build. That is
-deliberate and load-bearing: a shipped app that could be told which identity
-provider to trust would accept that provider's tokens as the signed-in user, and
-the dev-token bypass would be a sign-in bypass. The build additionally **fails**
-if `pipodDevToken` is set while assembling a release variant.
+deliberate and load-bearing: nothing outside the app — another app firing an
+intent, say — may tell it which identity provider to trust, and the dev-token
+bypass would be a sign-in bypass. The build additionally **fails** if
+`pipodDevToken` is set while assembling a release variant.
+
+A person chooses the server instead, on the sign-in screen (**Server · Change**):
+`ServerDiscovery` reads the server's `GET /v1/auth/config` for its issuer and
+`mobileClientId`, and `RuntimeConfig.chooseServer` keeps the choice until they
+choose again. That is how a self-hosted pi pod is used; only HTTPS addresses (and
+the device's loopback, in debug builds) are accepted.
 
 ## Testing
 

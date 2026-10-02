@@ -245,8 +245,6 @@ public struct LaunchPodView: View {
                 LabeledContent("Environment") { Text("Empty environment") }
                     .accessibilityIdentifier("launch.environment")
             }
-        } header: {
-            Text("Environment")
         } footer: {
             Text(launchOperationID != nil ? Self.pickerLockedFooter : environmentFooter)
         }
@@ -1140,6 +1138,7 @@ public struct LaunchPodView: View {
         ownerID: UUID,
         authGeneration: UUID
     ) {
+        ModelMemory.launched(podID: response.pod.id)
         // A delayed response may not navigate or clear a replacement operation.
         guard Self.isCurrentLaunchOperation(
             launchOperationRecord,

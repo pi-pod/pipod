@@ -93,8 +93,13 @@ xcrun simctl launch <udid> com.pipod.app \
 ```
 
 A dev token signs in without the browser, which is what makes an automated UI pass
-possible. A Release build ignores both: a shipped app must not be re-pointable at another
-server, and a dev token must never be a sign-in bypass.
+possible. A Release build ignores every launch argument: a dev token must never be a
+sign-in bypass, and nothing outside the app may choose its server.
+
+A person chooses it instead, on the sign-in screen (**Server · Change**): the app reads the
+server's `GET /v1/auth/config` for its issuer and `mobileClientId`, and keeps the choice
+(`Config.serverChoice`) until they choose again. That is how a self-hosted pi pod is used;
+only HTTPS addresses (and this device's loopback) are accepted.
 
 ## Identity
 

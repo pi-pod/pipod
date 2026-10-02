@@ -123,6 +123,14 @@ class AppRouter(private val navController: NavHostController) {
 
     fun pop(): Boolean = navController.popBackStack()
 
+    /**
+     * Back to the pod list, past every screen of a pod that no longer exists — its
+     * conversation as well as its details. Off the pods stack (a job's pod), just back.
+     */
+    fun backToPodList() {
+        if (!navController.popBackStack(Routes.PODS, inclusive = false)) pop()
+    }
+
     companion object {
         internal fun normalize(location: String) = location.removePrefix("/").ifEmpty { Routes.PODS }
     }

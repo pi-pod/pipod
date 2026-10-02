@@ -51,6 +51,14 @@ public enum PodRoute: Hashable, Sendable {
         case .detail, .session, .approvals, .approvalDetail, .modelPicker: return false
         }
     }
+
+    /// The pod this screen belongs to, if it belongs to one.
+    var podID: String? {
+        switch self {
+        case .detail(let id, _), .session(let id, _, _, _), .modelPicker(let id): return id
+        case .launch, .retryLaunch, .approvals, .approvalDetail: return nil
+        }
+    }
 }
 
 /// A screen inside the Jobs tab.
@@ -177,6 +185,14 @@ public final class AppRouter {
     /// produced it, not to a pod detail screen that may never be visited.
     public func consumeLaunchReport(for podID: String) -> LaunchReport? {
         pendingLaunchReports.removeValue(forKey: podID)
+    }
+
+    /// Leaves every screen of a pod that no longer exists — its conversation as well as its
+    /// details — back to wherever it was opened from.
+    public func closePod(_ podId: String) {
+        if let first = podsPath.firstIndex(where: { $0.podID == podId }) {
+            podsPath.removeSubrange(first...)
+        }
     }
 
     public func openPod(_ podId: String, pod: Pod? = nil) {

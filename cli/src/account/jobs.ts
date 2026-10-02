@@ -62,6 +62,13 @@ export async function runAccountJobs(
       info(`job ${job.name}: ${status}`);
       return 0;
     }
+    case "run": {
+      assertArgCount(args, 2, "pipod jobs run <job>");
+      const job = await selectJob(client, args[1]!, action);
+      await client.jobCommand(job.id, "run");
+      info(`job ${job.name}: starting a run now — \`pipod jobs runs ${job.name}\` shows it within a minute`);
+      return 0;
+    }
     case "rm": {
       assertArgCount(args, 2, "pipod jobs rm <job>");
       const job = await selectJob(client, args[1]!, action);
@@ -83,7 +90,7 @@ export async function runAccountJobs(
       return diffJobs(client, args.slice(1), flags);
     default:
       throw new PiPodError(`unknown jobs action "${action}"`, {
-        hint: "one of: list, show, runs, activate, pause, resume, rm, push, pull, diff — see `pipod jobs --help`",
+        hint: "one of: list, show, runs, run, activate, pause, resume, rm, push, pull, diff — see `pipod jobs --help`",
       });
   }
 }

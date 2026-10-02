@@ -42,6 +42,7 @@
 		3F9CA255044E3B79C89D7D55 /* PodListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F58108D08FAB381A9507CC3 /* PodListView.swift */; };
 		431FAACF630694612BFE87E1 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13C65930826A65A29A39235F /* Settings.swift */; };
 		44032CD18B42AC46355167A3 /* SessionModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AB1ED62F9119F4E38EF32F0 /* SessionModels.swift */; };
+		45A0EBC44BA71FF529736D7D /* ServerDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C62138EE5897174F2FBAB65 /* ServerDiscovery.swift */; };
 		46949B4DD043A9576301DAC3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6109C9895751340443363D46 /* Assets.xcassets */; };
 		49F9507BFAFD86DD299EEA54 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC015A999808DDD58F022A7 /* JSONValue.swift */; };
 		4B1841C4319763533D35A44C /* ANSI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8015A0EB1D6060F495FA7FA2 /* ANSI.swift */; };
@@ -60,6 +61,7 @@
 		71153F04A3784F46F364F22F /* OIDCClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E4CBB178A44CB62AF03375 /* OIDCClient.swift */; };
 		715779A575F198EBD7B4423D /* SessionLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 399B3C874A5B43A821FE3FFF /* SessionLimits.swift */; };
 		72EAD5EDB12C7AA8EE3B3907 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FE9B1C80259A0B53B9CD2DE /* AuthService.swift */; };
+		7601A7D48DA1B23700F6C2B5 /* ModelMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C91E6646065CD7979F660AA8 /* ModelMemory.swift */; };
 		77D60673F68DF2C08EF7AA84 /* PushController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51EC7F6C626FECDB0D09289 /* PushController.swift */; };
 		787B213625A6A75B8ABAED1C /* JobsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BAD53560181BD757D6AA9C /* JobsListView.swift */; };
 		78C4702B450721E19688B655 /* AppRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEDCAB5CEE677EAF1C4E47BB /* AppRouter.swift */; };
@@ -145,6 +147,7 @@
 		234E855D548FF5DD3F58B683 /* SecretsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretsView.swift; sourceTree = "<group>"; };
 		25A82E3B64E4505454CB86E4 /* AppColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppColors.swift; sourceTree = "<group>"; };
 		2ADC3354E2A00BB55C18ED76 /* PiPod.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PiPod.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2C62138EE5897174F2FBAB65 /* ServerDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerDiscovery.swift; sourceTree = "<group>"; };
 		2C8492CB7628FE9BDA4E5E72 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		31279651E93EE6A3FFC621FC /* PodFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodFilter.swift; sourceTree = "<group>"; };
 		3255A3225F5F449CC882730D /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -214,6 +217,7 @@
 		BE642CCEEFA637B47599B249 /* StatusTone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusTone.swift; sourceTree = "<group>"; };
 		C2EBFCD7D3D4B63009239A3E /* PodDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodDetailView.swift; sourceTree = "<group>"; };
 		C8CF3273BEA3BCEFC8C27CEC /* DeepLinkDestination.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkDestination.swift; sourceTree = "<group>"; };
+		C91E6646065CD7979F660AA8 /* ModelMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelMemory.swift; sourceTree = "<group>"; };
 		CBE615723A31C85A64C4B47D /* PodPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodPresentation.swift; sourceTree = "<group>"; };
 		CCC015A999808DDD58F022A7 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		CD394716049181F04B8BE25C /* Common.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Common.swift; sourceTree = "<group>"; };
@@ -247,6 +251,7 @@
 				18E4717312D3F30B57FA70A6 /* JWT.swift */,
 				50E4CBB178A44CB62AF03375 /* OIDCClient.swift */,
 				1F84968B563CFE13272281CA /* PKCE.swift */,
+				2C62138EE5897174F2FBAB65 /* ServerDiscovery.swift */,
 				9F7C9A73D31A3D43FADBA040 /* TokenStorage.swift */,
 			);
 			path = Auth;
@@ -480,6 +485,7 @@
 				5984F5916F97A963062E6693 /* ChatAttachments.swift */,
 				51B9CD9CDA5F5381F26D54C0 /* InteractionReceiptStore.swift */,
 				633C8B27D641CDEE27EBD02D /* ModelCatalog.swift */,
+				C91E6646065CD7979F660AA8 /* ModelMemory.swift */,
 				8BA123B5B6E50BF84BD72314 /* PendingInteractionConstruction.swift */,
 				027AB87868124150A69369B9 /* RemoteUIKeys.swift */,
 				9E29205E3A96635EBA962546 /* RemoteUIProtocol.swift */,
@@ -710,6 +716,7 @@
 				2E98A08F88EF5CB6512284FA /* MarkdownBlock.swift in Sources */,
 				93EEA6E09418DE3177C0703D /* MarkdownText.swift in Sources */,
 				369729E4AFF1FD7B10F7FD5F /* ModelCatalog.swift in Sources */,
+				7601A7D48DA1B23700F6C2B5 /* ModelMemory.swift in Sources */,
 				0A3B7356B1AA2BA012AE4E2B /* ModelPickerView.swift in Sources */,
 				71153F04A3784F46F364F22F /* OIDCClient.swift in Sources */,
 				AA3E7353A5F9670E93A3E84B /* PKCE.swift in Sources */,
@@ -735,6 +742,7 @@
 				EA482693A92BBBBE4183FF61 /* RootView.swift in Sources */,
 				AC10EDA3E214225DEBC06E34 /* SecretName.swift in Sources */,
 				8F035B4E59D12529EB549285 /* SecretsView.swift in Sources */,
+				45A0EBC44BA71FF529736D7D /* ServerDiscovery.swift in Sources */,
 				4C4710B4D46A906602209D41 /* SessionDraftStore.swift in Sources */,
 				715779A575F198EBD7B4423D /* SessionLimits.swift in Sources */,
 				44032CD18B42AC46355167A3 /* SessionModels.swift in Sources */,

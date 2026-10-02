@@ -210,6 +210,7 @@ public struct SessionView: View {
                     isPicking: isPicking,
                     isFocused: $composerFocused
                 )
+                .disabled(stream.launchFailed)
                 .onAppear { focusFreshComposerIfNeeded() }
                 RemoteUIWidgetStack(
                     surfaces: widgets(stream, placement: .belowEditor), viewportRows: rows
@@ -381,6 +382,9 @@ public struct SessionView: View {
     private func leadingState(_ stream: SessionStream) -> some View {
         if let preparing = stream.preparingPod {
             SandboxPreparationView(pod: preparing)
+        } else if stream.launchFailed {
+            // The banner above says why; inviting a first message here would be a lie.
+            EmptyView()
         } else if stream.historyLoadFailed, stream.items.isEmpty {
             RefreshErrorTile(
                 message: "Conversation history couldn’t be loaded. Sending still works."

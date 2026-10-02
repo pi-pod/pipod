@@ -45,6 +45,11 @@ import kotlinx.coroutines.CancellationException
 fun AuthGate(
     session: SessionStore,
     modifier: Modifier = Modifier,
+    serverName: String = "",
+    hasServerChoice: Boolean = false,
+    onChooseServer: suspend (address: String) -> Unit = {},
+    onUseCloud: () -> Unit = {},
+    serverAddress: String = "",
     content: @Composable () -> Unit,
 ) {
     // Deliberately not `collectAsStateWithLifecycle`: that pauses collection
@@ -109,6 +114,11 @@ fun AuthGate(
             modifier = modifier,
             notice = state.authNotice,
             initialError = devSignInError,
+            serverName = serverName,
+            hasServerChoice = hasServerChoice,
+            onChooseServer = onChooseServer,
+            onUseCloud = onUseCloud,
+            serverAddress = serverAddress,
         )
 
         else -> content()

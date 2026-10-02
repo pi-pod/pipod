@@ -1,5 +1,6 @@
 package com.pipod.app.core.config
 
+import android.content.SharedPreferences
 import com.pipod.app.BuildConfig
 
 /**
@@ -52,6 +53,54 @@ object RuntimeConfig {
      * and the OIDC client. Takes a plain lookup rather than an `Intent` so it
      * stays unit-testable.
      */
+    /**
+     * A server the user picked on the sign-in screen instead of the built-in one — their own
+     * self-hosted pi pod — with the identity provider and client id it publishes. Only the
+     * signed-out screen changes it, so tokens never cross from one server to another.
+     */
+    data class ServerChoice(val serverUrl: String, val issuer: String, val clientId: String)
+
+    private var choicePrefs: SharedPreferences? = null
+
+    /** Reads the persisted choice; called before any client is built. */
+    fun restoreServerChoice(prefs: SharedPreferences) {
+        choicePrefs = prefs
+        val url = prefs.getString(KEY_SERVER, null) ?: return
+        val issuer = prefs.getString(KEY_ISSUER, null) ?: return
+        val clientId = prefs.getString(KEY_CLIENT, null) ?: return
+        use(ServerChoice(url, issuer, clientId))
+    }
+
+    /** Persists [choice] (null: the built-in server) and points every later client at it. */
+    fun chooseServer(choice: ServerChoice?) {
+        choicePrefs?.edit()?.apply {
+            if (choice == null) {
+                remove(KEY_SERVER); remove(KEY_ISSUER); remove(KEY_CLIENT)
+            } else {
+                putString(KEY_SERVER, choice.serverUrl)
+                putString(KEY_ISSUER, choice.issuer)
+                putString(KEY_CLIENT, choice.clientId)
+            }
+        }?.apply()
+        use(choice)
+    }
+
+    /** The server picked on the sign-in screen; null while the built-in one is in use. */
+    @Volatile
+    var serverChoice: ServerChoice? = null
+        private set
+
+    private fun use(choice: ServerChoice?) {
+        serverChoice = choice
+        serverUrl = choice?.serverUrl ?: BuildConfig.PIPOD_SERVER_URL
+        oidcIssuer = choice?.issuer ?: Config.OIDC_ISSUER
+        oidcMobileClientId = choice?.clientId ?: Config.OIDC_MOBILE_CLIENT_ID
+    }
+
+    private const val KEY_SERVER = "serverUrl"
+    private const val KEY_ISSUER = "issuer"
+    private const val KEY_CLIENT = "clientId"
+
     fun applyLaunchExtras(extra: (String) -> String?): Boolean {
         if (!BuildConfig.DEBUG) return false
         var changed = false

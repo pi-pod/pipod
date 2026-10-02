@@ -7,9 +7,17 @@
 # from the checkout, publishes the pod base image the new server launches from to the bundled
 # registry, then `docker compose up -d`: Compose dumps the database first, and the server
 # migrates itself and opens launch admission before it serves. Zitadel's pipod project is
-# created on the first run and checked for drift on every later one.
+# created on the first run and checked for drift on every later one;
+# `selfhost/upgrade --apply-zitadel` applies this release's version of it.
 set -euo pipefail
 cd "$(dirname "$0")"
+
+apply_zitadel=false
+case "${1:-}" in
+  "") ;;
+  --apply-zitadel) apply_zitadel=true ;;
+  *) echo "usage: selfhost/upgrade [--apply-zitadel]" >&2; exit 2 ;;
+esac
 
 # shellcheck source=lib.sh
 . ./lib.sh
@@ -68,27 +76,40 @@ docker push "$target"
 
 compose up -d
 
-# Zitadel's pipod project: created on the first run, then only checked. The server needs its id
-# as the token audience, and publishes the CLI app's client id to `pipod login`.
+# Zitadel's pipod project: created on the first run, then only checked unless --apply-zitadel.
+# The server needs its id
+# as the token audience, and publishes the CLI's and the phone apps' client ids to sign-in.
 wait_healthy zitadel
 mode=--check
-[ -n "$(env_get ZITADEL_API_AUDIENCE)" ] || mode=--apply
-if report="$(admin zitadel/scripts/reconcile-zitadel.mjs "$mode" 2>&1)"; then
+if [ -z "$(env_get ZITADEL_API_AUDIENCE)" ] || $apply_zitadel; then mode=--apply; fi
+status=0
+report="$(admin zitadel/scripts/reconcile-zitadel.mjs "$mode" 2>&1)" || status=$?
+if [ "$status" = 0 ]; then
   audience="$(sed -n 's/^project id (API audience): //p' <<<"$report")"
   client="$(sed -n 's/^client id pipod-cli: //p' <<<"$report")"
-  if [ -z "$audience" ] || [ -z "$client" ]; then
+  mobile="$(sed -n 's/^client id pipod-mobile: //p' <<<"$report")"
+  if [ -z "$audience" ] || [ -z "$client" ] || [ -z "$mobile" ]; then
     echo "$report" >&2
     echo "upgrade: Zitadel did not report the pipod project's ids" >&2
     exit 1
   fi
-  if [ "$audience" != "$(env_get ZITADEL_API_AUDIENCE)" ] || [ "$client" != "$(env_get ZITADEL_CLI_CLIENT_ID)" ]; then
+  if [ "$audience" != "$(env_get ZITADEL_API_AUDIENCE)" ] || [ "$client" != "$(env_get ZITADEL_CLI_CLIENT_ID)" ] ||
+    [ "$mobile" != "$(env_get ZITADEL_MOBILE_CLIENT_ID)" ]; then
     env_set ZITADEL_API_AUDIENCE "$audience"
     env_set ZITADEL_CLI_CLIENT_ID "$client"
+    env_set ZITADEL_MOBILE_CLIENT_ID "$mobile"
     compose up -d server
   fi
+elif [ "$status" = 2 ]; then
+  # Drift: this release changed the project (a new redirect, say), or someone changed it in
+  # the Console. Applying is not automatic because it also resets Console changes.
+  echo "$report" >&2
+  echo "upgrade: warning: Zitadel's pipod project differs from this release (above). Apply this" >&2
+  echo "upgrade: release's version with: selfhost/upgrade --apply-zitadel" >&2
+  echo "upgrade: (it also resets changes made in the Zitadel Console, such as a pipod-web redirect)" >&2
 elif [ "$mode" = --apply ]; then
   echo "$report" >&2
-  echo "upgrade: could not create the pipod project in Zitadel; the error is above" >&2
+  echo "upgrade: could not apply the pipod project to Zitadel; the error is above" >&2
   exit 1
 else
   echo "$report" >&2

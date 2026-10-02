@@ -195,6 +195,14 @@ export const serverEnvShape = {
       .string()
       .optional()
       .transform((value) => value?.trim() || undefined),
+    /**
+     * Client id of the `pipod-mobile` app, published at GET /v1/auth/config so the phone apps
+     * can sign in to this server from its address alone. Unset, they use their built-in id.
+     */
+    ZITADEL_MOBILE_CLIENT_ID: z
+      .string()
+      .optional()
+      .transform((value) => value?.trim() || undefined),
     /** Override for tests / local signer; defaults to `<issuer>/oauth/v2/keys`. */
     ZITADEL_JWKS_URL: z.string().url().optional(),
     /** Optional self-service console URL; derived from the issuer when omitted. */

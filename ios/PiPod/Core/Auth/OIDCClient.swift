@@ -16,8 +16,14 @@ public struct OIDCMetadata: Sendable {
 /// must match byte for byte, and every endpoint must be HTTPS (loopback HTTP is
 /// allowed so a local Zitadel can be developed against).
 public actor OIDCClient: TokenRefreshing {
-    public let issuer: String
-    public let clientID: String
+    /// The provider and client in effect: fixed at init, or else whatever `Config` names now,
+    /// so a server chosen at sign-in needs no new client.
+    public nonisolated var issuer: String { fixedIssuer ?? Config.oidcIssuer }
+    public nonisolated var clientID: String { fixedClientID ?? Config.oidcClientID }
+    private nonisolated let fixedIssuer: String?
+    private nonisolated let fixedClientID: String?
+    /// The issuer the cached discovery and keys belong to.
+    private var cachedIssuer: String?
 
     private let transport: HTTPTransport
     private let now: @Sendable () -> Date
@@ -26,13 +32,13 @@ public actor OIDCClient: TokenRefreshing {
     private var keysTask: Task<[JSONWebKey], Error>?
 
     public init(
-        clientID: String,
-        issuer: String = Config.oidcIssuer,
+        clientID: String? = nil,
+        issuer: String? = nil,
         transport: HTTPTransport = URLSessionTransport(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.clientID = clientID
-        self.issuer = issuer
+        self.fixedClientID = clientID
+        self.fixedIssuer = issuer
         self.transport = transport
         self.now = now
     }
@@ -49,6 +55,7 @@ public actor OIDCClient: TokenRefreshing {
 
     /// Discovery is fetched once per client and shared by every caller.
     public func discover() async throws -> OIDCMetadata {
+        forgetProviderIfChanged()
         if let metadataTask { return try await metadataTask.value }
         let task = Task { try await loadMetadata() }
         metadataTask = task
@@ -222,7 +229,17 @@ public actor OIDCClient: TokenRefreshing {
         )
     }
 
+    /// Another server was chosen since the last discovery: what was cached describes its
+    /// provider, not this one.
+    private func forgetProviderIfChanged() {
+        guard cachedIssuer != issuer else { return }
+        metadataTask = nil
+        keysTask = nil
+        cachedIssuer = issuer
+    }
+
     private func signingKeys(_ metadata: OIDCMetadata, forceRefresh: Bool = false) async throws -> [JSONWebKey] {
+        forgetProviderIfChanged()
         if forceRefresh { keysTask = nil }
         if let keysTask { return try await keysTask.value }
         let task = Task { try await loadKeys(metadata.jwksURI) }

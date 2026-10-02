@@ -290,6 +290,12 @@ public struct JobDetailView: View {
     private func actionsSection(_ job: Job) -> some View {
         Section {
             if job.isActive {
+                // Trying a job out should not mean waiting for its schedule.
+                Button("Run now") { Task { await command("run") } }
+                    .disabled(isWorking)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Run job \(job.name) now")
+                    .accessibilityIdentifier("Run job now")
                 Button("Pause job") { isConfirmingPause = true }
                     .disabled(isWorking)
                     .frame(minHeight: 44)
@@ -366,6 +372,20 @@ public struct JobDetailView: View {
         do {
             let updated = try await api.jobCommand(id: jobId, command: action)
             job = updated
+            if action == "run" {
+                status = .success("Starting a run now. It appears under Runs within a minute.")
+                // The scheduler claims it on its next tick, which moves the next run back to the
+                // schedule and adds the run to the history; refresh until that has happened.
+                let requested = updated.nextRunAt
+                Task {
+                    for _ in 0..<24 {
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        await load()
+                        if job?.nextRunAt != requested { break }
+                    }
+                }
+                return
+            }
             switch updated.status {
             case "active":
                 let countdown = JobSchedule.countdown(to: updated.nextRunAt)

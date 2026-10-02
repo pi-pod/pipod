@@ -103,6 +103,15 @@ pipod
 `doctor` names the server's release revision and fails when its database is missing
 migrations or launch admission is held.
 
+### The phone apps
+
+The iOS and Android apps sign in to your server too, once it is [public](#going-public):
+on the sign-in screen tap **Server · Change**, enter the address the CLI signs in to
+(`api.example.com`), then **Sign in**. The app asks the server where to sign in, as the CLI
+does, and remembers it until you choose again; **Use pi pod cloud** goes back. They need
+HTTPS — a phone cannot reach `127.0.0.1`, and the apps never send sign-in tokens in the
+clear.
+
 ### Zitadel
 
 Everything above configured Zitadel for you. Its Console is at
@@ -176,10 +185,11 @@ cd selfhost && docker compose ps   # db, zitadel, server, sandbox, registry up; 
 ```
 
 If `upgrade` warned about drift in the Zitadel project, apply the release's version of it —
-it only ever creates and updates, never removes:
+it only ever creates and updates, never removes, but it does reset anything changed in the
+Zitadel Console, such as a `pipod-web` redirect (set it again afterwards):
 
 ```bash
-cd selfhost && docker compose run --rm admin zitadel/scripts/reconcile-zitadel.mjs --apply
+selfhost/upgrade --apply-zitadel
 ```
 
 ### Rolling back

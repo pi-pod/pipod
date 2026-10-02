@@ -420,6 +420,19 @@ private fun JobActionsCard(
     onDelete: () -> Unit,
 ) {
     JobSectionCard(modifier = Modifier.testTag(JobDetailTestTags.ACTIONS_CARD)) {
+        if (job.isActive) {
+            // Trying a job out should not mean waiting for its schedule.
+            AppButton(
+                text = "Run now",
+                onClick = { onCommand("run") },
+                modifier = Modifier.fillMaxWidth().testTag("job-detail-run-now"),
+                kind = AppButtonKind.Filled,
+                enabled = !state.isWorking,
+                minSize = DpSize(AppButtonDefaults.MinTouchTarget, AppButtonDefaults.MinTouchTarget),
+                semanticsLabel = "Run job ${job.name} now",
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         if (job.isActive || job.isPaused) {
             val pausing = job.isActive
             AppButton(

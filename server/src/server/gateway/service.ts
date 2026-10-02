@@ -476,12 +476,16 @@ export function sweepBackoffDelayMs(failures: number): number {
  * and the next attach adopts it.
  */
 export const TRANSPORT_RECONNECT_WAIT_MS = 12_000;
+const QUEUED_MODEL_WAIT_ATTEMPTS = 15;
+const QUEUED_MODEL_WAIT_MS = 1_000;
 const TRANSPORT_RECONNECT_POLL_MS = 250;
 
 export interface QueuedPromptRow {
   id: string;
   text: string;
   attempts: number;
+  /** "provider/id" to switch to first, when the sender asked for one. */
+  model?: string | null;
 }
 
 /** Durable admission boundary, injectable so drain interleavings use the production path. */
@@ -517,7 +521,7 @@ const postgresQueuedPromptStore: QueuedPromptStore = {
               last_error = NULL, updated_at = now()
          FROM candidate
         WHERE q.id = candidate.id
-       RETURNING q.id, q.text, q.attempts`,
+       RETURNING q.id, q.text, q.attempts, q.model`,
       [podId],
     );
     return result.rows[0] ?? null;
@@ -1367,6 +1371,44 @@ export class GatewayService {
     this.fanOut(session, { type: "queued_prompt_status", queuedPromptId, status });
   }
 
+  /**
+   * The model a queued prompt asked for is a preference, not a condition: a pod whose pi does
+   * not offer it still answers on its own model rather than leaving the message undelivered.
+   * A pod's first prompt is delivered as pi starts, before pi has loaded the models its
+   * credential lease unlocks, so the model gets a few seconds to appear in pi's catalog.
+   */
+  private async switchToQueuedModel(session: ActiveSession, model: string): Promise<void> {
+    const slash = model.indexOf("/");
+    if (slash <= 0 || slash === model.length - 1) return;
+    const provider = model.slice(0, slash);
+    const id = model.slice(slash + 1);
+    const offered = (entry: unknown): boolean => {
+      const m = entry as { provider?: unknown; id?: unknown } | null;
+      return m?.provider === provider && m?.id === id;
+    };
+    for (let attempt = 0; attempt < QUEUED_MODEL_WAIT_ATTEMPTS && !session.closed; attempt++) {
+      const models = await session.rpc.getAvailableModels().catch(() => [] as unknown[]);
+      if (models.some(offered)) {
+        try {
+          await session.rpc.setModel(provider, id);
+        } catch (e) {
+          this.deps.log.warn(`queued prompt model ${model} refused on ${session.pod.id}: ${e instanceof Error ? e.message : e}`);
+          return;
+        }
+        // Clients already attached read the model when they connected; tell them it moved.
+        await sendModelCatalogSnapshot({
+          rpc: session.rpc,
+          mirrorPiSessionFile: (sessionFile) => this.mirrorPiSessionFile(session, sessionFile),
+          isCurrent: () => isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null),
+          send: (frame) => this.fanOut(session, frame),
+        }).catch(() => {});
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, QUEUED_MODEL_WAIT_MS));
+    }
+    this.deps.log.warn(`queued prompt model ${model} not offered on ${session.pod.id}; using pi's own`);
+  }
+
   private async drainQueuedPrompts(session: ActiveSession): Promise<void> {
     await this.markStaleQueuedPromptsUnknown(session.pod.id);
     while (!session.closed && this.sessions.get(session.pod.id) === session) {
@@ -1396,6 +1438,7 @@ export class GatewayService {
           if (status) this.notifyQueuedPromptStatus(session, prompt.id, status);
           return;
         }
+        if (prompt.model) await this.switchToQueuedModel(session, prompt.model);
         // request() transmits synchronously. A rejected promise is an unknown
         // transport outcome; a resolved success:false is Pi's preflight refusal.
         const dispatch = session.rpc.request({ type: "prompt", message: prompt.text });

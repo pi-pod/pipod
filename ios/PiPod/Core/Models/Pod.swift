@@ -400,6 +400,20 @@ public struct Pod: Codable, Hashable, Sendable, Identifiable {
                 This pod waited for sandbox capacity and the wait ran out before a host had \
                 room. Nothing is running yet — launch it again when you like.
                 """
+        case "admission_denied":
+            // "sandbox hosts at capacity (memory_capacity): 4.00 GiB required, 0.12 GiB
+            // available of 12.12 GiB budget" — the figures are worth keeping, the jargon is not.
+            let figures = stripped.range(
+                of: #"([0-9.]+) GiB required, ([0-9.]+) GiB available"#, options: .regularExpression
+            ).map { String(stripped[$0]) }
+            let numbers = figures?.split(separator: " ").compactMap { Double($0) } ?? []
+            let need = numbers.count == 2
+                ? " (\(Self.gib(numbers[0])) needed, \(Self.gib(numbers[1])) free)"
+                : ""
+            return """
+                No room to start this pod: the server is full\(need). Stop a pod you \
+                aren’t using, then launch again.
+                """
         case "capacity_wait_orphaned":
             return """
                 This pod’s capacity wait stopped being tracked before a host had room. \
@@ -417,6 +431,10 @@ public struct Pod: Codable, Hashable, Sendable, Identifiable {
         return detail.isEmpty
             ? "This pod’s sandbox couldn’t be created."
             : "This pod’s sandbox couldn’t be created: \(detail)"
+    }
+
+    private static func gib(_ value: Double) -> String {
+        value == value.rounded() ? "\(Int(value)) GiB" : String(format: "%.1f GiB", value)
     }
 
     /// The codes `formatLaunchFailure` prefixes onto `state_reason`. The

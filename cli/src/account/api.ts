@@ -1080,7 +1080,7 @@ export class AccountClient {
     return this.request(`/jobs/${id}`, { method: "PATCH", body });
   }
 
-  jobCommand(id: string, command: "activate" | "pause" | "resume"): Promise<{ id: string; status: string }> {
+  jobCommand(id: string, command: "activate" | "pause" | "resume" | "run"): Promise<{ id: string; status: string }> {
     return this.request(`/jobs/${id}/${command}`, { method: "POST" });
   }
 

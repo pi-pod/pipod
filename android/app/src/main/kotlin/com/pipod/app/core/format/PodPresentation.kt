@@ -139,7 +139,9 @@ class PodPresentation private constructor(
                     return "Stopped" to "Local disk retained · restarts in seconds"
                 }
                 if (pod.sandboxState == "archived") {
-                    return "Archived" to "Restores on next use · seconds-to-minutes depending on size"
+                    // Not "Archived": that is the action that hides a pod, and this one is merely
+                    // asleep with its disk in cold storage — the CLI says "stopped · cold storage".
+                    return "Stopped" to "In cold storage · restores on next use, in seconds to minutes"
                 }
                 return lifecycle.label to null
             }

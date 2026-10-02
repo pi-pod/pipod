@@ -308,7 +308,9 @@ and sends the prompt. The pod then idle-stops like any other. A job has:
   100 unique times. All schedules require at least 5 minutes between runs because each run is a pod.
   A finite job automatically becomes **completed** when its final occurrence is claimed,
 - a **templateId** — the pod template to launch from (omit for the built-in default),
-- a **model** — \`"provider/model-id"\`, e.g. \`"anthropic/claude-opus-4-7"\`,
+- a **model** — \`"provider/model-id"\`, e.g. \`"anthropic/claude-opus-4-7"\`. Unless the user
+  names one, use the provider and model id this session is running on: it is the one model
+  you know their account can serve. Never invent a placeholder such as "default",
 - a **prompt** — the instruction the session starts with. Make it self-contained: the pod is
   fresh, so the prompt is all the context the agent will have.
 

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Everything the job detail draws. */
@@ -198,6 +199,21 @@ class JobDetailViewModel(
             try {
                 val job = repository.command(jobId, action)
                 _state.update { it.copy(job = job) }
+                if (action == "run") {
+                    show("Starting a run now. It appears under Runs within a minute.", isError = false)
+                    JobNotifications.postChanged()
+                    // The scheduler claims it on its next tick, which moves the next run back to
+                    // the schedule and adds the run to the history; refresh until that has happened.
+                    val requested = job.nextRunAt
+                    viewModelScope.launch {
+                        repeat(24) {
+                            delay(5_000)
+                            refreshNow()
+                            if (_state.value.job?.nextRunAt != requested) return@launch
+                        }
+                    }
+                    return@launch
+                }
                 when (job.status) {
                     "active" -> {
                         val countdown = JobSchedule.countdown(to = job.nextRunAt)

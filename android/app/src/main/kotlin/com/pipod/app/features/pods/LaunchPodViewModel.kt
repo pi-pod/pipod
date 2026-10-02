@@ -1,5 +1,6 @@
 package com.pipod.app.features.pods
 
+import com.pipod.app.core.session.ModelMemory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pipod.app.core.api.model.Pod
@@ -154,6 +155,7 @@ class LaunchPodViewModel(
             _state.update { it.copy(isLaunching = true, error = null, workstationWait = null) }
             try {
                 val pod = repository.launch(templateId)
+                ModelMemory.launched(pod.id)
                 _events.tryEmit(LaunchPodEvent.Launched(pod))
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -163,8 +165,10 @@ class LaunchPodViewModel(
                 when (val outcome = workstationWait.run(error) { repository.launch(templateId) }) {
                     null -> _state.update { it.copy(error = launchFailure(error)) }
 
-                    is WorkstationWaitOutcome.Ready ->
+                    is WorkstationWaitOutcome.Ready -> {
+                        ModelMemory.launched(outcome.value.id)
                         _events.tryEmit(LaunchPodEvent.Launched(outcome.value))
+                    }
 
                     is WorkstationWaitOutcome.Failed -> _state.update {
                         it.copy(error = launchFailure(outcome.error))

@@ -265,7 +265,7 @@ private fun LoginPromptControl(prompt: LoginPrompt, onSubmit: (String) -> Unit) 
                 modifier = Modifier.testTag(CredentialLoginTestTags.PROMPT),
                 obscureText = prompt.type == "secret",
                 placeholder = prompt.placeholder,
-                semanticsLabel = "Sign-in response for ${prompt.id}",
+                semanticsLabel = prompt.message,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.None,
                     autoCorrectEnabled = false,

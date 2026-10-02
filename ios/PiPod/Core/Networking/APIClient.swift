@@ -7,7 +7,10 @@ import Foundation
 /// and replays the original request — so a token that expires mid-scroll costs a
 /// retry rather than a sign-out.
 public final class APIClient: @unchecked Sendable {
-    public let baseURL: URL
+    /// Fixed at init, or else whichever server is configured now — so choosing another one on
+    /// the sign-in screen needs no new client.
+    public var baseURL: URL { fixedBaseURL ?? Config.serverURL }
+    private let fixedBaseURL: URL?
     public let tokens: TokenStore
 
     private let transport: HTTPTransport
@@ -16,16 +19,16 @@ public final class APIClient: @unchecked Sendable {
     private let expiryHandler = Box<(@Sendable (TokenVersion) -> Void)?>(nil)
 
     public init(
-        baseURL: URL = Config.serverURL,
+        baseURL: URL? = nil,
         transport: HTTPTransport = URLSessionTransport(),
         tokens: TokenStore? = nil,
         refresher: TokenRefreshing? = nil
     ) {
-        self.baseURL = baseURL
+        self.fixedBaseURL = baseURL
         self.transport = transport
         let devToken = Config.devToken
         self.tokens = tokens ?? TokenStore(accessToken: devToken.isEmpty ? nil : devToken)
-        self.refresher = refresher ?? OIDCClient(clientID: Config.oidcClientID)
+        self.refresher = refresher ?? OIDCClient()
     }
 
     /// Called when the server has refused credentials that cannot be refreshed.
@@ -273,12 +276,15 @@ public final class APIClient: @unchecked Sendable {
     /// Queues a prompt over REST for a pod with no socket attached. `requestID`
     /// is generated once per logical turn. While the durable row is retained,
     /// reusing it returns the same admission instead of creating a duplicate.
+    /// `model` ("provider/id") asks the pod to switch to it before running the prompt, when its
+    /// pi offers it.
     public func queuePrompt(
-        podId: String, text: String, requestID: String
+        podId: String, text: String, requestID: String, model: String? = nil
     ) async throws -> QueuedPromptReceipt {
-        try await requestDecoded(
-            QueuedPromptReceipt.self, "POST", "pods/\(escaped(podId))/prompts",
-            body: .object(["text": .string(text), "id": .string(requestID)])
+        var body: [String: JSONValue] = ["text": .string(text), "id": .string(requestID)]
+        if let model { body["model"] = .string(model) }
+        return try await requestDecoded(
+            QueuedPromptReceipt.self, "POST", "pods/\(escaped(podId))/prompts", body: .object(body)
         )
     }
 
@@ -484,7 +490,7 @@ public final class APIClient: @unchecked Sendable {
     }
 
     public func jobCommand(id: String, command: String) async throws -> Job {
-        guard command == "activate" || command == "pause" || command == "resume" else {
+        guard ["activate", "pause", "resume", "run"].contains(command) else {
             throw APIError(error: "Unsupported job action")
         }
         _ = try await request("POST", "jobs/\(escaped(id))/\(command)", body: .object([:]))

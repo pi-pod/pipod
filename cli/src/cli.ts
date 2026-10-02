@@ -368,6 +368,7 @@ Actions:
   list                 List server jobs (default)
   show <job>           Show a job's schedule, template, model, and prompt
   runs <job>           List a job's recent runs
+  run <job>            Run an active job once, now; its schedule is unchanged
   activate <job>       Activate a job
   pause <job>          Pause a job's schedule
   resume <job>         Resume a paused job
