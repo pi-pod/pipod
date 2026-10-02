@@ -77,7 +77,7 @@ db-up:
 			-e POSTGRES_USER=pipod \
 			-e POSTGRES_PASSWORD=pipod \
 			-e POSTGRES_DB=pipod \
-			-p 55432:5432 \
+			-p 127.0.0.1:55432:5432 \
 			postgres:16-alpine >/dev/null; \
 	fi
 	@echo "Waiting for Postgres…"

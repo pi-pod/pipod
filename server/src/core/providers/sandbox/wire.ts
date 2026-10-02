@@ -2,7 +2,14 @@
 
 export type SandboxState = "starting" | "started" | "stopped" | "archived" | "error" | "gone";
 
-export type EgressPolicy = { mode: "open" } | { mode: "allowlist"; hosts: string[] };
+export type EgressPolicy =
+  | { mode: "open" }
+  | {
+      mode: "allowlist";
+      hosts: string[];
+      /** What each allowed hostname resolved to, under CIDR enforcement: the pod's /etc/hosts. */
+      names?: Record<string, string[]>;
+    };
 
 export interface ResourceSpec {
   cpu?: number;

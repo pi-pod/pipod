@@ -4,7 +4,7 @@ import { parseHostSandboxId } from "../../core/providers/host.js";
 import { SandboxServiceProvider, resolveSandboxServiceUrl } from "../../core/providers/sandbox/index.js";
 import type { SandboxProvider } from "../../core/providers/types.js";
 import { query } from "../db/index.js";
-import { conflict, serviceUnavailable } from "../httperrors.js";
+import { badRequest, conflict, serviceUnavailable } from "../httperrors.js";
 import { decryptSecret, encryptSecret, type KekProvider } from "../secrets/crypto.js";
 import type { PodRow } from "./types.js";
 
@@ -100,6 +100,23 @@ export async function staticHostForUrl(value: unknown): Promise<HostIdentity | n
   const host=(await query<HostIdentity>("SELECT * FROM sandbox_hosts WHERE url=$1 OR hosted_url=$1",[url])).rows[0] ?? null;
   if (host?.owner_user_id != null) throw conflict("owned host requires a stable pod host assignment");
   return host;
+}
+
+/**
+ * A sandbox credential goes only to an endpoint the operator chose: a registered host or
+ * the deployment's PI_POD_SANDBOX_URL. `providers.sandbox.url` can come from user settings,
+ * templates and pod-authored config, so any other value is refused before a token follows it.
+ */
+export async function assertOperatorSandboxUrl(configured: unknown): Promise<void> {
+  if (configured === undefined) return;
+  const url = resolveSandboxServiceUrl(configured, undefined);
+  const deployment = process.env["PI_POD_SANDBOX_URL"];
+  if (deployment && url === resolveSandboxServiceUrl(deployment, undefined)) return;
+  if (await staticHostForUrl(url)) return;
+  throw badRequest(
+    `providers.sandbox.url ${url} is not a registered sandbox host`,
+    "remove it to use the deployment's sandbox, or have the operator register the host (`fleet add`)",
+  );
 }
 
 export type PodHostIdentity = Pick<PodRow, "provider" | "user_id" | "resolved_config" | "sandbox_host_id"> &

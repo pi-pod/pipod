@@ -33,7 +33,13 @@ const JobTriggerBody = z.discriminatedUnion("type", [
 
 const JobBody = z
   .object({
-    name: z.string().min(1).max(100),
+    // `pipod jobs pull` writes <name>.json and <name>.prompt.md: a name is a file name.
+    name: z
+      .string()
+      .min(1)
+      .max(100)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._ -]*$/, "use letters, digits, '.', '_', '-' and spaces")
+      .refine((name) => !name.includes(".."), "must not contain '..'"),
     description: z.string().max(2000).optional(),
     // Personal by default; PATCH scope="org" is the one-way share operation.
     scope: z.enum(["user", "org"]).optional(),
@@ -68,11 +74,16 @@ function toApi(row: JobRow) {
  * to change a job it created recreates it or tells the user. `row` is accepted so callers
  * keep the locked-row authorization shape.
  */
-function assertJobWrite(auth: AuthContext, _row: JobRow): void {
+/**
+ * A job runs as its creator, with the creator's model credentials, so changing what someone
+ * else's org job runs is an org-management act. Its template is held to the same bar.
+ */
+function assertJobWrite(auth: AuthContext, row: Pick<JobRow, "scope" | "user_id">): void {
   if (auth.podId) {
     throw forbidden("pod tokens cannot modify jobs");
   }
   requirePermission(auth, "jobs:write");
+  if (row.scope === "org" && row.user_id !== auth.userId) requirePermission(auth, "org:manage");
 }
 
 type JobCommand = "activate" | "pause" | "resume";
@@ -83,11 +94,11 @@ type JobCommand = "activate" | "pause" | "resume";
  */
 export function assertJobTransition(
   auth: AuthContext,
-  _row: Pick<JobRow, "status" | "created_from_pod">,
+  row: Pick<JobRow, "status" | "created_from_pod" | "scope" | "user_id">,
   _command: JobCommand,
 ): void {
   if (auth.podId) throw forbidden("pod tokens cannot change job status");
-  requirePermission(auth, "jobs:write");
+  assertJobWrite(auth, row);
 }
 
 /** Hold a share lock through the job write so template archival cannot race the write,
@@ -179,6 +190,7 @@ export function registerJobRoutes(app: FastifyInstance): void {
     },
     async (req, reply) => {
       if (!req.auth.podId) requirePermission(req.auth, "jobs:write");
+      else if (req.body.scope === "org") throw forbidden("pod tokens may only create personal jobs");
       const trigger = normalizeJobTrigger(req.body.trigger);
       parseModelRef(req.body.model);
       // Creation always lands active with a validated future occurrence, for user tokens
@@ -451,13 +463,19 @@ export function registerJobRoutes(app: FastifyInstance): void {
     "/jobs/:id",
     { preHandler: [app.authenticate], schema: { params: z.object({ id: z.string().uuid() }) } },
     async (req, reply) => {
-      requirePermission(req.auth, "jobs:write");
-      const rows = await query(
-        `UPDATE jobs SET archived_at = now(), updated_at = now()
-         WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
-           AND (scope = 'org' OR user_id = $3)`,
-        [req.params.id, req.auth.orgId, req.auth.userId],
-      );
+      const rows = await tx(async (client) => {
+        const locked = await client.query<JobRow>(
+          `SELECT * FROM jobs
+           WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
+             AND (scope = 'org' OR user_id = $3)
+           FOR UPDATE`,
+          [req.params.id, req.auth.orgId, req.auth.userId],
+        );
+        const existing = locked.rows[0];
+        if (!existing) throw notFound("job not found");
+        assertJobWrite(req.auth, existing);
+        return client.query("UPDATE jobs SET archived_at = now(), updated_at = now() WHERE id = $1", [existing.id]);
+      });
       if ((rows.rowCount ?? 0) === 0) throw notFound("job not found");
       await audit({
         orgId: req.auth.orgId,

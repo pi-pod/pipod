@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { requirePermission, type AuthContext } from "../auth/plugin.js";
+import { hasPermission } from "../auth/rbac.js";
 import { audit } from "../audit.js";
 import { query, tx } from "../db/index.js";
 import { HttpError, badRequest, conflict, forbidden, gone, notFound } from "../httperrors.js";
@@ -35,7 +36,8 @@ import {
   type PodServiceDeps,
 } from "./service.js";
 import { platformCredentialsOf, withProviderCredential } from "./providercred.js";
-import { assertPersonalPodAccess, edition } from "../edition.js";
+import { edition } from "../edition.js";
+import { assertPodAccess } from "./access.js";
 import {
   assertPodTokenReach,
   liveChildren,
@@ -231,6 +233,38 @@ function toApi(pod: PodRow, gateway: GatewayService | null = null) {
   };
 }
 
+function withoutOutput<T extends { outputTail?: string }>(step: T): Omit<T, "outputTail"> {
+  const { outputTail: _output, ...rest } = step;
+  return rest;
+}
+
+/**
+ * A pod as an org member who neither owns nor manages it sees it: its state, not what its
+ * scripts printed, which can be anything the owner's code wrote (a failed init's first line
+ * stays as the reason).
+ */
+function peerView(api: ReturnType<typeof toApi>): ReturnType<typeof toApi> {
+  const { resolvedConfig, report } = api;
+  return {
+    ...api,
+    stateReason: api.stateReason?.split("\n")[0] ?? null,
+    resolvedConfig: {
+      ...resolvedConfig,
+      initSteps: resolvedConfig.initSteps?.map(withoutOutput) ?? null,
+      bake: resolvedConfig.bake ? withoutOutput(resolvedConfig.bake) : resolvedConfig.bake,
+    },
+    report: {
+      ...report,
+      ...(report.initSteps ? { initSteps: report.initSteps.map(withoutOutput) } : {}),
+      ...(report.bake ? { bake: withoutOutput(report.bake) } : {}),
+    },
+  };
+}
+
+function viewFor(api: ReturnType<typeof toApi>, auth: AuthContext): ReturnType<typeof toApi> {
+  return api.userId === auth.userId || hasPermission(auth.permissions, "pods:manage_any") ? api : peerView(api);
+}
+
 function launchAdmissionRefusal(error: unknown): { retryable: boolean; code: string } | null {
   if (!(error instanceof HttpError) || error.statusCode !== 503) return null;
   if (!error.detail || typeof error.detail !== "object" || Array.isArray(error.detail)) return null;
@@ -289,12 +323,6 @@ export async function launchOperationStatusView(
     ...(operation.error_status ? { errorStatus: operation.error_status } : {}),
     ...(operation.error_code ? { errorCode: operation.error_code } : {}),
   };
-}
-
-async function assertPodAccess(pod: PodRow, auth: { userId: string; permissions: string[] }) {
-  if (pod.user_id === auth.userId) return;
-  requirePermission(auth as never, "pods:manage_any");
-  await assertPersonalPodAccess(pod, auth.userId);
 }
 
 function goneClientUpgrade() {
@@ -933,7 +961,7 @@ export function registerPodRoutes(
         lineageRootPodId: req.auth.podId ?? null,
         includeGone: req.query.includeGone,
       });
-      return { pods: rows.map((row) => toApi(row, gateway)) };
+      return { pods: rows.map((row) => viewFor(toApi(row, gateway), req.auth)) };
     },
   );
 
@@ -975,7 +1003,7 @@ export function registerPodRoutes(
           waitRow = await getCapacityWait(waitStore, pod.id).catch(() => null);
         }
       }
-      const api = toApi(pod, gateway);
+      const api = viewFor(toApi(pod, gateway), req.auth);
       // A live wait promotes the launch phase: clients render
       // `waiting-for-capacity` with the wait view's validated
       // reason/required/available/unit/deadlineAt instead of the generic
@@ -1909,7 +1937,7 @@ export function registerPodRoutes(
       },
     },
     async (req) => {
-      await getPod(req.auth.orgId, req.params.id);
+      await assertPodAccess(await getPod(req.auth.orgId, req.params.id), req.auth);
       const rows = await query<{
         id: string;
         user_id: string;
@@ -1942,7 +1970,7 @@ export function registerPodRoutes(
       },
     },
     async (req) => {
-      await getPod(req.auth.orgId, req.params.id);
+      await assertPodAccess(await getPod(req.auth.orgId, req.params.id), req.auth);
       let before;
       try {
         before = parseConversationCursor(req.query.before);
@@ -1982,12 +2010,13 @@ export function registerPodRoutes(
       },
     },
     async (req) => {
-      const owner = await query<{ org_id: string; events_truncated_below_seq: string | null }>(
-        `SELECT p.org_id, s.events_truncated_below_seq
+      const owner = await query<{ org_id: string; pod_id: string; events_truncated_below_seq: string | null }>(
+        `SELECT p.org_id, s.pod_id, s.events_truncated_below_seq
            FROM sessions s JOIN pods p ON p.id = s.pod_id WHERE s.id = $1`,
         [req.params.id],
       );
       if (owner.rows[0]?.org_id !== req.auth.orgId) throw forbidden("session is not in your org");
+      await assertPodAccess(await getPod(req.auth.orgId, owner.rows[0].pod_id), req.auth);
       const rows = await query<{ seq: string; kind: string; payload: unknown; created_at: string }>(
         `SELECT seq, kind, payload, created_at FROM session_events
          WHERE session_id = $1 AND seq > $2 ORDER BY seq LIMIT $3`,

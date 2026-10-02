@@ -17,7 +17,14 @@ export type SandboxState = "starting" | "started" | "stopped" | "archived" | "er
  */
 export type SandboxTransition = "start" | "stop" | "archive" | "delete";
 
-export type EgressPolicy = { mode: "open" } | { mode: "allowlist"; hosts: string[] };
+export type EgressPolicy =
+  | { mode: "open" }
+  | {
+      mode: "allowlist";
+      hosts: string[];
+      /** What each allowed hostname resolved to; the pod's /etc/hosts, since it gets no resolver. */
+      names?: Record<string, string[]>;
+    };
 
 export interface ResourceSpec {
   cpu?: number;

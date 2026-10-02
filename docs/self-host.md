@@ -235,6 +235,8 @@ names. With Caddy on the same Compose network (a `caddy` service in
 
 ```caddyfile
 api.example.com {
+	# Metrics stay on the private network.
+	respond /metrics 404
 	reverse_proxy server:8080
 }
 
@@ -448,4 +450,5 @@ brings your existing pods' workspaces up under the new sandbox.
 | `pod transport supervisor stayed alive but did not connect` | A pod cannot reach the server: `PUBLIC_URL` (if you set one) is wrong, or `10.79.0.0/24` collides with a network of this host's — see the `pods` network in `compose.yml`. |
 | `doctor` reports a removed provider (`e2b`/`daytona`) | Stale project-layer `provider` pin — remove it; only `sandbox` is supported. |
 | Pods die after a few minutes idle | The sandbox's `PI_POD_SANDBOX_API_HOST` does not match its bridge gateway. |
+| A pod cannot reach something on your network (a git host, a `PUBLIC_URL` on a LAN address) | Pods are kept off private, shared and reserved addresses whatever their egress mode. List what they need in `PI_POD_SANDBOX_PRIVATE_EGRESS` in `.env`, then `selfhost/upgrade`. |
 | Browser calls blocked by CORS | `WEB_ORIGINS` is empty, or lists a URL with a path or trailing slash instead of a bare origin. |

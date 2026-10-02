@@ -414,17 +414,29 @@ export function writeLocalJob(
   },
   opts: JobsDirOptions & { project?: boolean; overwrite?: boolean } = {},
 ): WrittenJobFiles {
+  // The name comes from the server, where any member can name a shared job: it must stay
+  // a plain file name inside the jobs directory.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(spec.name) || spec.name.includes("..")) {
+    throw new PiPodError(`job name "${spec.name}" cannot be a local file name`, {
+      hint: "rename the job on the server (letters, digits, '.', '_', '-', spaces), then pull again",
+    });
+  }
   const cwd = opts.cwd ?? process.cwd();
   const dir = opts.project ? projectJobsDirForWrite(cwd, opts.home) : (userJobsDir(opts.home) ?? path.join(path.resolve(cwd), CONFIG_DIR, JOBS_SUBDIR));
   fs.mkdirSync(dir, { recursive: true });
   const jsonPath = path.join(dir, jobFileName(spec.name));
   const promptPath = path.join(dir, promptFileName(spec.name));
   const nextJson = serializeJobFile(spec);
-  if (!opts.overwrite && fs.existsSync(jsonPath)) {
-    const existing = fs.readFileSync(jsonPath, "utf8");
-    const existingPrompt = fs.existsSync(promptPath) ? fs.readFileSync(promptPath, "utf8") : "";
-    if (existing !== nextJson || existingPrompt !== spec.prompt) {
-      throw new PiPodError(`refusing to overwrite ${jsonPath} — it differs from the server copy`, {
+  for (const [file, next] of [[jsonPath, nextJson], [promptPath, spec.prompt]] as const) {
+    const existing = fs.lstatSync(file, { throwIfNoEntry: false });
+    if (!existing) continue;
+    if (!existing.isFile()) {
+      throw new PiPodError(`refusing to write ${file} — it is not a regular file`, {
+        hint: "remove it (a symlink is never followed), then pull again",
+      });
+    }
+    if (!opts.overwrite && fs.readFileSync(file, "utf8") !== next) {
+      throw new PiPodError(`refusing to overwrite ${file} — it differs from the server copy`, {
         hint: "pass -y to overwrite, or `pipod jobs diff` to see the drift",
       });
     }

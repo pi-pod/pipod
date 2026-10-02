@@ -188,11 +188,16 @@ function registryProtocol(apiHost: string): "http" | "https" {
     : "https";
 }
 
+/** A host-wide credential and the one registry it belongs to. */
+export interface HostRegistryAuth extends RegistryAuth {
+  registry: string;
+}
+
 export class RegistryClient {
-  readonly #auth?: RegistryAuth;
+  readonly #auth?: HostRegistryAuth;
   readonly #log: (message: string) => void;
 
-  constructor(options: { auth?: RegistryAuth; log?: (message: string) => void } = {}) {
+  constructor(options: { auth?: HostRegistryAuth; log?: (message: string) => void } = {}) {
     this.#auth = options.auth;
     this.#log = options.log ?? (() => undefined);
   }
@@ -203,7 +208,7 @@ export class RegistryClient {
    * observable by a concurrent pull.
    */
   request(auth?: RegistryAuth): RegistryRequest {
-    const context: RequestContext = { auth: auth ?? this.#auth, tokens: new Map() };
+    const context: RequestContext = { auth, tokens: new Map() };
     return {
       fetchManifest: async (reference) => await this.#fetchManifest(reference, reference.reference, 0, context),
       fetchBlob: async (reference, digest) => await this.#fetchBlob(reference, digest, context),
@@ -287,8 +292,12 @@ export class RegistryClient {
   ): Promise<Response> {
     const repository = reference.repository.split("/").map(encodeURIComponent).join("/");
     const url = `${registryProtocol(reference.apiHost)}://${reference.apiHost}/v2/${repository}/${resource}`;
+    // An image reference can name any registry; the host's credential goes only to its own.
+    const host = this.#auth;
+    const auth = context.auth ??
+      (host && (host.registry === reference.registry || host.registry === reference.apiHost) ? host : undefined);
     const initialHeaders = new Headers(headers);
-    if (context.auth) initialHeaders.set("Authorization", this.#basicAuthorization(context.auth));
+    if (auth) initialHeaders.set("Authorization", this.#basicAuthorization(auth));
 
     let response = await fetch(url, { headers: initialHeaders, redirect: "follow" });
     if (response.status !== 401) return response;
@@ -297,14 +306,14 @@ export class RegistryClient {
     if (!challenge) return response;
     await response.body?.cancel();
 
-    const token = await this.#bearerToken(challenge, context);
+    const token = await this.#bearerToken(challenge, context, auth);
     const retryHeaders = new Headers(headers);
     retryHeaders.set("Authorization", `Bearer ${token}`);
     response = await fetch(url, { headers: retryHeaders, redirect: "follow" });
     return response;
   }
 
-  async #bearerToken(challenge: BearerChallenge, context: RequestContext): Promise<string> {
+  async #bearerToken(challenge: BearerChallenge, context: RequestContext, auth: RegistryAuth | undefined): Promise<string> {
     const key = `${challenge.realm}\n${challenge.service ?? ""}\n${challenge.scope ?? ""}`;
     const cached = context.tokens.get(key);
     if (cached) return cached;
@@ -313,7 +322,12 @@ export class RegistryClient {
     if (challenge.service) url.searchParams.set("service", challenge.service);
     if (challenge.scope) url.searchParams.set("scope", challenge.scope);
     const headers = new Headers({ Accept: "application/json" });
-    if (context.auth) headers.set("Authorization", this.#basicAuthorization(context.auth));
+    if (auth) {
+      if (url.protocol !== "https:" && registryProtocol(url.host) !== "http") {
+        throw new Error(`registry token service ${url.origin} is not HTTPS`);
+      }
+      headers.set("Authorization", this.#basicAuthorization(auth));
+    }
 
     const response = await fetch(url, { headers, redirect: "follow" });
     if (!response.ok) throw new Error(`registry token request failed: HTTP ${response.status}`);

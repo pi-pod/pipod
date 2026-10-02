@@ -19,13 +19,16 @@ export function findInitBinary(): string | null {
   return candidates.find((c) => fs.existsSync(c)) ?? null;
 }
 
+/**
+ * Docker's defaults less CAP_NET_RAW: a raw or packet socket writes frames past the pod's
+ * egress rules. Ping keeps working through ICMP datagram sockets (`ping_group_range`).
+ */
 const DEFAULT_CAPS = [
   "CAP_CHOWN",
   "CAP_DAC_OVERRIDE",
   "CAP_FSETID",
   "CAP_FOWNER",
   "CAP_MKNOD",
-  "CAP_NET_RAW",
   "CAP_SETGID",
   "CAP_SETUID",
   "CAP_SETFCAP",
@@ -34,6 +37,20 @@ const DEFAULT_CAPS = [
   "CAP_SYS_CHROOT",
   "CAP_KILL",
   "CAP_AUDIT_WRITE",
+];
+
+/**
+ * Pod root holds CAP_MKNOD and writes its own /dev, so the device cgroup is what keeps a
+ * node it creates for a host disk from opening. Docker's default rules: any node may be
+ * created, and only the standard pseudo-devices and terminals may be opened.
+ */
+const DEVICE_RULES = [
+  { allow: false, access: "rwm" },
+  { allow: true, type: "c", access: "m" },
+  { allow: true, type: "b", access: "m" },
+  ...[3, 5, 7, 8, 9].map((minor) => ({ allow: true, type: "c", major: 1, minor, access: "rwm" })), // null zero full random urandom
+  ...[0, 1, 2].map((minor) => ({ allow: true, type: "c", major: 5, minor, access: "rwm" })), // tty console ptmx
+  { allow: true, type: "c", major: 136, access: "rwm" }, // /dev/pts/*
 ];
 
 /**
@@ -143,7 +160,8 @@ export function buildSpec(opts: BundleOptions): unknown {
         destination: "/etc/hosts",
         type: "bind",
         source: opts.hostsPath,
-        options: ["rbind", "ro", "rprivate"],
+        // Writable: the pod's own copy, rewritten at every start.
+        options: ["rbind", "rw", "rprivate"],
       },
       {
         destination: INIT_PATH,
@@ -154,7 +172,8 @@ export function buildSpec(opts: BundleOptions): unknown {
     ],
     linux: {
       cgroupsPath: opts.cgroupPath,
-      resources: {},
+      sysctl: { "net.ipv4.ping_group_range": "0 2147483647" },
+      resources: { devices: DEVICE_RULES },
       namespaces: [
         { type: "pid" },
         { type: "ipc" },

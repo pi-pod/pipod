@@ -159,7 +159,14 @@ export interface ProviderCapabilities {
 }
 
 /** Normalized egress policy handed to the adapter by core (§11.1, D5). */
-export type EgressPolicy = { mode: "open" } | { mode: "allowlist"; hosts: string[] };
+export type EgressPolicy =
+  | { mode: "open" }
+  | {
+      mode: "allowlist";
+      hosts: string[];
+      /** What each allowed hostname resolved to, under CIDR enforcement: the pod's /etc/hosts. */
+      names?: Record<string, string[]>;
+    };
 
 export interface SandboxSpec {
   /** Provider-native image reference (§12). */

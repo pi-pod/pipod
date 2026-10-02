@@ -68,14 +68,26 @@ function toApi(row: TemplateRow) {
 }
 
 /** Pod tokens may only touch templates they created; users need templates:write. */
-export function assertTemplateWrite(auth: AuthContext, row: Pick<TemplateRow, "created_from_pod">): void {
+/**
+ * An org template is code every member's launch runs (scripts, Pi packages loaded on their
+ * workstations, init steps inside org jobs that carry their creators' model credentials),
+ * so publishing or changing one is an org-management act, never a pod's.
+ */
+export function assertTemplateWrite(
+  auth: AuthContext,
+  row: Pick<TemplateRow, "created_from_pod" | "owner_user_id">,
+  sharing = false,
+): void {
+  const org = row.owner_user_id === null || sharing;
   if (auth.podId) {
+    if (org) throw forbidden("pod tokens may only manage personal templates");
     if (row.created_from_pod !== auth.podId) {
       throw forbidden("pod tokens may only modify templates they created");
     }
     return;
   }
   requirePermission(auth, "templates:write");
+  if (org) requirePermission(auth, "org:manage");
 }
 
 export function registerTemplateRoutes(app: FastifyInstance): void {
@@ -113,7 +125,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       schema: { body: TemplateBody },
     },
     async (req, reply) => {
-      if (!req.auth.podId) requirePermission(req.auth, "templates:write");
+      assertTemplateWrite(req.auth, { created_from_pod: req.auth.podId ?? null, owner_user_id: req.body.scope === "org" ? null : req.auth.userId });
       if (req.body.name.trim().toLowerCase() === DEFAULT_TEMPLATE_NAME) {
         throw badRequest(`"${DEFAULT_TEMPLATE_NAME}" is the built-in template and cannot be redefined`);
       }
@@ -209,12 +221,12 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       );
       const existing = locked.rows[0];
       if (!existing) throw notFound("template not found");
+      const shareWithOrg = assertScopeChange(existing, req.body.scope);
       // Check the locked row so a concurrent update cannot race past the ownership gate.
-      assertTemplateWrite(req.auth, existing);
+      assertTemplateWrite(req.auth, existing, shareWithOrg);
       if (req.body.expectedVersion !== undefined && existing.version !== req.body.expectedVersion) {
         throw conflict("version conflict: template changed since you read it");
       }
-      const shareWithOrg = assertScopeChange(existing, req.body.scope);
       const rows = await client
         .query<TemplateRow>(
           `UPDATE pod_templates SET
@@ -292,8 +304,8 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
     },
     async (req, reply) => {
       await tx(async (client) => {
-        const template = await client.query<Pick<TemplateRow, "id" | "created_from_pod">>(
-          `SELECT id, created_from_pod FROM pod_templates
+        const template = await client.query<Pick<TemplateRow, "id" | "created_from_pod" | "owner_user_id">>(
+          `SELECT id, created_from_pod, owner_user_id FROM pod_templates
            WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
              AND (owner_user_id IS NULL OR owner_user_id = $3)
            FOR UPDATE`,

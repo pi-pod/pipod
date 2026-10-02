@@ -478,6 +478,17 @@ function sessionTokensChanged(left: AccountAuth, right: AccountAuth): boolean {
   );
 }
 
+/** Same server, identity provider, organization and user: a token rotation, not another sign-in. */
+function sameAccount(left: AccountAuth, right: AccountAuth): boolean {
+  return (
+    left.serverUrl === right.serverUrl &&
+    left.issuer === right.issuer &&
+    left.clientId === right.clientId &&
+    left.orgId === right.orgId &&
+    left.user.id === right.user.id
+  );
+}
+
 /**
  * GET /v1/version. Every field after `version` is absent on older servers, and `schema` /
  * `launchAdmission` are null when the server cannot read them.
@@ -649,9 +660,19 @@ export class AccountClient {
     return this.refreshPromise;
   }
 
+  /**
+   * Adopts a rotation another process wrote, but never a different account: a request
+   * retried after `pipod login` elsewhere would carry its body to that account's server.
+   * A session signed out elsewhere is refreshed for this request only, never written back.
+   */
   private async performRefresh(): Promise<void> {
     await withAccountAuthLock(this.opts.home, async () => {
       const diskAuth = readAccountAuth(this.opts.home);
+      if (diskAuth && !sameAccount(this.auth, diskAuth)) {
+        throw new PiPodError("the pi pod session changed while this command was running", {
+          hint: "another `pipod login` switched account or server; run the command again",
+        });
+      }
       if (diskAuth && sessionTokensChanged(this.auth, diskAuth)) {
         this.auth = diskAuth;
         return;
@@ -674,11 +695,11 @@ export class AccountClient {
           refreshToken: pair.refreshToken ?? refreshAuth.refreshToken,
           ...(pair.idToken ? { idToken: pair.idToken } : {}),
         };
-        writeAccountAuth(this.auth, this.opts.home);
+        if (diskAuth) writeAccountAuth(this.auth, this.opts.home);
       } catch (error) {
         // A process not using this lock (or a stale owner finishing) may still have won rotation.
         const changedAuth = readAccountAuth(this.opts.home);
-        if (changedAuth && sessionTokensChanged(refreshAuth, changedAuth)) {
+        if (changedAuth && sameAccount(refreshAuth, changedAuth) && sessionTokensChanged(refreshAuth, changedAuth)) {
           this.auth = changedAuth;
           return;
         }

@@ -78,17 +78,23 @@ export function parseSecretResolver(raw: unknown, label = "secretResolver"): Sec
 }
 
 /**
- * Project over machine, per key, matching every other config key. A repo can pin a
- * different token for its project scope without erasing the machine `type`.
+ * Project (or org directory) over machine for `type`, but only the machine layer may name
+ * a `tokenCommand`: the other layer arrives with a cloned repository or a pulled bundle,
+ * and must not choose what runs on this workstation.
  */
 export function mergeSecretResolver(
   machine: SecretResolverConfig | null,
   project: SecretResolverConfig | null,
 ): SecretResolverConfig | null {
-  if (!machine) return project;
+  if (project?.tokenCommand) {
+    throw new PiPodError("secretResolver.tokenCommand is only read from this machine's config", {
+      hint: "remove it from the project or org config; set it in your pipod user config instead",
+    });
+  }
   if (!project) return machine;
-  const tokenCommand = project.tokenCommand ?? machine.tokenCommand;
-  return tokenCommand ? { type: project.type, tokenCommand } : { type: project.type };
+  return machine?.tokenCommand
+    ? { type: project.type, tokenCommand: machine.tokenCommand }
+    : { type: project.type };
 }
 
 /**

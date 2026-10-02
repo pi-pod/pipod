@@ -37,6 +37,8 @@ if [ ! -e .env ]; then
   env_set ZITADEL_ADMIN_PASSWORD "$(openssl rand -hex 12)aA1!"
   env_set SECRETS_KEK "$(openssl rand -base64 32)"
   env_set PI_POD_SANDBOX_TOKEN "$(openssl rand -hex 32)"
+  # Port 8080 listens on every interface; metrics are not for whoever can reach it.
+  env_set METRICS_TOKEN "$(openssl rand -hex 24)"
   echo "upgrade: wrote selfhost/.env with new secrets; back up ZITADEL_MASTERKEY and SECRETS_KEK offline"
 fi
 

@@ -11,6 +11,7 @@ import {
   type NormalizedReference,
   type OciDescriptor,
   type RegistryRequest,
+  type HostRegistryAuth,
   type RegistryAuth,
 } from "./registry.js";
 
@@ -191,7 +192,7 @@ export class OciImageStore implements ImageStore {
   readonly #layerTasks = new Map<string, Promise<void>>();
   readonly #verifiedLayers = new Map<string, string>();
 
-  constructor(options: { stateDir: string; auth?: RegistryAuth; log?: (message: string) => void }) {
+  constructor(options: { stateDir: string; auth?: HostRegistryAuth; log?: (message: string) => void }) {
     this.#stateDir = path.resolve(options.stateDir);
     this.#blobsDir = path.join(this.#stateDir, "images", "blobs");
     this.#layersDir = path.join(this.#stateDir, "layers");

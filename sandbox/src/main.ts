@@ -49,7 +49,10 @@ export async function main(): Promise<void> {
   await ociImages.validateAndRepair(store.all().filter((row) => row.tier !== "archived"));
   const images = instrumentImageStore(ociImages, metrics);
   const runtime = instrumentRuntime(new Runtime(cfg.runtime), metrics);
-  const network = new Network(cfg.bridge.name, cfg.bridge.cidr, cfg.dns);
+  const network = new Network(cfg.bridge.name, cfg.bridge.cidr, cfg.dns, undefined, {
+    apiPort: cfg.port,
+    privateEgress: cfg.privateEgress,
+  });
   const cgroups = new CgroupTree();
   const objects = instrumentObjectStore(createObjectStore(cfg.archive), metrics);
 

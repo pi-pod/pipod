@@ -149,10 +149,25 @@ const Schema = z.object({
   /** Bridge subnet for sandbox netns veth pairs. */
   PI_POD_SANDBOX_BRIDGE_CIDR: z.string().default("10.77.0.0/16"),
   PI_POD_SANDBOX_BRIDGE_NAME: z.string().default("ppsbr0"),
-  /** Host DNS resolver handed to sandboxes; always reachable under an allowlist. */
+  /**
+   * DNS resolvers for open-egress sandboxes. An allowlist sandbox gets none: its names come
+   * in its /etc/hosts, unless the control plane predates that (then port 53 here only).
+   */
   PI_POD_SANDBOX_DNS: z.string().default("1.1.1.1,8.8.8.8"),
   /** Hostname sandboxes dial for keepalive; must survive the egress allowlist. */
   PI_POD_SANDBOX_API_HOST: z.string().optional(),
+  /**
+   * Private IPv4 addresses or CIDRs pods may reach, comma-separated. Pods are otherwise kept
+   * off private, shared and reserved ranges whatever their egress mode, so a server or
+   * service pods dial at a private address must be listed here.
+   */
+  PI_POD_SANDBOX_PRIVATE_EGRESS: z
+    .string()
+    .default("")
+    .refine(
+      (v) => v.split(",").map((s) => s.trim()).filter(Boolean).every((s) => /^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(s)),
+      "expected comma-separated IPv4 addresses or CIDRs",
+    ),
 
   /** Archive object store. `local` keeps archives on the state volume (dev, air-gapped).
    * `proxy` streams archives through the server's authenticated, path-scoped ingest
@@ -170,7 +185,11 @@ const Schema = z.object({
   /** Minutes between disaster-recovery snapshots of SQLite + manifest (§5.2); 0 disables. */
   PI_POD_SANDBOX_DR_INTERVAL_MINUTES: z.coerce.number().nonnegative().default(60),
 
-  /** Registry mirror/credentials for image pulls. */
+  /**
+   * A private registry's credentials for image pulls, sent only to PI_POD_SANDBOX_REGISTRY_HOST
+   * (e.g. `ghcr.io`): an image reference can name any registry, including one a tenant runs.
+   */
+  PI_POD_SANDBOX_REGISTRY_HOST: z.string().optional(),
   PI_POD_SANDBOX_REGISTRY_USERNAME: z.string().optional(),
   PI_POD_SANDBOX_REGISTRY_PASSWORD: z.string().optional(),
 
@@ -239,6 +258,7 @@ export interface Config {
   bridge: { name: string; cidr: string };
   dns: string[];
   apiHost?: string;
+  privateEgress: string[];
   archive:
     | { driver: "none" }
     | { driver: "local"; dir: string }
@@ -253,7 +273,7 @@ export interface Config {
         prefix: string;
       };
   drIntervalMinutes: number;
-  registryAuth?: { username: string; password: string };
+  registryAuth?: { registry: string; username: string; password: string };
   /** Present only when scrapers must authenticate. Unset = private scrape, no auth. */
   metricsToken?: string;
   logLevel: string;
@@ -443,12 +463,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     bridge: { name: e.PI_POD_SANDBOX_BRIDGE_NAME, cidr: env.PI_POD_SANDBOX_BRIDGE_CIDR === undefined && e.PI_POD_SANDBOX_HOST_BACKEND === "boat" ? "10.78.0.0/16" : e.PI_POD_SANDBOX_BRIDGE_CIDR },
     dns: e.PI_POD_SANDBOX_DNS.split(",").map((s) => s.trim()).filter(Boolean),
     apiHost: e.PI_POD_SANDBOX_API_HOST,
+    privateEgress: e.PI_POD_SANDBOX_PRIVATE_EGRESS.split(",").map((s) => s.trim()).filter(Boolean),
     archive,
     drIntervalMinutes: e.PI_POD_SANDBOX_DR_INTERVAL_MINUTES,
-    registryAuth:
-      e.PI_POD_SANDBOX_REGISTRY_USERNAME && e.PI_POD_SANDBOX_REGISTRY_PASSWORD
-        ? { username: e.PI_POD_SANDBOX_REGISTRY_USERNAME, password: e.PI_POD_SANDBOX_REGISTRY_PASSWORD }
-        : undefined,
+    registryAuth: (() => {
+      if (!e.PI_POD_SANDBOX_REGISTRY_USERNAME || !e.PI_POD_SANDBOX_REGISTRY_PASSWORD) return undefined;
+      if (!e.PI_POD_SANDBOX_REGISTRY_HOST) {
+        throw new Error("PI_POD_SANDBOX_REGISTRY_USERNAME/PASSWORD need PI_POD_SANDBOX_REGISTRY_HOST, the registry they belong to");
+      }
+      return {
+        registry: e.PI_POD_SANDBOX_REGISTRY_HOST,
+        username: e.PI_POD_SANDBOX_REGISTRY_USERNAME,
+        password: e.PI_POD_SANDBOX_REGISTRY_PASSWORD,
+      };
+    })(),
     metricsToken: e.PI_POD_SANDBOX_METRICS_TOKEN,
     logLevel: e.LOG_LEVEL,
     paths: {

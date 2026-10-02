@@ -12,9 +12,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit } from "../audit.js";
-import { requirePermission, type AuthContext } from "../auth/plugin.js";
+import type { AuthContext } from "../auth/plugin.js";
 import { HttpError, notFound } from "../httperrors.js";
 import { withPodSandbox } from "../pods/lifecycle.js";
+import { assertPodAccess } from "../pods/access.js";
 import { getPod } from "../pods/store.js";
 import type { PodServiceDeps } from "../pods/types.js";
 import type { KekProvider } from "../secrets/crypto.js";
@@ -88,11 +89,6 @@ type AuthEvent = Parameters<BrokerAuthInteraction["notify"]>[0];
 
 function subjectOf(auth: AuthContext): CredentialSubject {
   return { orgId: auth.orgId, userId: auth.userId };
-}
-
-function assertPodAccess(pod: { user_id: string }, auth: AuthContext): void {
-  if (pod.user_id === auth.userId) return;
-  requirePermission(auth, "pods:manage_any");
 }
 
 function unsupportedLoginError(
@@ -307,7 +303,7 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
         assertLoginCapability(providerId, authType);
         if (podId) {
           const pod = await getPod(req.auth.orgId, podId);
-          assertPodAccess(pod, req.auth);
+          await assertPodAccess(pod, req.auth);
         }
         const minted = await createLoginTicket(subjectOf(req.auth), providerId, authType, podId);
         await auditRoute(req.auth, "model_credentials.login_ticket", providerId, {

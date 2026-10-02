@@ -569,12 +569,21 @@ class LayerWriter {
 function writePulledAgents(writer: LayerWriter, piDir: string, agents: Record<string, string> | undefined): void {
   const directory = path.join(piDir, "agents");
   const keep = new Set<string>();
+  refuseSymlink(directory);
   for (const [relative, content] of Object.entries(agents ?? {})) {
     const parts = relative.split("/");
     if (path.isAbsolute(relative) || parts.some((part) => part === "" || part === "." || part === "..")) {
       throw new PiPodError(`server agents/${relative} is not a safe relative path`);
     }
     keep.add(parts.join(path.sep));
+    // The server names the subdirectories; one that is a symlink in this checkout would
+    // carry the write outside it.
+    let ancestor = directory;
+    for (const part of parts.slice(0, -1)) {
+      ancestor = path.join(ancestor, part);
+      const stat = refuseSymlink(ancestor);
+      if (stat && !stat.isDirectory()) throw new PiPodError(`${ancestor} must be a directory`);
+    }
     writer.put(path.join(directory, ...parts), content);
   }
   const stat = refuseSymlink(directory);

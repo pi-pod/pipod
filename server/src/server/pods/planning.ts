@@ -50,7 +50,7 @@ import {
 } from "./pi-resources.js";
 import { platformProviderEnv } from "./providercred.js";
 import { SANDBOX_PROVIDER_NAME } from "./sandboxfleet.js";
-import { staticHostForUrl, hostById, currentHostUrl, requireHostAwake, openHostAuth, providerForHost } from "./hostidentity.js";
+import { assertOperatorSandboxUrl, staticHostForUrl, hostById, currentHostUrl, requireHostAwake, openHostAuth, providerForHost } from "./hostidentity.js";
 import { getSandboxHostBackend } from "./hostbackend/index.js";
 import { buildCreateOwner } from "./owner-identity.js";
 import { platformToken } from "./operations.js";
@@ -495,6 +495,7 @@ export async function planPodLaunch(
   if (providerName === SANDBOX_PROVIDER_NAME && ownedHosts(deps.env) && Object.hasOwn(configuredProvider, "url")) {
     throw badRequest("personal workstation launches cannot select an explicit sandbox URL");
   }
+  if (providerName === SANDBOX_PROVIDER_NAME) await assertOperatorSandboxUrl(configuredProvider["url"]);
   const hostBackend = providerName === SANDBOX_PROVIDER_NAME ? getSandboxHostBackend(deps.env, { userId: args.userId, kek: deps.kek }) : null;
   // The requested shape is resolved BEFORE placement so the fleet choice sees actual
   // fit (§6.4). Memory above the deployment ceiling refuses here, never clamped (§7.4).

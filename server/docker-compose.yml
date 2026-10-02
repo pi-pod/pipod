@@ -9,7 +9,7 @@ services:
       POSTGRES_PASSWORD: pipod
       POSTGRES_DB: pipod
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./dev/postgres-init:/docker-entrypoint-initdb.d:ro
@@ -53,7 +53,7 @@ services:
       ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENIDLEEXPIRATION: 720h
       ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_REFRESHTOKENEXPIRATION: 2160h
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
 
   server:
     build: .
@@ -81,7 +81,7 @@ services:
     # /healthz and /metrics share this port. Scrape /metrics only from a private network;
     # set METRICS_TOKEN if the scrape path is not otherwise trusted.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
 volumes:
   pgdata:

@@ -5,6 +5,14 @@
  */
 const base = (process.env.ZITADEL_URL ?? "http://127.0.0.1:8081").replace(/\/+$/, "");
 const pat = process.env.ZITADEL_PAT ?? "";
+{
+  // The PAT is an instance-admin credential: cleartext only to loopback.
+  const url = new URL(base);
+  const loopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("ZITADEL_URL must use HTTPS (HTTP is allowed only for loopback development)");
+  }
+}
 
 export function apiBase() {
   return base;
