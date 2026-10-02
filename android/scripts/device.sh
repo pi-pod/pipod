@@ -29,11 +29,7 @@ if [[ -n ${TAILSCALE_SOCKET:-} && $(uname -s) == Darwin ]]; then
   SSH_ARGS+=(-o "ProxyCommand=${proxy}%h %p")
 fi
 
-MAC_HOST="${PIPOD_MAC_HOST:-agent@mac-mini-m4}"
-case "$MAC_HOST" in
-  agent@mac-mini-m4) ;;
-  *) echo 'Use agent@mac-mini-m4.' >&2; exit 2 ;;
-esac
+MAC_HOST="${PIPOD_MAC_HOST:?Set PIPOD_MAC_HOST to user@host of a Mac on your tailnet}"
 SERIAL="${PIPOD_DEVICE_SERIAL:-emulator-5554}"
 REMOTE_DIR="${PIPOD_MAC_WORKDIR:-work/pi-pod-android}"
 REMOTE_SHOTS="${PIPOD_MAC_SHOTS:-work/pi-pod-android-shots}"

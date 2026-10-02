@@ -25,8 +25,8 @@ PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 18083
 
 HOST_ID = "boat-9622f2fa-48d5-493f-82e4-4c0dee0d54f9"
 
-# The real flat `workstation` block from M4 (pi-pod-server#266): cents, hour
-# floats, real enums. Served under the `workstation` key on /v1/me (and, like
+# The hosted edition's flat `workstation` block shape: cents, hour floats, real
+# enums. The figures are fixtures, not plan terms. Served under the `workstation` key on /v1/me (and, like
 # the client parser, on the pods envelope for screenshot evidence — production
 # serves it on /v1/me only).
 WORKSTATION = {

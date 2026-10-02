@@ -50,26 +50,27 @@ docs/
   pods-screens.md       the pod and environment screens, labels and test tags
   manual-testing.md     how each feature is exercised by hand, with results
 scripts/
-  mac-build.sh          sync + Gradle on the shared build Mac
+  mac-build.sh          sync + Gradle on a remote build Mac
   device.sh             drive the emulator on that Mac (install, tap, screenshot)
 ```
 
 ## Building
 
-The workstation this is developed on cannot run a Gradle/Kotlin daemon without
-thrashing swap, so compilation happens with `tailscale ssh agent@mac-mini-m4` on the shared Mac. Complete [manual-testing connection setup](docs/manual-testing.md#current-manual-testing-host) first.
-`scripts/mac-build.sh` wraps it: it rsyncs the project into a workdir of your
-own, serialises builds behind a lock, and propagates Gradle's exit code.
+With a local JDK 21 and an Android SDK that has `android-37.0`, plain
+`./gradlew assembleDebug` works.
+
+To offload builds and the emulator to a Mac reached over Tailscale SSH (for example from
+a workstation too small for a Gradle daemon), use `scripts/mac-build.sh`: it rsyncs the
+project into a workdir of your own, serialises builds behind a lock, and propagates
+Gradle's exit code.
 
 ```bash
+export PIPOD_MAC_HOST=you@your-mac                          # Tailscale SSH target
 export PIPOD_MAC_WORKDIR=work/android-<yours>/pi-pod-android   # your own directory
 export PIPOD_DEVICE_SERIAL=emulator-5554                    # your owned emulator
 ./scripts/mac-build.sh assembleDebug
 ./scripts/mac-build.sh connectedDebugAndroidTest              # needs your own AVD
 ```
-
-Nothing about the script is required: with a local JDK 21 and an Android SDK
-that has `android-37.0`, plain `./gradlew assembleDebug` works.
 
 Toolchain: JDK 21, Gradle 9.3.1, AGP 9.1, Kotlin 2.4, `compileSdk 37`,
 `targetSdk 36`, `minSdk 26` with core-library desugaring (so `java.time` is

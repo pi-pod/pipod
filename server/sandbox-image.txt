@@ -1,10 +1,7 @@
-# Pinned pi-pod-sandbox service image for the native-integration workflow.
+# Pinned sandbox service image for the hosted edition's native-integration workflow.
 # Single line: the immutable GHCR reference the workflow probes, cosign-verifies,
 # and runs as its privileged fixture container. This is the source of truth —
-# .github/workflows/native-integration.yml reads this file, so a sandbox upgrade
-# is exactly one reviewed line change here.
-#
-# Digest provenance: pi-pod-sandbox PR #34 merged as 91912b99a4422f44dd9cb05dcb8e54a09cc3491f;
-# workflow run 34712297746 built and signed this immutable artifact (build job 103604310377).
-# This remains disposable native-runtime evidence, not a production host qualification.
+# the workflow reads this file, so a sandbox upgrade is exactly one reviewed line
+# change here. Built and signed from sandbox source 91912b99a442 (before the
+# monorepo import); disposable native-runtime evidence, not a host qualification.
 ghcr.io/pi-pod/pi-pod-sandbox@sha256:913ee6c4631cac016b1703c8a99ec13d499283a9e0b21a7f4c6c3f0f1fe0737c

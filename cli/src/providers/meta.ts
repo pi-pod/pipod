@@ -16,7 +16,7 @@ export interface ProviderMeta {
 export const PROVIDER_META = {
   sandbox: {
     credentialEnv: "PI_POD_SANDBOX_TOKEN",
-    dashboardUrl: "https://github.com/pi-pod/pi-pod-sandbox#readme",
+    dashboardUrl: "https://github.com/pi-pod/pipod/tree/main/sandbox#readme",
   },
 } as const satisfies Record<string, ProviderMeta>;
 

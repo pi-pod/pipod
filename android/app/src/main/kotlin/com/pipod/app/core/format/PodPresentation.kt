@@ -225,7 +225,7 @@ class PodPresentation private constructor(
         // null guard at each site.
         // `waiting-for-capacity` is what GET /v1/pods/:id substitutes while a
         // live wait sits over preparing_image/provisioning (`capacityWaitPhase`
-        // in `pi-pod-server` `src/server/pods/capacity-wait.ts`): a pod with no
+        // in `server/src/server/pods/capacity-wait.ts`): a pod with no
         // sandbox at all, and so unambiguously still starting.
         private val STARTING_PHASES =
             setOf<String?>(

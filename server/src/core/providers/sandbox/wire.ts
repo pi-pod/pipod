@@ -1,4 +1,4 @@
-// Wire types mirrored from pi-pod-sandbox/src/wire.ts.
+// Wire types mirrored from sandbox/src/wire.ts.
 
 export type SandboxState = "starting" | "started" | "stopped" | "archived" | "error" | "gone";
 
@@ -22,7 +22,7 @@ export interface ResourceShape {
  * and immutable afterwards. Labels are mutable and are never consulted for ownership,
  * quota, cgroup placement, or cost attribution.
  *
- * Mirrored from pi-pod-sandbox/src/wire.ts (cost-ledger contract v1). Nothing here is
+ * Mirrored from sandbox/src/wire.ts (cost-ledger contract v1). Nothing here is
  * invented server-side: every shape exists because the native host serves it.
  */
 export interface OwnerIdentity {

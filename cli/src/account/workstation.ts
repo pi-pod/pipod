@@ -21,7 +21,7 @@
  * and must never be reached from here.
  *
  * Everything is validated the way the server validates it on the way out
- * (`pi-pod-server/src/server/safe-errors.ts`): the reason against the allowlist, the host id
+ * (`server/src/server/safe-errors.ts`): the reason against the allowlist, the host id
  * against the workstation route's own rule, the status href RECOMPUTED from the id rather than
  * trusted, the retry hint bounded, the operation reduced to the seven fields the status route
  * exposes. A malformed field means "no detail", never a forged one.

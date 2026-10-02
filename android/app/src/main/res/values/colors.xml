@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Brand palette (see .agents/skills/color-palette). -->
+    <!-- Brand palette. -->
     <color name="pipod_simple_purple">#FF6D2598</color>
     <color name="pipod_ivory_porcelain">#FFEDE4D1</color>
     <color name="pipod_window_background">#FFEDE4D1</color>

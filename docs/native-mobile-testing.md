@@ -12,9 +12,10 @@ zero-test pass is not evidence. Record untested production-dependent flows.
 
 ## Shared devices
 
-Any local simulator or emulator works. Maintainers also drive a shared Mac over
-Tailscale (`tailscale ssh agent@mac-mini-m4`); `ios/tools/` and `android/scripts/`
-hold the helpers, and they refuse any other host.
+Any local simulator or emulator works. From Linux, `ios/tools/` and `android/scripts/`
+build and drive devices on a Mac reached over Tailscale SSH: set
+`PIPOD_MAC_HOST=user@host`. The Mac may be shared, so keep to your own work directory and
+device.
 
 ## Local API and debug sign-in
 

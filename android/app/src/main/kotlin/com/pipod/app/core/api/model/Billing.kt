@@ -19,7 +19,7 @@ import kotlinx.serialization.json.longOrNull
  * does not send at all.
  *
  * Source: `GET /v1/me`, optional top-level key `workstation` (flat block from
- * `workstationSummary()` in `pi-pod-server` `src/server/billing/routes.ts`).
+ * `workstationSummary()` in the hosted edition's billing routes).
  * Absent under the static backend. The same parser also reads the key on the
  * `GET /v1/pods` envelope for forward-compat, though the server does not send
  * it there today.
@@ -296,7 +296,7 @@ enum class BillingSpendCapState(val wire: String) {
 
 /**
  * Why new machine starts are refused. Mirrors `StartBlockedReason` in
- * `pi-pod-server` `src/server/billing/entitlements.ts`; they are contract.
+ * the hosted edition's billing entitlements; they are contract.
  */
 enum class StartBlockedReason(val wire: String) {
     SubscriptionRequired("subscription_required"),

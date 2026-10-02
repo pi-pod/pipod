@@ -11,52 +11,41 @@ The final automated run passed **1000 tests (0 failures)** on the merged round-2
 [cold notification routing](screenshots/cold-notification-session.png), and
 [dark-mode message contrast](screenshots/session-dark.png) against the isolated fake-provider API.
 
-## The current Mac workflow
+## Testing on a remote Mac
 
-Use **`tailscale ssh agent@mac-mini-m4`** as the standard macOS `agent` account.
-Maintainers read the native testing skill in their workspace
-first for auth-key-only Tailscale SSH enrollment, automatic host-key verification,
-exclusive use of shared devices and Device Hub input. No Mac password or SSH key
-is needed after the runner joins with the designated testing auth key.
-Historical feature coverage below is not re-verified by this host migration.
+On a Mac, run the app from Xcode or `xcrun simctl` directly. From Linux, use
+`tools/remote-build.sh` against a Mac reached over Tailscale SSH. The Mac may be shared:
+use your own work directory and simulator.
 
 ```bash
+export PIPOD_MAC_HOST=you@your-mac             # Tailscale SSH target
 export PIPOD_REMOTE_DIR=work/pipod-ios-my-run  # unique directory for this pass
-# Default device: configured Agent iPhone; do not erase/delete it.
-# Set PIPOD_SIM_NAME only when intentionally creating a separate owned simulator.
+# Set PIPOD_SIM_NAME to create a separate owned simulator.
 ./tools/remote-build.sh sync
 ./tools/remote-build.sh build
 ./tools/remote-build.sh run  # pass approved Debug overrides only when needed
 UDID=$(./tools/remote-build.sh udid)
-tailscale ssh agent@mac-mini-m4 "xcrun simctl io '$UDID' screenshot '$PIPOD_REMOTE_DIR/shot.png'"
-tailscale ssh agent@mac-mini-m4 "cat '$PIPOD_REMOTE_DIR/shot.png'" > /tmp/pipod-ios.png
+tailscale ssh "$PIPOD_MAC_HOST" "xcrun simctl io '$UDID' screenshot '$PIPOD_REMOTE_DIR/shot.png'"
+tailscale ssh "$PIPOD_MAC_HOST" "cat '$PIPOD_REMOTE_DIR/shot.png'" > /tmp/pipod-ios.png
 ```
 
-Inspect the PNG. Use the installed **`~/.local/bin/axe`** over SSH for real
-input: read `axe describe-ui --udid "$UDID"`, select an observed identifier or
-label with `axe tap`, use `axe type` / `axe swipe` / `axe button` as needed, and
-capture/inspect the result after every meaningful action. The root skill gives
-full examples and explains logical points versus screenshot pixels. AXe 1.8.0
-was input-verified as agent on this Xcode 27 host; no remote desktop login is
-needed for that workflow.
-
-The helper starts the registered Device Hub GUI launch service; an operator must
-log into agent after reboot. If using optional remote desktop input, ensure the
-displayed Mac session is agent first: remote screen authentication does not
-isolate the active admin desktop. Missing working UI input blocks acceptance;
-do not substitute build/install/log output for interaction.
+Inspect the PNG. For real input over SSH, [AXe](https://github.com/cameroncooke/AXe)
+works without a remote desktop: read `axe describe-ui --udid "$UDID"`, select an
+observed identifier or label with `axe tap`, use `axe type` / `axe swipe` / `axe button`
+as needed, and capture/inspect the result after every meaningful action. Missing working
+UI input blocks acceptance; do not substitute build/install/log output for interaction.
 
 For a runner-local backend, hold loopback reverse forwards in a separate process:
 
 ```bash
-tailscale ssh agent@mac-mini-m4 -N -o ExitOnForwardFailure=yes \
+tailscale ssh "$PIPOD_MAC_HOST" -N -o ExitOnForwardFailure=yes \
   -R 127.0.0.1:18081:127.0.0.1:18081 \
   -R 127.0.0.1:18093:127.0.0.1:18093
 ```
 
 Choose unused per-run API/OIDC ports. Verify the API from the Mac. Keep test
 JWTs private and out of evidence; use normal app builds with ad-hoc simulator
-signing for Keychain. Do not run unit tests.
+signing for Keychain.
 
 Useful operations, executed in an agent shell with the selected UDID:
 
@@ -247,7 +236,8 @@ Unmarked items are **not yet verified** — that is the point of the list.
 - [sim] the same screen shows one billing row when the server sends the block
       (`/v1/me` and the pods envelope share one parser), and nothing at all —
       no placeholder, no zeroes, no empty header, no reserved space — when it
-      does not. Fixture evidence (old nested shape, still labelled fixtures):
+      does not. Fixture evidence (old nested shape; plan figures are fixtures,
+      not hosted plan terms):
       [billing present](screenshots/m5-billing-present.png) vs
       [billing absent](screenshots/m5-billing-absent.png), same screen.
       Real-envelope evidence (stub `real` scenario serving the exact

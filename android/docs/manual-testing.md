@@ -8,18 +8,16 @@ assembles debug, instrumentation, and release artifacts and runs a test-qualifie
 AuthGate/SessionStore integration smoke alongside a production startup check.
 This file records what was visually inspected.
 
-## Current manual-testing host
+## Testing on a remote Mac
 
-Use **`tailscale ssh agent@mac-mini-m4`**, logged in as the standard macOS
-`agent` user. Maintainers read the native testing skill in their workspace
-for auth-key-only Tailscale SSH enrollment, automatic host-key verification,
-exclusive shared-device use, forwarding and inspected screenshot evidence.
+Any local emulator works with plain `adb`. To offload to a Mac reached over Tailscale
+SSH, use the helpers below; the Mac may be shared, so use your own workdir and emulator.
 Historical evidence below names the devices/backends used then, not today's defaults.
 
 ```bash
+export PIPOD_MAC_HOST=you@your-mac   # Tailscale SSH target
 export PIPOD_MAC_WORKDIR=work/android-my-run/pi-pod-android
-export PIPOD_DEVICE_SERIAL=emulator-5554
-tailscale ssh agent@mac-mini-m4 '~/.local/bin/agent-simulators start-android'
+export PIPOD_DEVICE_SERIAL=emulator-5554   # an emulator you started on the Mac
 ./scripts/mac-build.sh :app:assembleDebug
 ./scripts/device.sh install
 ./scripts/device.sh launch
@@ -29,20 +27,17 @@ tailscale ssh agent@mac-mini-m4 '~/.local/bin/agent-simulators start-android'
 ```
 
 The helpers use the Tailscale CLI, preserve build status, and default to
-`agent@mac-mini-m4`, emulator `Agent_Pixel_API_36` / `emulator-5554`, and Java 21
-at `~/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home`. The SDK is
-`~/Library/Android/sdk`. Explicitly source `~/.config/agent-simulators/environment.sh`
-for direct remote ADB/sdkmanager commands. Verify the project's `android-37.0`
-compile platform before building; the host setup initially installed API 36
-platform/build tools and an API 36 ARM64 emulator, not every project dependency.
-Provision missing user-local packages only with approved licences. Do not run unit tests.
+emulator `emulator-5554` and Java 21 at
+`~/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home` (`PIPOD_MAC_JAVA_HOME`).
+The SDK is `~/Library/Android/sdk`. Verify the project's `android-37.0` compile platform
+on the Mac before building.
 
 The installed Android application ID is `com.pipod`; the Kotlin namespace stays
 `com.pipod.app`. Launch activity `com.pipod/com.pipod.app.MainActivity`.
 Use a normal app APK for exploratory testing, not a test-qualified harness.
 
 Reverse-forward your isolated API/OIDC ports with
-`tailscale ssh agent@mac-mini-m4 -N -o ExitOnForwardFailure=yes -R ...`, bound
+`tailscale ssh "$PIPOD_MAC_HOST" -N -o ExitOnForwardFailure=yes -R ...`, bound
 to Mac loopback, then use serial-qualified `adb reverse` for each actual port.
 The helper's `reverse` action uses historical fixture ports 18082/18094;
 choose/forward those deliberately or use its `adb reverse` action with your own.
@@ -93,6 +88,9 @@ that forwards everything to `:18082` untouched except per mode file:
 `deadlineAt`), so the list enters the shared wait. |
 | `billing` | The upstream 200 with a full `billing` object injected into the envelope. |
 | `absent` | The upstream 200 forwarded byte-identical (no `billing` key anywhere). |
+
+Plan names, hours, caps and trial figures in these screenshots and the results below are
+stub fixtures, not hosted plan terms.
 
 The app was cold-started with `-e PIPOD_SERVER_URL http://127.0.0.1:18083 -e
 PIPOD_DEV_TOKEN <dev token>` (debug only). Every screenshot below was looked
