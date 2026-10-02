@@ -1,7 +1,8 @@
 name: release
 
 # Pushing a tag vX.Y.Z (X.Y.Z = cli/package.json version) publishes that commit: a GitHub
-# release with the CLI package attached, then that same package to npm as `pipod`.
+# release with the CLI package attached, then that same package to npm under the name in
+# cli/package.json.
 # npm authenticates this workflow by trusted publishing (OIDC); there is no token secret.
 # Both jobs skip what is already published, so a failed run can simply be re-run.
 on:
@@ -64,7 +65,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "$GITHUB_REF_NAME" --generate-notes pipod-*.tgz
+            --title "$GITHUB_REF_NAME" --generate-notes ./*.tgz
 
   npm:
     needs: github
@@ -84,10 +85,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          if npm view "pipod@$version" version >/dev/null 2>&1; then
-            echo "pipod@$version is already on npm"
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "*.tgz"
+          spec="$(tar -xOzf ./*.tgz package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); p.name + "@" + p.version')"
+          if npm view "$spec" version >/dev/null 2>&1; then
+            echo "$spec is already on npm"
             exit 0
           fi
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "pipod-$version.tgz"
-          npm publish "./pipod-$version.tgz" --access public
+          npm publish ./*.tgz --access public
