@@ -7,7 +7,6 @@ import com.pipod.app.core.api.model.ConversationEventsPage
 import com.pipod.app.core.api.model.CredentialStatus
 import com.pipod.app.core.api.model.CredentialTestResponse
 import com.pipod.app.core.api.model.DecodedList
-import com.pipod.app.core.api.model.EnvironmentEditorData
 import com.pipod.app.core.api.model.Job
 import com.pipod.app.core.api.model.JobRun
 import com.pipod.app.core.api.model.LaunchResponse
@@ -25,7 +24,6 @@ import com.pipod.app.core.api.model.RefreshResponse
 import com.pipod.app.core.api.model.SecretMeta
 import com.pipod.app.core.api.model.SessionEventRecord
 import com.pipod.app.core.api.model.SessionEventsPage
-import com.pipod.app.core.api.model.SettingsLayer
 import com.pipod.app.core.api.model.UnparsedRow
 import com.pipod.app.core.api.model.WorkstationStatus
 import com.pipod.app.core.api.model.WsTicket
@@ -44,7 +42,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -123,10 +120,11 @@ class ApiClient(
 
     // --- identity -----------------------------------------------------------
 
-    suspend fun me(): MeResponse = ApiJson.decodeFromJsonElement(
-        MeResponse.serializer(),
-        request("GET", "me").jsonObject,
-    )
+    /** The signed-in identity, with a server-relative `dashboardUrl` made absolute. */
+    suspend fun me(): MeResponse {
+        val me = ApiJson.decodeFromJsonElement(MeResponse.serializer(), request("GET", "me").jsonObject)
+        return me.copy(dashboardUrl = me.dashboardUrl?.let { base.resolve(it)?.toString() })
+    }
 
     /**
      * `GET /v1/billing/account` — the account body as sent.
@@ -248,80 +246,6 @@ class ApiClient(
         PodTemplate.serializer(),
         request("GET", "templates/$id").jsonObject,
     )
-
-    suspend fun templateEditorData(id: String): EnvironmentEditorData = ApiJson.decodeFromJsonElement(
-        EnvironmentEditorData.serializer(),
-        request("GET", "templates/$id").jsonObject,
-    )
-
-    suspend fun createTemplate(
-        name: String,
-        description: String? = null,
-        initScript: String? = null,
-        bakeScript: String? = null,
-        config: JsonObject? = null,
-        agentInstructions: String? = null,
-    ): PodTemplate {
-        val body = buildJsonObject {
-            put("name", name)
-            description?.let { put("description", it) }
-            initScript?.let { put("initScript", it) }
-            bakeScript?.let { put("bakeScript", it) }
-            config?.let { put("config", it) }
-            agentInstructions?.let { put("agentInstructions", it) }
-        }
-        return ApiJson.decodeFromJsonElement(
-            PodTemplate.serializer(),
-            request("POST", "templates", body = body).jsonObject,
-        )
-    }
-
-    /**
-     * Writes an environment.
-     *
-     * [expectedVersion] is the version the editor read. The server compares it
-     * under the row lock and answers 409 when someone else has written since,
-     * instead of letting the later save silently discard the earlier one. It is
-     * optional so a server that predates the check still accepts the write.
-     *
-     * [bakeScript] is null when the editor never loaded one. The route
-     * `COALESCE`s every absent field, so omitting the key leaves the stored
-     * script alone — sending `""` would erase it, which is exactly what an
-     * editor that opened before the fetch landed would do. [agentInstructions]
-     * is null for the same reason when the server never reported any.
-     */
-    suspend fun updateTemplate(
-        id: String,
-        name: String,
-        description: String,
-        initScript: String,
-        bakeScript: String?,
-        config: JsonObject,
-        agentInstructions: String? = null,
-        expectedVersion: Int? = null,
-    ): PodTemplate {
-        val body = buildJsonObject {
-            put("name", name)
-            put("description", description)
-            put("initScript", initScript)
-            bakeScript?.let { put("bakeScript", it) }
-            agentInstructions?.let { put("agentInstructions", it) }
-            put("config", config)
-            expectedVersion?.let { put("expectedVersion", it) }
-        }
-        return ApiJson.decodeFromJsonElement(
-            PodTemplate.serializer(),
-            request("PATCH", "templates/$id", body = body).jsonObject,
-        )
-    }
-
-    suspend fun activateTemplate(id: String) {
-        request("POST", "templates/$id/activate", body = EMPTY_BODY)
-    }
-
-    suspend fun deleteTemplate(id: String) {
-        request("DELETE", "templates/$id")
-    }
 
     // --- pods ---------------------------------------------------------------
 
@@ -570,55 +494,6 @@ class ApiClient(
 
     suspend fun deleteJob(id: String) {
         request("DELETE", "jobs/$id")
-    }
-
-    // --- settings layers ----------------------------------------------------
-
-    suspend fun orgSettings(orgId: String): SettingsLayer = ApiJson.decodeFromJsonElement(
-        SettingsLayer.serializer(),
-        request("GET", "orgs/$orgId/settings").jsonObject,
-    )
-
-    /**
-     * Writes the organization config bundle. [version] is the version read; the
-     * server rejects the write when it no longer matches.
-     */
-    suspend fun putOrgSettings(
-        orgId: String,
-        config: JsonObject,
-        initScript: String,
-        bakeScript: String,
-        version: Int,
-    ): Int = putSettingsLayer("orgs/$orgId/settings", config, initScript, bakeScript, version)
-
-    suspend fun userSettings(userId: String): SettingsLayer = ApiJson.decodeFromJsonElement(
-        SettingsLayer.serializer(),
-        request("GET", "users/$userId/settings").jsonObject,
-    )
-
-    /** Writes the user config bundle with the same concurrency rule as [putOrgSettings]. */
-    suspend fun putUserSettings(
-        userId: String,
-        config: JsonObject,
-        initScript: String,
-        bakeScript: String,
-        version: Int,
-    ): Int = putSettingsLayer("users/$userId/settings", config, initScript, bakeScript, version)
-
-    private suspend fun putSettingsLayer(
-        path: String,
-        config: JsonObject,
-        initScript: String,
-        bakeScript: String,
-        version: Int,
-    ): Int {
-        val body = buildJsonObject {
-            put("config", config)
-            put("initScript", initScript)
-            put("bakeScript", bakeScript)
-            put("version", version)
-        }
-        return request("PUT", path, body = body).jsonObject.getValue("version").jsonPrimitive.int
     }
 
     // --- secrets ------------------------------------------------------------

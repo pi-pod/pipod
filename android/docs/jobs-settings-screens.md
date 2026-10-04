@@ -137,56 +137,42 @@ Shared tags the design system sets and these screens rely on: `app-list`,
 
 `com.pipod.app.features.settings`
 
+Settings layers (your own, the organization's defaults and policy) and
+environments are not edited in the app: the `Defaults and environments` card
+opens the server's web dashboard, from `MeResponse.dashboardUrl`, in the
+browser. A server without one gets a note pointing at the `pipod` CLI instead.
+
 ### Composables
 
 | Composable | Signature |
 | --- | --- |
-| `SettingsScreen` | `(viewModel: SettingsViewModel, repository: SettingsRepository, socketFactory: LoginSocketFactory, onOpenEnvironments: () -> Unit, modifier, openUrl: UrlOpener = NoUrlOpener, serverHost: String? = RuntimeConfig.serverUrl, dialogs)` |
-| `SettingsScreen` | `(state: SettingsState, actions: SettingsActions, modifier, dialogs, toastHostState, listState: LazyListState = rememberLazyListState(), organizationBundle: (@Composable () -> Unit)? = null, userBundle: (@Composable () -> Unit)? = null)` |
+| `SettingsScreen` | `(viewModel: SettingsViewModel, socketFactory: LoginSocketFactory, onOpenEnvironments: () -> Unit, modifier, openUrl: UrlOpener = NoUrlOpener, serverHost: String? = RuntimeConfig.serverUrl, dialogs)` |
+| `SettingsScreen` | `(state: SettingsState, actions: SettingsActions, modifier, dialogs, toastHostState, listState: LazyListState = rememberLazyListState())` |
 | `CredentialLoginSheet` | `(provider: ConnectableProvider, authType: String, socketFactory: LoginSocketFactory, onDismiss: () -> Unit, onConnected: (CredentialStatus) -> Unit, modifier, podId: String? = null, openUrl: UrlOpener = NoUrlOpener, serverHost: String? = RuntimeConfig.serverUrl)` |
 | `ColumnScope.CredentialLoginView` | `(provider: ConnectableProvider, authType: String, state: CredentialLoginState, onSubmit: (String) -> Unit, onOpenUrl: (String) -> Unit, onCancel: () -> Unit)` |
-| `ConfigBundleEditor` | `(editor: ConfigBundleEditorState, modifier, canEdit: Boolean = true, readOnlyReason: String? = null, dialogs)` |
-| `ConfigBundleEditor` | `(subject: String, description: String, state: ConfigBundleEditorUiState, onToggle, onReload, onSave, onConfigChange, onInitScriptChange, onBakeScriptChange, modifier, canEdit, readOnlyReason)` |
 
 ### View models, holders and factories
 
 | API | Signature |
 | --- | --- |
 | `SettingsViewModel` | `(repository: SettingsRepository, credentials: CredentialsRepository, account: SettingsAccount = SettingsAccount(), notifications: NotificationSettingsService = UnavailableNotificationSettings, serverHost: String? = RuntimeConfig.serverUrl)` |
-| `SettingsAccount` | `(user, organization, canManageOrganization, adminConsoleUrl, signOutUnavailable, setOrganizationAlias: suspend (String) -> Unit, signOut: suspend () -> Unit, openExternalUrl: UrlOpener)` |
-| `SettingsActions` | 34 named callbacks, all defaulted — see `SettingsScreen.kt` |
+| `SettingsAccount` | `(user, organization, adminConsoleUrl, dashboardUrl, signOutUnavailable, billing, setOrganizationAlias: suspend (String) -> Unit, signOut: suspend () -> Unit, openExternalUrl: UrlOpener, …billing callbacks)` |
+| `SettingsActions` | 35 named callbacks, all defaulted — see `SettingsScreen.kt` |
 | `CredentialLoginViewModel` | `(provider, authType, socketFactory, podId, openUrl, serverHost, scope: CoroutineScope? = null)` — a plain holder with `close()`, not a `ViewModel` |
 | `rememberCredentialLoginViewModel` | `(provider, authType, socketFactory, podId, openUrl, serverHost)` — remembered per sheet, closed on dispose |
-| `ConfigBundleEditorState` | `(subject: String, description: String, load: ConfigBundleLoader, save: ConfigBundleSaver, serverHost)` |
-| `rememberConfigBundleEditor` | `(subject, description, load, save, serverHost): ConfigBundleEditorState` |
 | `ApiSettingsRepository` / `ApiCredentialsRepository` | `(api: ApiClient)` |
 | `apiLoginSocketFactory` | `(api: ApiClient): LoginSocketFactory` |
 | `androidUrlOpener` | `(context: Context): UrlOpener` |
 
 Wiring notes for the host:
 
-- `canManageOrganization` is `permissions.contains("org:manage")` from `/v1/me`.
 - `signOutUnavailable` is `RuntimeConfig.devToken.isNotEmpty()`.
 - `adminConsoleUrl` is `MeResponse.adminConsoleUrl`.
+- `dashboardUrl` is `MeResponse.dashboardUrl`, which `ApiClient.me()` has
+  already made absolute (the server may send a bare `/dashboard/`).
 - Call `viewModel.setAccount(...)` whenever the session reloads. The
   organization-alias field is seeded once and then left alone, so a reload never
   discards a half-typed alias.
-
-### Optimistic concurrency
-
-`ConfigBundleEditorState` reads a layer, remembers its `version`, and writes
-that same version back. The server refuses a stale one. The editor **surfaces
-the refusal and offers a reload** rather than retrying: it keeps the typed
-edits and the old baseline, shows the failure through `FriendlyError`, and
-leaves `version` where it was — retrying with the same version would be refused
-again, and retrying with a fresh one is exactly the overwrite this prevents.
-The footnote says so on screen:
-
-> Version {n}. Saving is refused if someone else changed this bundle since it
-> was loaded; reload to pick up their change.
-
-Save is armed only once a field differs from the last loaded or saved contents,
-so a pristine save cannot round-trip version N to N+1 with no diff.
 
 ### Semantics labels — Settings screen
 
@@ -219,11 +205,7 @@ so a pristine save cannot round-trip version N to N+1 with no diff.
 | `Delete user secret {name}` | a stored secret's delete |
 | `Confirm permanently delete user secret {name}` / `Cancel deleting secret {name}` | that confirmation |
 | `Open environments settings` | the environments row |
-| `Edit organization config bundle` / `Edit user config bundle` | the bundle disclosures; expanded state is announced separately |
-| `Loading organization config bundle` / `Loading user config bundle` | each bundle's first load |
-| `Organization config bundle config JSON` / `… setup script` / `… bake script` | the three editors (`User config bundle …` for the user layer) |
-| `Save {subject}` / `Reload {subject}` / `Retry loading {subject}` | each bundle's actions |
-| `Confirm reload {subject}` / `Keep editing {subject}` | the discard confirmation |
+| `Open web dashboard` | the dashboard button; absent when the server has no dashboard |
 | `Permission, {text}` | the notification row; text is `Not requested`, `Off`, `Enabled`, `Provisional`, `Temporary`, or `Unknown — pull to refresh` |
 | `Enable notifications` | shown only when permission was never requested |
 | `Open notification settings` | shown only when permission was refused |
@@ -231,8 +213,8 @@ so a pristine save cannot round-trip version N to N+1 with no diff.
 | `Error: {text}` / `Success: {text}` | every inline status line, a live region |
 
 Card headings, verbatim: `Account`, `Model providers`,
-`User secrets (write-only)`, `Every pod you launch`, `Organization defaults`,
-`Your defaults`, `Notifications`. Secrets are write-only: the list shows names
+`User secrets (write-only)`, `Every pod you launch`, `Defaults and environments`,
+`Notifications`. Secrets are write-only: the list shows names
 only and there is no reveal for a stored value.
 
 ### Semantics labels — Provider sign-in
@@ -260,8 +242,8 @@ for `api_key` and
 `SettingsTestTags`: `SCREEN` = `settings-screen`, `ACCOUNT_CARD` =
 `settings-account`, `PROVIDERS_CARD` = `settings-providers`, `SECRETS_CARD` =
 `settings-secrets`, `ENVIRONMENTS_CARD` = `settings-environments`,
-`ENVIRONMENTS_ROW` = `settings-environments-row`, `ORG_DEFAULTS_CARD` =
-`settings-org-defaults`, `USER_DEFAULTS_CARD` = `settings-user-defaults`,
+`ENVIRONMENTS_ROW` = `settings-environments-row`, `DASHBOARD_CARD` =
+`settings-dashboard`, `OPEN_DASHBOARD` = `settings-open-dashboard`,
 `NOTIFICATIONS_CARD` = `settings-notifications`, `ORGANIZATION_TOGGLE` =
 `settings-organization-toggle`, `ORGANIZATION_ALIAS` =
 `settings-organization-alias`, `ORGANIZATION_SWITCH` =
@@ -278,15 +260,6 @@ for `api_key` and
 `credential-login-prompt`, `SUBMIT` = `credential-login-submit`, `CANCEL` =
 `credential-login-cancel`, `OPEN` = `credential-login-open`, `ERROR` =
 `credential-login-error`.
-
-`ConfigBundleTestTags` are per subject, so the organization and user bundles are
-distinguishable on one screen: `editor(subject)` = `config-bundle-$subject`,
-`toggle(subject)` = `config-bundle-toggle-$subject`,
-`save(subject)` = `config-bundle-save-$subject`,
-`reload(subject)` = `config-bundle-reload-$subject`,
-`retry(subject)` = `config-bundle-retry-$subject`,
-`status(subject)` = `config-bundle-status-$subject`. The two subjects are
-`organization config bundle` and `user config bundle`.
 
 ---
 

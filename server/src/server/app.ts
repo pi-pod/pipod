@@ -280,11 +280,17 @@ export async function buildApp(deps: AppDeps) {
   }
   registerHealthAndMetrics(app, deps);
   app.get("/v1/openapi.json", async () => app.swagger());
-  if (deps.roles.api) await app.register(async (scope) => registerDashboard(scope, deps.env));
+  // Where the dashboard is, for /v1/me to send the phone apps to; set once its plugin loads.
+  let dashboardUrl: string | null = null;
+  if (deps.roles.api) {
+    await app.register(async (scope) => {
+      dashboardUrl = registerDashboard(scope, deps.env);
+    });
+  }
 
   await app.register(async (v1) => {
     if (deps.roles.api) {
-      registerAuthRoutes(v1, deps.env);
+      registerAuthRoutes(v1, deps.env, dashboardUrl);
       registerVersionRoute(v1);
       registerOrgRoutes(v1, deps.env);
       registerSettingsRoutes(v1);

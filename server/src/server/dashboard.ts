@@ -65,16 +65,23 @@ function securityHeaders(env: ServerEnv): Record<string, string> {
   };
 }
 
+/**
+ * Serves the dashboard and returns where people should open it, for clients that send them
+ * there: `${SERVER_URL}/dashboard/`, or the relative reference `/dashboard/` (resolved against
+ * whatever address the client reached this server at) when SERVER_URL is unset, since then the
+ * dashboard can sign in only on loopback. Null when there is no dashboard to send anyone to:
+ * its files are missing, or it has no client id to sign in with.
+ */
 export function registerDashboard(
   app: FastifyInstance,
   env: ServerEnv,
   dir = path.join(process.cwd(), "dashboard"),
-): void {
+): string | null {
   const assets = loadAssets(dir);
   const index = assets?.get("index.html");
   if (!assets || !index) {
     app.log.warn(`dashboard: ${dir}/index.html is missing; /dashboard is not served`);
-    return;
+    return null;
   }
   const headers = securityHeaders(env);
   const send = (reply: FastifyReply, asset: Asset) => reply.headers(headers).type(asset.type).send(asset.body);
@@ -88,4 +95,7 @@ export function registerDashboard(
     if (!asset) return reply.code(404).send({ error: "not found", detail: null });
     return send(reply, asset);
   });
+
+  if (!env.ZITADEL_DASHBOARD_CLIENT_ID) return null;
+  return env.SERVER_URL ? new URL("/dashboard/", env.SERVER_URL).toString() : "/dashboard/";
 }

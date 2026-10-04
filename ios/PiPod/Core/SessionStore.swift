@@ -23,6 +23,10 @@ public final class SessionStore {
     public private(set) var adminConsoleUrl: String?
     public private(set) var accountConsoleUrl: String?
 
+    /// Where settings and environments are changed: the server's web dashboard.
+    /// Nil when the server has none.
+    public private(set) var dashboardURL: URL?
+
     /// The SaaS billing summary, when the server sends one. Nil under the
     /// self-hosted backend, and then nothing about billing appears anywhere.
     public private(set) var billing: BillingSummary?
@@ -473,6 +477,7 @@ public final class SessionStore {
         permissions = me.permissions
         adminConsoleUrl = me.adminConsoleUrl
         accountConsoleUrl = me.accountConsoleUrl
+        dashboardURL = me.dashboardURL(relativeTo: api.baseURL)
         billing = me.billingSummary
         identityGeneration = expectedGeneration
     }
@@ -496,6 +501,7 @@ public final class SessionStore {
         permissions = []
         adminConsoleUrl = nil
         accountConsoleUrl = nil
+        dashboardURL = nil
         billing = nil
         authNotice = nil
         identityGeneration = nil

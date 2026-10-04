@@ -5,6 +5,7 @@ import com.pipod.app.core.format.FriendlyText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
+/** One environment, read-only here: environments are written in the web dashboard. */
 @Serializable
 data class PodTemplate(
     val id: String,
@@ -12,21 +13,14 @@ data class PodTemplate(
     val description: String? = null,
     val status: String,
     val initScript: String? = null,
+    val bakeScript: String? = null,
     /**
      * What the agent in every pod launched from this environment is told, chiefly
      * the access its pods are meant to have. Null when the server predates the
-     * field, which is not the same as "" (none): an editor must not write what it
-     * never read.
+     * field, which is not the same as "" (none).
      */
     val agentInstructions: String? = null,
     val config: JsonObject = JsonObject(emptyMap()),
-    /**
-     * The optimistic-concurrency counter the server bumps on every write, sent
-     * back as `expectedVersion` so two people editing one environment cannot
-     * silently overwrite each other. Defaults to 0 for tolerance: a server that
-     * predates the field simply gets no `expectedVersion` and behaves as before.
-     */
-    val version: Int = 0,
     val createdFromPod: String? = null,
     val createdAt: String,
     val updatedAt: String,

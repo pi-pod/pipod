@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -30,7 +29,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.pipod.app.core.format.SecretName
 import com.pipod.app.core.format.StatusTone
@@ -41,47 +39,6 @@ import com.pipod.app.ui.AppIcons
 import com.pipod.app.ui.AppTextField
 import com.pipod.app.ui.theme.MonospaceTextStyle
 import com.pipod.app.ui.theme.appColors
-
-/**
- * A multiline editor for shell scripts and JSON.
- *
- * Ported from `pi-pod-flutter/lib/features/common/form_controls.dart`. Every
- * substitution the keyboard would helpfully apply is off: an auto-capitalised
- * `Echo` or a curly quote turns pasted code into code that no longer runs, and
- * the reader has no way to see which character was swapped.
- *
- * Nothing draws a visible label for a multi-line editor, so
- * [accessibilityLabel] is the field's only name.
- */
-@Composable
-fun PlainTextEditor(
-    value: String,
-    onValueChange: (String) -> Unit,
-    accessibilityLabel: String,
-    modifier: Modifier = Modifier,
-    minHeight: Dp = 100.dp,
-    enabled: Boolean = true,
-) {
-    AppTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier
-            .heightIn(min = minHeight)
-            .testTag("plain-text-editor"),
-        enabled = enabled,
-        semanticsLabel = accessibilityLabel,
-        keyboardOptions = KeyboardOptions(
-            capitalization = KeyboardCapitalization.None,
-            autoCorrectEnabled = false,
-            keyboardType = KeyboardType.Ascii,
-        ),
-        textStyle = MonospaceTextStyle,
-        // A line is about 20dp tall, so the editor opens at the height the
-        // caller asked for instead of growing into it from one line.
-        minLines = (minHeight / 20.dp).toInt().coerceAtLeast(1),
-        maxLines = Int.MAX_VALUE,
-    )
-}
 
 /**
  * Name, value, validation and save action for one write-only secret.

@@ -116,63 +116,6 @@ public final class APIClient: @unchecked Sendable {
         try await requestDecoded(PodTemplate.self, "GET", "templates/\(escaped(id))")
     }
 
-    public func templateEditorData(id: String) async throws -> EnvironmentEditorData {
-        try await requestDecoded(EnvironmentEditorData.self, "GET", "templates/\(escaped(id))")
-    }
-
-    public func createTemplate(
-        name: String,
-        description: String? = nil,
-        initScript: String? = nil,
-        bakeScript: String? = nil,
-        agentInstructions: String? = nil,
-        config: JSONValue? = nil
-    ) async throws -> PodTemplate {
-        var body: [String: JSONValue] = ["name": .string(name)]
-        if let description { body["description"] = .string(description) }
-        if let initScript { body["initScript"] = .string(initScript) }
-        if let bakeScript { body["bakeScript"] = .string(bakeScript) }
-        if let agentInstructions { body["agentInstructions"] = .string(agentInstructions) }
-        if let config { body["config"] = config }
-        return try await requestDecoded(
-            PodTemplate.self, "POST", "templates", body: .object(body)
-        )
-    }
-
-    /// Writes an environment.
-    ///
-    /// Every key present is written; the server `COALESCE`s the ones that are
-    /// absent to what it already stored. That is why `TemplateDraft.bakeScript`
-    /// is optional: sending `""` for a script the editor never loaded would
-    /// erase it. `expectedVersion` is sent when the read reported one, and the
-    /// server answers 409 if someone else saved since.
-    public func updateTemplate(id: String, draft: TemplateDraft) async throws -> PodTemplate {
-        var body: [String: JSONValue] = [
-            "name": .string(draft.name),
-            "description": .string(draft.description),
-            "initScript": .string(draft.initScript),
-            "config": draft.config,
-        ]
-        if let bakeScript = draft.bakeScript { body["bakeScript"] = .string(bakeScript) }
-        if let agentInstructions = draft.agentInstructions {
-            body["agentInstructions"] = .string(agentInstructions)
-        }
-        if let expectedVersion = draft.expectedVersion {
-            body["expectedVersion"] = .number(Double(expectedVersion))
-        }
-        return try await requestDecoded(
-            PodTemplate.self, "PATCH", "templates/\(escaped(id))", body: .object(body)
-        )
-    }
-
-    public func activateTemplate(id: String) async throws {
-        _ = try await request("POST", "templates/\(escaped(id))/activate", body: .object([:]))
-    }
-
-    public func deleteTemplate(id: String) async throws {
-        _ = try await request("DELETE", "templates/\(escaped(id))")
-    }
-
     // MARK: - Pods
 
     /// Every pod the filter names, not just the newest page of them.
@@ -471,58 +414,6 @@ public final class APIClient: @unchecked Sendable {
 
     public func deleteJob(id: String) async throws {
         _ = try await request("DELETE", "jobs/\(escaped(id))")
-    }
-
-    // MARK: - Settings
-
-    public func orgSettings(orgId: String) async throws -> SettingsLayer {
-        try await requestDecoded(SettingsLayer.self, "GET", "orgs/\(escaped(orgId))/settings")
-    }
-
-    /// Writes the organization config bundle. `version` is the version read; the
-    /// server rejects the write when it no longer matches.
-    @discardableResult
-    public func putOrgSettings(
-        orgId: String, config: JSONValue, initScript: String, bakeScript: String, version: Int
-    ) async throws -> Int {
-        try await putSettingsLayer(
-            "orgs/\(escaped(orgId))/settings",
-            config: config, initScript: initScript, bakeScript: bakeScript, version: version
-        )
-    }
-
-    public func userSettings(userId: String) async throws -> SettingsLayer {
-        try await requestDecoded(SettingsLayer.self, "GET", "users/\(escaped(userId))/settings")
-    }
-
-    /// Writes the user config bundle with the same concurrency rule as
-    /// `putOrgSettings`.
-    @discardableResult
-    public func putUserSettings(
-        userId: String, config: JSONValue, initScript: String, bakeScript: String, version: Int
-    ) async throws -> Int {
-        try await putSettingsLayer(
-            "users/\(escaped(userId))/settings",
-            config: config, initScript: initScript, bakeScript: bakeScript, version: version
-        )
-    }
-
-    private func putSettingsLayer(
-        _ path: String, config: JSONValue, initScript: String, bakeScript: String, version: Int
-    ) async throws -> Int {
-        let data = try await request(
-            "PUT", path,
-            body: .object([
-                "config": config,
-                "initScript": .string(initScript),
-                "bakeScript": .string(bakeScript),
-                "version": .number(Double(version)),
-            ])
-        )
-        guard let version = data["version"]?.intValue else {
-            throw APIError(error: "Unexpected settings response", detail: data)
-        }
-        return version
     }
 
     // MARK: - Secrets

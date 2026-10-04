@@ -18,6 +18,7 @@ public struct SettingsView: View {
     @State private var isSwitchExpanded = false
     @State private var organizationStatus: StatusMessage?
     @State private var adminConsoleStatus: StatusMessage?
+    @State private var dashboardStatus: StatusMessage?
     @State private var isConfirmingSignOut = false
     @State private var isExplainingDevSignOut = false
     @State private var canSubscribe = false
@@ -32,7 +33,7 @@ public struct SettingsView: View {
         List {
             accountSection
             launchSection
-            defaultsSection
+            dashboardSection
             secretsSection
             notificationsSection
         }
@@ -253,35 +254,41 @@ public struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var defaultsSection: some View {
-        if let organization = session.organization {
-            Section {
-                navigationRow(
-                    "Organization defaults", systemImage: "building.2",
-                    accessibilityLabel: "Open organization defaults"
-                ) {
-                    router.settingsPath.append(
-                        .configBundle(scope: .organization(orgId: organization.id))
-                    )
+    /// Settings and environments are written in the server's web dashboard, not
+    /// here: one editor, on a screen with room for scripts, rather than a copy in
+    /// each app.
+    private var dashboardSection: some View {
+        Section {
+            if let url = session.dashboardURL {
+                Button {
+                    openDashboard(url)
+                } label: {
+                    Label("Web dashboard", systemImage: "arrow.up.forward.square")
                 }
-            } footer: {
-                Text("Applied under every environment for everyone in your organization.")
-            }
-        }
-        if let user = session.user {
-            Section {
-                navigationRow(
-                    "Your defaults", systemImage: "person.crop.circle",
-                    accessibilityLabel: "Open your defaults"
-                ) {
-                    router.settingsPath.append(.configBundle(scope: .user(userId: user.id)))
+                .frame(minHeight: 44)
+                .accessibilityLabel("Open web dashboard")
+                .accessibilityIdentifier("Open web dashboard")
+                if let status = dashboardStatus {
+                    StatusBanner(status)
                 }
-            } footer: {
+            } else {
                 Text(
                     """
-                    Applied on top of the organization defaults in every pod you launch, \
-                    whichever environment it uses.
+                    This server has no web dashboard. Change your own settings, your \
+                    organization’s defaults and policy, and environments with the pipod CLI.
+                    """
+                )
+                .foregroundStyle(AppColors.secondaryLabel)
+            }
+        } header: {
+            Text("Defaults and environments")
+        } footer: {
+            if session.dashboardURL != nil {
+                Text(
+                    """
+                    Your own settings, your organization’s defaults and policy, and \
+                    environments — called templates there — are changed in the web \
+                    dashboard, in your browser.
                     """
                 )
             }
@@ -471,6 +478,16 @@ public struct SettingsView: View {
         } catch {
             organizationStatus = .failure(
                 FriendlyError.message(error, serverHost: Config.serverURL.absoluteString)
+            )
+        }
+    }
+
+    private func openDashboard(_ url: URL) {
+        dashboardStatus = nil
+        openURL(url) { accepted in
+            guard !accepted else { return }
+            dashboardStatus = .failure(
+                "Could not open the web dashboard. Visit \(url.absoluteString) in a browser."
             )
         }
     }

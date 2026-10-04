@@ -8,8 +8,10 @@ Two packages:
 
 - `com.pipod.app.features.pods` — the pod list, the pod detail, the launch
   flow, and the model & thinking picker.
-- `com.pipod.app.features.templates` — the environments list, the environment
-  detail and the environment editor.
+- `com.pipod.app.features.templates` — the environments list and the
+  environment detail. Both only read the environment; its secrets are the one
+  thing written here. Environments are created, changed and deleted in the
+  server's web dashboard, which Settings opens.
 
 Three rules that hold across both:
 
@@ -59,20 +61,17 @@ State and view models:
 
 | Composable | Signature |
 | --- | --- |
-| `TemplateListScreen` | `(viewModel: TemplateListViewModel, onOpenTemplate: (PodTemplate) -> Unit, onNewTemplate, modifier = Modifier, dialogs = rememberAppDialogHostState())` |
-| `TemplateListScreen` | `(state: TemplateListState, onRefresh, onOpenTemplate: (PodTemplate) -> Unit, onNewTemplate, onDelete: (PodTemplate) -> Unit, modifier = Modifier, dialogs = …)` |
-| `TemplateDetailScreen` | `(viewModel: TemplateDetailViewModel, onBack, onEdit: (PodTemplate, EnvironmentEditorData) -> Unit, modifier = Modifier, onChanged: () -> Unit = {}, dialogs = …)` |
-| `TemplateDetailScreen` | `(state: TemplateDetailState, onBack, onRefresh, onEdit, onActivate, onDelete, onSecretNameChange: (String) -> Unit, onSecretValueChange: (String) -> Unit, onSaveSecret, onDeleteSecret: (SecretMeta) -> Unit, onDiscardSecretDraft, modifier = Modifier, dialogs = …)` |
-| `TemplateEditorScreen` | `(viewModel: TemplateEditorViewModel, onDismiss, onSaved: (PodTemplate, EnvironmentEditorData) -> Unit, modifier = Modifier, dialogs = …)` |
-| `TemplateEditorScreen` | `(state: TemplateEditorState, onNameChange, onDescriptionChange, onScriptChange, onBakeScriptChange, onAllowedHostsChange, onEgressModeChange: (String) -> Unit, onIncludeBuiltinsChange: (Boolean) -> Unit, onSave, onDismiss, modifier = Modifier, dialogs = …)` |
+| `TemplateListScreen` | `(viewModel: TemplateListViewModel, onOpenTemplate: (PodTemplate) -> Unit, modifier = Modifier)` |
+| `TemplateListScreen` | `(state: TemplateListState, onRefresh, onOpenTemplate: (PodTemplate) -> Unit, modifier = Modifier)` |
+| `TemplateDetailScreen` | `(viewModel: TemplateDetailViewModel, onBack, modifier = Modifier, dialogs = …)` |
+| `TemplateDetailScreen` | `(state: TemplateDetailState, onBack, onRefresh, onSecretNameChange: (String) -> Unit, onSecretValueChange: (String) -> Unit, onSaveSecret, onDeleteSecret: (SecretMeta) -> Unit, onDiscardSecretDraft, modifier = Modifier, dialogs = …)` |
 
 | Type | Notes |
 | --- | --- |
-| `TemplateRepository` / `ApiTemplateRepository(api)` | Every secret call is scoped `"template"`. |
-| `TemplateListViewModel(repository, serverHost)` | `state`, `events`, `refresh()`, `delete(template)`. |
-| `TemplateDetailViewModel(repository, template, serverHost)` | `state`, `events`, `refresh()`, `setSecretName/Value`, `clearSecretDraft()`, `saveSecret()`, `deleteSecret(secret)`, `activate()`, `deleteTemplate()`, `onSaved(...)`, `editorDataForEditing()`. |
-| `TemplateEditorViewModel(repository, template = null, editorData = null, serverHost)` | `state`, `events`, one setter per field, `save()`; `parseHosts(raw)` on the companion. |
-| `EgressSettings` (internal) | `from(config)` / `write(config, settings)` — rewrites only `mode`, `builtins` and `allow`, leaving every other server key untouched. |
+| `TemplateRepository` / `ApiTemplateRepository(api)` | `templates()`, `template(id)`, and the environment's secrets; every secret call is scoped `"template"`. |
+| `TemplateListViewModel(repository, serverHost)` | `state`, `refresh()`. |
+| `TemplateDetailViewModel(repository, template, serverHost)` | `state`, `refresh()` (re-reads the environment and its secrets), `setSecretName/Value`, `clearSecretDraft()`, `saveSecret()`, `deleteSecret(secret)`. |
+| `EgressSettings` (internal) | `from(config)` — reads `mode`, `builtins` and `allow` leniently. |
 
 ---
 
@@ -188,26 +187,18 @@ Toasts: `Switched to <name>.` and `Thinking level changed to <label>.`
 | Label | Control |
 | --- | --- |
 | `Refresh environments` | Top-bar refresh (wide only) and the named custom action. |
-| `New environment from toolbar` | The toolbar add glyph. |
-| `New environment from empty state` | The first-run action. |
 | `Try loading environments again` | The load-failure action. |
 | `Retry refreshing environments` | `RefreshErrorTile` above stale rows. |
 | `Loading environments` | The first-load spinner. |
-| `Open environment <name>` / `Open environment <name>, draft, needs approval` | One row. |
-| `Delete environment <name>` | The row's delete glyph. |
-| `Confirm delete environment <name>` / `Cancel deleting <name>` | Its confirmation. |
-| `Dismiss environment error` | The notice raised when a delete fails. |
+| `Open environment <name>` | One row. |
 
 ### Environment detail
 
 | Label | Control |
 | --- | --- |
-| `Refresh environment <name>` | The named custom action for pull-to-refresh (reloads secrets **and** editor data). |
-| `Edit environment <name>` | The top-bar Edit. |
-| `Status, Active` / `Status, Draft — not launchable` | The status row. |
+| `Refresh environment <name>` | The named custom action for pull-to-refresh (reloads the environment **and** its secrets). |
+| `Status, Active` | The status row. |
 | `Description, <text>` | Present only when there is one. |
-| `Activate environment <name>` | Drafts only; visible text becomes `Activating…` in flight. |
-| `Confirm activate environment <name>` / `Cancel activating <name>` | Its confirmation. |
 | `Setup script: <script>` / `Bake script: <script>` | The selectable script blocks. |
 | `Network access, Open` / `Network access, Restricted` | |
 | `Built-in services, Allowed` / `Built-in services, Blocked` | |
@@ -216,32 +207,16 @@ Toasts: `Switched to <name>.` and `Thinking level changed to <label>.`
 | `Show secret value for environment secret` / `Hide secret value for environment secret` | The reveal toggle. |
 | `Delete environment secret <name>` | One secret's delete glyph. |
 | `Confirm delete environment secret <name>` / `Cancel deleting environment secret <name>` | Its confirmation. |
-| `Delete detail environment <name>` | The screen's own delete; visible text becomes `Deleting…`. |
-| `Confirm delete detail environment <name>` / `Cancel deleting <name>` | Its confirmation. |
 | `Success: <message>` / `Error: <message>` | The status card (live region). |
 | `Confirm discard unsaved secret` / `Keep editing unsaved secret` | The guard on leaving with a typed but unsaved secret. |
-
-### Environment editor
-
-| Label | Control |
-| --- | --- |
-| `Cancel New environment` / `Cancel Edit environment` | The leading Cancel. Disabled while saving. |
-| `Create environment form` / `Save environment form` | The commit action; disabled until the trimmed name is non-empty. Visible text becomes `Saving…`. |
-| `New environment name` / `Edit environment name` | |
-| `New environment description` / `Edit environment description` | |
-| `New environment setup script` / `Edit environment setup script` | |
-| `New environment bake script` / `Edit environment bake script` | |
-| `New environment allowed network hosts` / `Edit environment allowed network hosts` | |
-| `Confirm discard environment changes` / `Keep editing environment` | The unsaved-changes guard, raised by Cancel and by system back. |
 
 ### Naming a form field
 
 `AppTextField(semanticsLabel = …)` puts the name on the field's **content
 description** and leaves `label` as the visible floating label, so every field
 below is found with `onNodeWithContentDescription`: `Search pods and projects`,
-`Search model names or IDs`, `Search providers`, `Environment secret name`,
-`Environment secret value`, and every `<subject> …` field in the environment
-editor.
+`Search model names or IDs`, `Search providers`, `Environment secret name` and
+`Environment secret value`.
 
 The fields are **controlled**: their value comes from the state and nothing
 else. A driver that types into one and does not feed the text back will see the
@@ -260,21 +235,15 @@ model is holding it.
 | `PodDetailTestTags` | `pod-detail-screen`, `pod-detail-marker`, `pod-detail-actions`, `pod-detail-status`, `pod-detail-info`, `pod-detail-launch-report`, `pod-detail-launch-report-toggle`, `pod-detail-failure`, `pod-detail-open-session`, `pod-detail-cancel-wait`, `pod-detail-edit-retry`, `pod-detail-restore`, `pod-detail-error`, `pod-detail-not-found` |
 | `LaunchPodTestTags` | `launch-pod-screen`, `launch-pod-cancel`, `launch-pod-launch`, `launch-pod-error`, `launch-pod-launching`, `launch-pod-retry-templates`, and `ENVIRONMENT_PICKER` = `app-option-picker-Environment` (set by `AppOptionPicker` itself) |
 | `ModelPickerTestTags` | `model-picker-button`, `model-picker-screen`, `model-picker-done`, `model-picker-provider-row`, `model-picker-models`, `model-picker-thinking`, `model-picker-error`, `model-picker-offline`, `provider-picker-screen`, `provider-picker-list` |
-| `TemplateListTestTags` | `environment-list-screen`, `environment-list-new`, `environment-list-drafts`, `environment-list-active`, `row(id)` → `environment-row-<id>` |
-| `TemplateDetailTestTags` | `environment-detail-screen`, `environment-detail-edit`, `environment-detail-overview`, `environment-detail-activate`, `environment-detail-setup-script`, `environment-detail-bake-script`, `environment-detail-network`, `environment-detail-secrets`, `environment-detail-delete-section`, `environment-detail-delete`, `environment-status-card` |
-| `TemplateEditorTestTags` | `environment-editor-screen`, `environment-editor-cancel`, `environment-editor-save`, `environment-editor-name-section`, `environment-editor-setup-script`, `environment-editor-bake-script`, `environment-editor-network`, `environment-editor-saving`, and `NETWORK_ACCESS_PICKER` = `app-option-picker-Network access` |
+| `TemplateListTestTags` | `environment-list-screen`, `environment-list-active`, `row(id)` → `environment-row-<id>` |
+| `TemplateDetailTestTags` | `environment-detail-screen`, `environment-detail-overview`, `environment-detail-setup-script`, `environment-detail-bake-script`, `environment-detail-network`, `environment-detail-secrets`, `environment-status-card` |
 
 Design-system tags these screens also raise: `app-list`, `app-back-button`,
 `app-floating-action`, `app-confirm-dialog`, `app-notice-dialog`, `app-sheet`,
-`empty-state`, `refresh-error-tile`, `unsupported-list-item`,
-`plain-text-editor`, `save-secret`.
+`empty-state`, `refresh-error-tile`, `unsupported-list-item`, `save-secret`.
 
 Shared feature tags: `workstation-wait-card` (`-elapsed`, `-phase`, `-cancel`,
 `-retry`) and `billing-summary-row` / `billing-summary-alert`.
-
-`plain-text-editor` appears **three times** on the environment editor (setup
-script, bake script, allowed hosts), so drive those by their accessible names
-rather than by the tag.
 
 ---
 
@@ -286,13 +255,13 @@ rather than by the tag.
   `LaunchedEffect` and a `LifecycleEventEffect(ON_RESUME)`, so a poll dies with
   the screen instead of outliving it.
 - **`PopScope` becomes `BackHandler`.** The launch flow blocks back outright
-  while a launch is in flight; the editor and the environment detail confirm
-  first and then leave. The Cupertino edge-swipe cases have no Android
+  while a launch is in flight; the environment detail confirms an unsaved
+  secret first and then leaves. The Cupertino edge-swipe cases have no Android
   counterpart.
-- **`AbsorbPointer` becomes a pointer-consuming overlay** on the editor and the
-  launch flow, which is the same "the form is inert right now" behaviour.
-- **`autofocus`** on the editor's name field and the model search is dropped: it
-  raises the keyboard over the form on a phone.
+- **`AbsorbPointer` becomes a pointer-consuming overlay** on the launch flow,
+  which is the same "the form is inert right now" behaviour.
+- **`autofocus`** on the model search is dropped: it raises the keyboard over
+  the form on a phone.
 - **`leadingWidth`** is a Cupertino navigation-bar measurement with no Material
   counterpart.
 - **Two-column pod cards** keep their seam (`currentWindowWidth() >= 1050.dp`)
@@ -330,8 +299,9 @@ PodListScreen(
 - The launch route owns success navigation: `onLaunched` should
   `router.replace(Routes.podDetail(pod.id))`, and the screen deliberately does
   not leave by itself.
-- `TemplateDetailScreen`'s `onEdit` receives the `EnvironmentEditorData` the
-  detail already fetched; hand it straight to `TemplateEditorViewModel`.
+- `TemplateDetailViewModel` starts from the row the list already loaded and
+  re-reads the environment itself, so an edit made in the web dashboard shows
+  up on the next refresh.
 
 ## Known gaps
 

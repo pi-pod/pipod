@@ -171,12 +171,8 @@ struct AppShell: View {
             TemplateListView()
         case .environmentDetail(let templateId, let template):
             TemplateDetailView(templateId: templateId, initialTemplate: template)
-        case .newEnvironment:
-            TemplateDetailView(templateId: nil, initialTemplate: nil)
         case .credentials:
             CredentialsView()
-        case .configBundle(let scope):
-            ConfigBundleEditorView(scope: scope)
         case .secrets(let scope, let scopeId, let title):
             SecretsView(scope: scope, scopeId: scopeId, title: title)
         case .planChange:

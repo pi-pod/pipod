@@ -119,6 +119,7 @@ class SettingsActions(
     val onSaveSecret: () -> Unit = {},
     val onDeleteSecret: (SecretMeta) -> Unit = {},
     val onOpenEnvironments: () -> Unit = {},
+    val onOpenDashboard: () -> Unit = {},
     val onRequestNotifications: () -> Unit = {},
     val onOpenNotificationSettings: () -> Unit = {},
 )
@@ -128,14 +129,10 @@ class SettingsActions(
  *
  * Port of `SettingsView` in
  * `pi-pod-flutter/lib/features/settings/settings_view.dart`.
- *
- * [repository] is taken alongside the view model because the config bundle
- * editors own their own state and load on demand.
  */
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
-    repository: SettingsRepository,
     socketFactory: LoginSocketFactory,
     onOpenEnvironments: () -> Unit,
     modifier: Modifier = Modifier,
@@ -144,61 +141,6 @@ fun SettingsScreen(
     dialogs: AppDialogHostState = rememberAppDialogHostState(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-
-    val organizationBundle = state.organization?.let { organization ->
-        rememberConfigBundleEditor(
-            subject = "organization config bundle",
-            description = "Config, setup script and bake script shared by every pod in the " +
-                "organization.",
-            // Keyed on the organization, so switching one does not leave the
-            // previous organization's text — and its version — in the editor.
-            layerId = organization.id,
-            load = { repository.orgSettings(organization.id) },
-            save = { config, initScript, bakeScript, version ->
-                repository.saveOrgSettings(
-                    orgId = organization.id,
-                    config = config,
-                    initScript = initScript,
-                    bakeScript = bakeScript,
-                    version = version,
-                )
-            },
-            serverHost = serverHost,
-        )
-    }
-
-    val userBundle = state.user?.let { user ->
-        rememberConfigBundleEditor(
-            subject = "user config bundle",
-            description = "Your own config, setup script and bake script.",
-            layerId = user.id,
-            load = { repository.userSettings(user.id) },
-            save = { config, initScript, bakeScript, version ->
-                repository.saveUserSettings(
-                    userId = user.id,
-                    config = config,
-                    initScript = initScript,
-                    bakeScript = bakeScript,
-                    version = version,
-                )
-            },
-            serverHost = serverHost,
-        )
-    }
-
-    val organizationBundleContent: (@Composable () -> Unit)? = organizationBundle?.let { editor ->
-        {
-            ConfigBundleEditor(
-                editor = editor,
-                canEdit = state.canManageOrganization,
-                readOnlyReason = "Only organization managers can save changes here.",
-                dialogs = dialogs,
-            )
-        }
-    }
-    val userBundleContent: (@Composable () -> Unit)? = userBundle?.let { editor ->
-        { ConfigBundleEditor(editor = editor, dialogs = dialogs) }
-    }
 
     SettingsScreen(
         state = state,
@@ -241,13 +183,12 @@ fun SettingsScreen(
             onSaveSecret = viewModel::saveSecret,
             onDeleteSecret = viewModel::deleteSecret,
             onOpenEnvironments = onOpenEnvironments,
+            onOpenDashboard = viewModel::openDashboard,
             onRequestNotifications = viewModel::requestNotifications,
             onOpenNotificationSettings = viewModel::openNotificationSettings,
         ),
         modifier = modifier,
         dialogs = dialogs,
-        organizationBundle = organizationBundleContent,
-        userBundle = userBundleContent,
     )
 
     state.pendingLogin?.let { pending ->
@@ -272,15 +213,9 @@ fun SettingsScreen(
     dialogs: AppDialogHostState = rememberAppDialogHostState(),
     toastHostState: SnackbarHostState = rememberAppToastHostState(),
     listState: LazyListState = rememberLazyListState(),
-    organizationBundle: (@Composable () -> Unit)? = null,
-    userBundle: (@Composable () -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
-    val hasOrganizationBundle = organizationBundle != null
-    val hasUserBundle = userBundle != null
-    val keys = remember(state, hasOrganizationBundle, hasUserBundle) {
-        settingsItemKeys(state, hasOrganizationBundle, hasUserBundle)
-    }
+    val keys = remember(state) { settingsItemKeys(state) }
 
     val confirmDeleteSecret: (SecretMeta) -> Unit = { secret ->
         scope.launch {
@@ -358,8 +293,6 @@ fun SettingsScreen(
             keys = keys,
             state = state,
             actions = actions,
-            organizationBundle = organizationBundle,
-            userBundle = userBundle,
             onConfirmDeleteSecret = confirmDeleteSecret,
             onConfirmRemoveCredential = confirmRemoveCredential,
             onConfirmSignOut = confirmSignOut,
@@ -406,8 +339,7 @@ internal object SettingsItemKeys {
     const val PROVIDERS = "providers"
     const val SECRETS = "secrets"
     const val ENVIRONMENTS = "environments"
-    const val ORG_DEFAULTS = "org-defaults"
-    const val USER_DEFAULTS = "user-defaults"
+    const val DASHBOARD = "dashboard"
     const val NOTIFICATIONS = "notifications"
 }
 
@@ -416,18 +348,13 @@ internal object SettingsItemKeys {
  *
  * The single source of that order: each row's key is also its LazyColumn key.
  */
-internal fun settingsItemKeys(
-    state: SettingsState,
-    hasOrganizationBundle: Boolean,
-    hasUserBundle: Boolean,
-): List<String> = buildList {
+internal fun settingsItemKeys(state: SettingsState): List<String> = buildList {
     if (state.showsInitialProgress) add(SettingsItemKeys.LOADING)
     if (state.user != null) add(SettingsItemKeys.ACCOUNT)
     add(SettingsItemKeys.PROVIDERS)
     add(SettingsItemKeys.SECRETS)
     add(SettingsItemKeys.ENVIRONMENTS)
-    if (state.organization != null && hasOrganizationBundle) add(SettingsItemKeys.ORG_DEFAULTS)
-    if (state.user != null && hasUserBundle) add(SettingsItemKeys.USER_DEFAULTS)
+    add(SettingsItemKeys.DASHBOARD)
     add(SettingsItemKeys.NOTIFICATIONS)
 }
 
@@ -435,8 +362,6 @@ private fun LazyListScope.settingsRows(
     keys: List<String>,
     state: SettingsState,
     actions: SettingsActions,
-    organizationBundle: (@Composable () -> Unit)?,
-    userBundle: (@Composable () -> Unit)?,
     onConfirmDeleteSecret: (SecretMeta) -> Unit,
     onConfirmRemoveCredential: (CredentialStatus, String) -> Unit,
     onConfirmSignOut: () -> Unit,
@@ -487,13 +412,8 @@ private fun LazyListScope.settingsRows(
                     Spacer(Modifier.height(12.dp))
                 }
 
-                key == SettingsItemKeys.ORG_DEFAULTS -> {
-                    OrganizationDefaultsCard(state = state, bundle = organizationBundle)
-                    Spacer(Modifier.height(12.dp))
-                }
-
-                key == SettingsItemKeys.USER_DEFAULTS -> {
-                    UserDefaultsCard(bundle = userBundle)
+                key == SettingsItemKeys.DASHBOARD -> {
+                    DashboardCard(state = state, actions = actions)
                     Spacer(Modifier.height(12.dp))
                 }
 
@@ -525,27 +445,42 @@ private fun EnvironmentsCard(actions: SettingsActions) {
     }
 }
 
+/**
+ * Settings and environments are written in the server's web dashboard, not
+ * here: one editor, on a screen with room for scripts, rather than a copy in
+ * each app.
+ */
 @Composable
-private fun OrganizationDefaultsCard(state: SettingsState, bundle: (@Composable () -> Unit)?) {
-    val organization = state.organization ?: return
+private fun DashboardCard(state: SettingsState, actions: SettingsActions) {
     SettingsCard(
-        modifier = Modifier.testTag(SettingsTestTags.ORG_DEFAULTS_CARD),
-        title = "Organization defaults",
-        footer = "Applied under every environment for everyone in your organization.",
+        modifier = Modifier.testTag(SettingsTestTags.DASHBOARD_CARD),
+        title = "Defaults and environments",
+        footer = if (state.dashboardUrl != null) {
+            "Your own settings, your organization’s defaults and policy, and environments " +
+                "— called templates there — are changed in the web dashboard, in your browser."
+        } else {
+            null
+        },
     ) {
-        bundle?.invoke()
-    }
-}
-
-@Composable
-private fun UserDefaultsCard(bundle: (@Composable () -> Unit)?) {
-    SettingsCard(
-        modifier = Modifier.testTag(SettingsTestTags.USER_DEFAULTS_CARD),
-        title = "Your defaults",
-        footer = "Applied on top of the organization defaults in every pod you launch, " +
-            "whichever environment it uses.",
-    ) {
-        bundle?.invoke()
+        if (state.dashboardUrl != null) {
+            AppButton(
+                onClick = actions.onOpenDashboard,
+                modifier = Modifier.testTag(SettingsTestTags.OPEN_DASHBOARD),
+                kind = AppButtonKind.Tinted,
+                semanticsLabel = "Open web dashboard",
+            ) {
+                AppButtonContent(icon = AppIcons.openExternal, label = "Web dashboard")
+            }
+            state.dashboardStatus?.let { status ->
+                Spacer(Modifier.height(8.dp))
+                SettingsStatusLabel(status)
+            }
+        } else {
+            SettingsFootnote(
+                "This server has no web dashboard. Change your own settings, your " +
+                    "organization’s defaults and policy, and environments with the pipod CLI.",
+            )
+        }
     }
 }
 
@@ -1029,8 +964,8 @@ object SettingsTestTags {
     const val SECRETS_CARD = "settings-secrets"
     const val ENVIRONMENTS_CARD = "settings-environments"
     const val ENVIRONMENTS_ROW = "settings-environments-row"
-    const val ORG_DEFAULTS_CARD = "settings-org-defaults"
-    const val USER_DEFAULTS_CARD = "settings-user-defaults"
+    const val DASHBOARD_CARD = "settings-dashboard"
+    const val OPEN_DASHBOARD = "settings-open-dashboard"
     const val NOTIFICATIONS_CARD = "settings-notifications"
     const val ORGANIZATION_TOGGLE = "settings-organization-toggle"
     const val ORGANIZATION_ALIAS = "settings-organization-alias"

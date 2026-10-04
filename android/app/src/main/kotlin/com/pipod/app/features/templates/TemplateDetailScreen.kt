@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,20 +30,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.pipod.app.core.api.model.EnvironmentEditorData
-import com.pipod.app.core.api.model.PodTemplate
 import com.pipod.app.core.api.model.SecretMeta
 import com.pipod.app.features.common.SecretEntryFields
 import com.pipod.app.features.common.UnsupportedListItemCard
-import com.pipod.app.ui.AppButton
-import com.pipod.app.ui.AppButtonKind
 import com.pipod.app.ui.AppDialogHost
 import com.pipod.app.ui.AppDialogHostState
 import com.pipod.app.ui.AppIconButton
 import com.pipod.app.ui.AppIcons
 import com.pipod.app.ui.AppListScaffold
 import com.pipod.app.ui.AppListSection
-import com.pipod.app.ui.AppProgressBar
 import com.pipod.app.ui.AppSectionStyle
 import com.pipod.app.ui.AppSelectableText
 import com.pipod.app.ui.AppSeparator
@@ -57,44 +51,22 @@ import kotlinx.coroutines.launch
  * The environment detail, wired to its view model.
  *
  * Port of `TemplateDetailView` in
- * `pi-pod-flutter/lib/features/templates/template_list_view.dart`.
- *
- * @param onEdit receives the editor data the form needs. It is fetched here
- *   rather than by the editor, because a detail that already has it should not
- *   make the reader wait for a second round trip to start typing.
+ * `pi-pod-flutter/lib/features/templates/template_list_view.dart`. Everything but
+ * the secrets is read-only: environments are changed in the web dashboard.
  */
 @Composable
 fun TemplateDetailScreen(
     viewModel: TemplateDetailViewModel,
     onBack: () -> Unit,
-    onEdit: (PodTemplate, EnvironmentEditorData) -> Unit,
     modifier: Modifier = Modifier,
-    onChanged: () -> Unit = {},
     dialogs: AppDialogHostState = rememberAppDialogHostState(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(viewModel) {
-        viewModel.events.collect { event ->
-            when (event) {
-                TemplateDetailEvent.Changed -> onChanged()
-                TemplateDetailEvent.Deleted -> onBack()
-            }
-        }
-    }
 
     TemplateDetailScreen(
         state = state,
         onBack = onBack,
         onRefresh = viewModel::refresh,
-        onEdit = {
-            scope.launch {
-                val data = viewModel.editorDataForEditing() ?: return@launch
-                onEdit(state.template, data)
-            }
-        },
-        onDelete = viewModel::deleteTemplate,
         onSecretNameChange = viewModel::setSecretName,
         onSecretValueChange = viewModel::setSecretValue,
         onSaveSecret = viewModel::saveSecret,
@@ -111,8 +83,6 @@ fun TemplateDetailScreen(
     state: TemplateDetailState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
     onSecretNameChange: (String) -> Unit,
     onSecretValueChange: (String) -> Unit,
     onSaveSecret: () -> Unit,
@@ -128,7 +98,7 @@ fun TemplateDetailScreen(
     val confirming = remember { mutableStateOf(false) }
 
     // An unsaved secret draft blocks the system back gesture until it is
-    // confirmed, the same way the editor guards unsaved changes. A save in
+    // confirmed. A save in
     // flight blocks it outright: back must not drop a pending write.
     BackHandler(enabled = state.isSavingSecret || state.hasSecretDraft) {
         if (state.isSavingSecret || !state.hasSecretDraft || confirming.value) return@BackHandler
@@ -163,33 +133,9 @@ fun TemplateDetailScreen(
         isRefreshing = state.isRefreshing,
         refreshSemanticsLabel = "Refresh environment $name",
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
-        actions = {
-            AppButton(
-                text = "Edit",
-                onClick = onEdit,
-                kind = AppButtonKind.Plain,
-                enabled = !state.isDeleting,
-                semanticsLabel = "Edit environment $name",
-                modifier = Modifier.testTag(TemplateDetailTestTags.EDIT),
-            )
-        },
     ) {
         templateDetailRows(
             state = state,
-            onDelete = {
-                scope.launch {
-                    val confirmed = dialogs.confirm(
-                        title = "Delete “$name”?",
-                        message = "New pods can no longer be launched from it. " +
-                            "Pods already running are unaffected.",
-                        confirmLabel = "Delete environment",
-                        destructive = true,
-                        confirmSemanticsLabel = "Confirm delete detail environment $name",
-                        cancelSemanticsLabel = "Cancel deleting $name",
-                    )
-                    if (confirmed) onDelete()
-                }
-            },
             onSecretNameChange = onSecretNameChange,
             onSecretValueChange = onSecretValueChange,
             onSaveSecret = onSaveSecret,
@@ -214,14 +160,11 @@ fun TemplateDetailScreen(
 
 private fun LazyListScope.templateDetailRows(
     state: TemplateDetailState,
-    onDelete: () -> Unit,
     onSecretNameChange: (String) -> Unit,
     onSecretValueChange: (String) -> Unit,
     onSaveSecret: () -> Unit,
     onDeleteSecret: (SecretMeta) -> Unit,
 ) {
-    val name = state.template.name
-
     val message = state.message
     if (message != null) {
         item(key = "message") {
@@ -231,7 +174,10 @@ private fun LazyListScope.templateDetailRows(
     }
 
     item(key = "overview") {
-        SectionCard(modifier = Modifier.testTag(TemplateDetailTestTags.OVERVIEW)) {
+        SectionCard(
+            footer = "To change this environment, open the web dashboard from Settings.",
+            modifier = Modifier.testTag(TemplateDetailTestTags.OVERVIEW),
+        ) {
             LabeledValue(label = "Status", value = state.statusLabel)
             state.template.description?.takeIf { it.isNotEmpty() }?.let {
                 LabeledValue(label = "Description", value = it)
@@ -259,7 +205,9 @@ private fun LazyListScope.templateDetailRows(
         item(key = "agent-instructions") {
             SectionCard(
                 title = "Agent instructions",
-                footer = TemplateEditorState.AGENT_INSTRUCTIONS_FOOTER,
+                footer = "Added to the agent's system prompt in every pod launched from this " +
+                    "environment, with the hosts and secrets the pod actually has. Nothing " +
+                    "enforces them: the secrets and network policy decide what a pod can reach.",
                 modifier = Modifier.testTag(TemplateDetailTestTags.AGENT_INSTRUCTIONS),
             ) {
                 if (instructions.isEmpty()) {
@@ -304,13 +252,11 @@ private fun LazyListScope.templateDetailRows(
             footer = "Runs when the environment image is built, not each time a pod launches.",
             modifier = Modifier.testTag(TemplateDetailTestTags.BAKE_SCRIPT),
         ) {
-            val bake = state.editorData?.bakeScript
-            when {
-                state.editorData == null ->
-                    AppProgressBar(progress = null, modifier = Modifier.fillMaxWidth())
-
-                bake.isNullOrEmpty() -> Text("No bake script.")
-                else -> AppSelectableText(
+            val bake = state.template.bakeScript
+            if (bake.isNullOrEmpty()) {
+                Text("No bake script.")
+            } else {
+                AppSelectableText(
                     text = bake,
                     style = MonospaceTextStyle,
                     semanticsLabel = "Bake script: $bake",
@@ -326,24 +272,19 @@ private fun LazyListScope.templateDetailRows(
             footer = "Controls which hosts pods launched from this environment can reach.",
             modifier = Modifier.testTag(TemplateDetailTestTags.NETWORK),
         ) {
-            val data = state.editorData
-            if (data == null) {
-                AppProgressBar(progress = null, modifier = Modifier.fillMaxWidth())
-            } else {
-                val egress = EgressSettings.from(data.config)
-                LabeledValue(
-                    label = "Network access",
-                    value = if (egress.restricted) "Restricted" else "Open",
-                )
-                LabeledValue(
-                    label = "Built-in services",
-                    value = if (egress.builtins) "Allowed" else "Blocked",
-                )
-                LabeledValue(
-                    label = "Allowed hosts",
-                    value = if (egress.allow.isEmpty()) "None" else egress.allow.joinToString(", "),
-                )
-            }
+            val egress = EgressSettings.from(state.template.config)
+            LabeledValue(
+                label = "Network access",
+                value = if (egress.restricted) "Restricted" else "Open",
+            )
+            LabeledValue(
+                label = "Built-in services",
+                value = if (egress.builtins) "Allowed" else "Blocked",
+            )
+            LabeledValue(
+                label = "Allowed hosts",
+                value = if (egress.allow.isEmpty()) "None" else egress.allow.joinToString(", "),
+            )
         }
         Spacer(Modifier.height(12.dp))
     }
@@ -384,22 +325,6 @@ private fun LazyListScope.templateDetailRows(
         }
         Spacer(Modifier.height(12.dp))
     }
-
-    item(key = "delete") {
-        SectionCard(modifier = Modifier.testTag(TemplateDetailTestTags.DELETE_SECTION)) {
-            AppButton(
-                text = if (state.isDeleting) "Deleting…" else "Delete environment",
-                onClick = onDelete,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag(TemplateDetailTestTags.DELETE),
-                kind = AppButtonKind.Plain,
-                destructive = true,
-                enabled = !state.isDeleting,
-                semanticsLabel = "Delete detail environment $name",
-            )
-        }
-    }
 }
 
 /** A titled block of form content, the shape every section on this screen takes. */
@@ -436,7 +361,7 @@ internal fun LabeledValue(label: String, value: String) {
 /**
  * What just happened, announced as it appears.
  *
- * It is a live region because the thing it reports — a secret saved, a delete
+ * It is a live region because the thing it reports — a secret saved, a refresh
  * that failed — happens somewhere else on the screen than where the reader's
  * focus is.
  */
@@ -479,14 +404,11 @@ internal fun StatusCard(message: String, isError: Boolean) {
 /** The handles a UI test finds this screen's parts by. */
 object TemplateDetailTestTags {
     const val SCREEN = "environment-detail-screen"
-    const val EDIT = "environment-detail-edit"
     const val OVERVIEW = "environment-detail-overview"
     const val AGENT_INSTRUCTIONS = "environment-detail-agent-instructions"
     const val SETUP_SCRIPT = "environment-detail-setup-script"
     const val BAKE_SCRIPT = "environment-detail-bake-script"
     const val NETWORK = "environment-detail-network"
     const val SECRETS = "environment-detail-secrets"
-    const val DELETE_SECTION = "environment-detail-delete-section"
-    const val DELETE = "environment-detail-delete"
     const val STATUS_CARD = "environment-status-card"
 }

@@ -156,16 +156,6 @@ fun SettingsSectionError(
     }
 }
 
-/** The subheading above a field or a comparison inside a settings card. */
-@Composable
-fun SettingsFieldLabel(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        modifier = modifier,
-        style = MaterialTheme.typography.titleSmall,
-    )
-}
-
 /** A footnote under a card's contents, in the same voice as a section footer. */
 @Composable
 fun SettingsFootnote(text: String, modifier: Modifier = Modifier) {
