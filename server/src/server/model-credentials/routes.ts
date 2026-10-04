@@ -14,7 +14,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { audit } from "../audit.js";
 import type { AuthContext } from "../auth/plugin.js";
 import { HttpError, notFound } from "../httperrors.js";
-import { withPodSandbox } from "../pods/lifecycle.js";
+import { reapplyCredentialLeaseInStartedPods, withPodSandbox } from "../pods/lifecycle.js";
 import { assertPodAccess } from "../pods/access.js";
 import { getPod } from "../pods/store.js";
 import type { PodServiceDeps } from "../pods/types.js";
@@ -373,8 +373,16 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
       schema: { params: ProviderParams },
     },
     async (req, reply) => {
-      const removed = await broker.remove(subjectOf(req.auth), req.params.providerId);
+      const subject = subjectOf(req.auth);
+      const removed = await broker.remove(subject, req.params.providerId);
       if (!removed) throw notFound("credential not found");
+      const podDeps = deps.podDeps;
+      if (podDeps) {
+        // Not awaited: a slow host must not hold up the removal itself.
+        void reapplyCredentialLeaseInStartedPods(podDeps, subject, req.params.providerId).catch(() => {
+          podDeps.log.warn(`removing ${req.params.providerId} from started pods failed; they drop it on wake`);
+        });
+      }
       return reply.code(204).send();
     },
   );

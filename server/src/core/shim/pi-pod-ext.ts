@@ -11,7 +11,7 @@
  * event directly; remote TUI mirrors it through a private OSC beacon.
  */
 import type { SessionNaming } from "../config.js";
-import { POD_PI_AGENT_DIR } from "../hostconfig.js";
+import { POD_LEASED_PROVIDERS_PATH, POD_PI_AGENT_DIR } from "../hostconfig.js";
 import { POD_TITLE_MARKER } from "../client/pod-title.js";
 import { buildEchoBeaconSource } from "./echo-beacon.js";
 import { buildPodCompanionSource } from "./pod-companion-source.js";
@@ -1321,6 +1321,7 @@ const SESSION_NAMING_SOURCE = `
  */
 const BROKER_SYNC_SOURCE = `
   const brokerAuthPath = ${JSON.stringify(`${POD_PI_AGENT_DIR}/auth.json`)};
+  const brokerLeasedPath = ${JSON.stringify(POD_LEASED_PROVIDERS_PATH)};
   const brokerUrl = (process.env.PI_POD_SERVER_URL || "").replace(/\\/+$/, "");
   const brokerToken = process.env.PI_POD_SERVER_TOKEN || "";
   const brokerPodId = process.env.PI_POD_SERVER_POD_ID || "";
@@ -1362,8 +1363,23 @@ const BROKER_SYNC_SOURCE = `
           const parsed = JSON.parse(fs.readFileSync(brokerAuthPath, "utf8"));
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) local = parsed;
         } catch {}
-        const mergedEntries = { ...local, ...remoteEntries };
+        // Same rule as the server's materializer: a key the previous lease wrote and this one
+        // omits was removed from the account. A pod without the record predates it; only the
+        // server can tell which of its keys the lease owns, so leave the record to its next pass.
+        let leased = null;
+        try {
+          const record = JSON.parse(fs.readFileSync(brokerLeasedPath, "utf8"));
+          if (record && Array.isArray(record.providers)) leased = record.providers;
+        } catch {}
+        const mergedEntries = { ...local };
+        for (const id of leased ?? []) {
+          if (!Object.hasOwn(remoteEntries, id)) delete mergedEntries[id];
+        }
+        Object.assign(mergedEntries, remoteEntries);
         writeIfChanged(fs, brokerAuthPath, JSON.stringify(mergedEntries, null, 2) + "\\n");
+        if (leased) {
+          writeIfChanged(fs, brokerLeasedPath, JSON.stringify({ providers: Object.keys(remoteEntries).sort() }, null, 2) + "\\n");
+        }
         lastRevision = body.revision;
       } catch {
         // best-effort: the next poll retries

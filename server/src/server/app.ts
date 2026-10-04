@@ -35,6 +35,7 @@ import {
   fleetUnavailableDetail,
   isProviderValidationFailure,
   launchAdmissionHeldDetail,
+  redactUrlForLog,
   renderBoatHostDemand,
   sanitizeForLog,
   scrubValidationIssues,
@@ -92,7 +93,18 @@ function safeLogger(level: string) {
   return pino({
     level,
     redact: { paths: PINO_REDACT_PATHS, censor: "[redacted]" },
-    serializers: { err: (error: unknown) => sanitizeForLog(error) },
+    serializers: {
+      err: (error: unknown) => sanitizeForLog(error),
+      // Fastify's request serializer, with credential query values redacted from the URL.
+      req: (req: FastifyRequest) => ({
+        method: req.method,
+        url: redactUrlForLog(req.url),
+        version: req.headers?.["accept-version"],
+        host: req.host,
+        remoteAddress: req.ip,
+        remotePort: req.socket?.remotePort,
+      }),
+    },
   });
 }
 

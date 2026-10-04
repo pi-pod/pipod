@@ -352,12 +352,13 @@ async function removeCredential(args: string[], flags: CredentialsFlags): Promis
     });
   }
   const approved = await confirm(
-    `Remove the saved ${providerId} sign-in? Pods using it will need a reconnect.`,
+    `Remove the saved ${providerId} sign-in? Pods stop using it.`,
     { nonInteractiveDefault: false, assumeYes: yes },
   );
   if (!approved) throw new CancelledError("Credential removal cancelled");
   await clientFor(flags).deleteModelCredential(providerId);
-  info(`removed the saved ${providerId} sign-in`);
+  info(`removed the saved ${providerId} sign-in; pods stop using it`);
+  info(`${providerId} still accepts it until you revoke it there; do that if a pod may have exposed it`);
   return 0;
 }
 

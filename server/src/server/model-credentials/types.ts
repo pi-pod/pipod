@@ -40,6 +40,12 @@ export type CredentialStatus =
 
 export interface CredentialLease {
   revision: string;
+  /**
+   * The provider ids this lease answers for: the pod's contract. {@link acquireLease} always
+   * sets it; without it a lease cannot vouch for keys a pod holds from before the materializer
+   * recorded what it wrote, so it leaves them.
+   */
+  scope?: readonly string[];
   providers: Record<
     string,
     {

@@ -347,6 +347,30 @@ export async function materializePodCredentialLeaseBestEffort(
   }
 }
 
+/**
+ * Re-apply the lease in the owner's started pods that contract `providerId`, so a removed
+ * account credential leaves them now rather than at their next ten-minute lease poll. A pod
+ * this misses — asleep, or its host unreachable — drops it on wake, or at that poll once the
+ * pod has a lease record (`POD_LEASED_PROVIDERS_PATH`).
+ */
+export async function reapplyCredentialLeaseInStartedPods(
+  deps: PodServiceDeps,
+  subject: { orgId: string; userId: string },
+  providerId: string,
+): Promise<void> {
+  const pods = await query<PodRow>(
+    `SELECT * FROM pods
+      WHERE org_id = $1 AND user_id = $2 AND state = 'active' AND provider_state = 'started'
+        AND provider_sandbox_id IS NOT NULL AND $3 = ANY(credential_providers)`,
+    [subject.orgId, subject.userId, providerId],
+  );
+  for (const pod of pods.rows) {
+    await withPodSandbox(deps, pod, (sandbox) => materializePodCredentialLeaseBestEffort(deps, pod, sandbox)).catch(() => {
+      deps.log.warn(`pod ${pod.id} was unreachable to drop a removed ${providerId} credential; it drops it on wake`);
+    });
+  }
+}
+
 /** @deprecated Provider state is no longer projected into logical lifecycle state. */
 export function stateAfterPodCommand(_command: ProviderPodCommand, providerState: SandboxState): SandboxState {
   return providerState;

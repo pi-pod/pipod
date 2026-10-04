@@ -44,6 +44,13 @@ export const HOST_PI_AGENT_SUBPATH = path.join(".pi", "agent");
 export const POD_PI_AGENT_DIR = "/root/.pi/agent";
 
 /**
+ * Beside the pod's `auth.json`: `{ "providers": [...] }`, the provider ids the last account
+ * credential lease wrote there, never values. The server's lease materializer and the pod's
+ * lease poll both maintain it, so a provider the lease stops carrying leaves `auth.json`.
+ */
+export const POD_LEASED_PROVIDERS_PATH = `${POD_PI_AGENT_DIR}/pipod-leased.json`;
+
+/**
  * Top-level files that may travel when `settings` is on.
  *
  * `models.json` rides along with `settings.json` because it is the other half of one choice:
@@ -71,8 +78,10 @@ export const SETTINGS_FILES = ["settings.json", "models.json", "mcporter.json"] 
  *
  * `deviceId` (pi 1.0) identifies the installation to OpenAI when it signs in with ChatGPT; pi
  * keeps it out of project settings so clones never share one, and a pod is its own installation.
+ * `trackingId` is the installation's analytics identifier, created when someone opts in; pi's
+ * bug reports leave out both.
  */
-export const HOST_COUPLED_SETTINGS_KEYS = ["hooks", "mcpServers", "deviceId"] as const;
+export const HOST_COUPLED_SETTINGS_KEYS = ["hooks", "mcpServers", "deviceId", "trackingId"] as const;
 
 const ENV_REFERENCE = /^\$(?:[A-Z_][A-Z0-9_]*|\{[A-Z_][A-Z0-9_]*\})$/;
 const CREDENTIAL_FIELD =

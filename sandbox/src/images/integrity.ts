@@ -46,6 +46,28 @@ export async function layerTreeDigest(root: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/**
+ * What a tree looks like to the filesystem, without reading file contents: every entry's path,
+ * type, mode, owner, size, inode, link count, mtime and ctime. Writing, truncating, linking,
+ * renaming, removing, chmod, chown and xattr changes all move ctime, which userspace cannot set
+ * back, so an unchanged fingerprint means nothing changed the tree through the filesystem since
+ * {@link layerTreeDigest} verified it. Only the content digest sees silent media corruption.
+ * GNU find walks a base image's ~36k entries in a fraction of a second; Node's per-call
+ * overhead made the same walk take seconds.
+ */
+export async function layerTreeFingerprint(root: string): Promise<string> {
+  await lstat(root); // a missing tree is ENOENT, as for layerTreeDigest
+  // latin1 maps each byte to one character, so any file name survives the round trip.
+  const { stdout } = await exec("find", [root, "-printf", "%P\\0%y %m %U %G %s %i %n %T@ %C@\\0"], {
+    encoding: "latin1",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const fields = stdout.split("\0");
+  const entries: string[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) entries.push(`${JSON.stringify(fields[i])} ${fields[i + 1]}`);
+  return createHash("sha256").update(entries.sort().join("\n")).digest("hex");
+}
+
 export async function fileDigest(file: string, algorithm: string): Promise<string> {
   const hash = createHash(algorithm);
   for await (const chunk of createReadStream(file)) hash.update(chunk);

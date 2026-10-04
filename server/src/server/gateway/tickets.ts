@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { query } from "../db/index.js";
 import { unauthorized } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
@@ -8,13 +8,20 @@ const TICKET_TTL_MS = 60 * 1000;
 /**
  * One-shot WebSocket tickets (spec §4.1, §13): short expiry, bound to (user, pod), single
  * use — the JWT itself never appears in a URL.
+ *
+ * `ws_tickets.ticket` holds the ticket's SHA-256, never the ticket, so reading the table does
+ * not let anyone attach.
  */
+function ticketDigest(ticket: string): string {
+  return createHash("sha256").update(ticket).digest("hex");
+}
+
 export async function mintTicket(userId: string, podId: string): Promise<{ ticket: string; expiresAt: string }> {
   const ticket = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + TICKET_TTL_MS).toISOString();
   await query(
     "INSERT INTO ws_tickets (id, ticket, user_id, pod_id, expires_at) VALUES ($1, $2, $3, $4, $5)",
-    [uuidv7(), ticket, userId, podId, expiresAt],
+    [uuidv7(), ticketDigest(ticket), userId, podId, expiresAt],
   );
   return { ticket, expiresAt };
 }
@@ -33,7 +40,7 @@ export async function consumeTicket(
      )
      SELECT consumed.user_id, pods.org_id
      FROM consumed JOIN pods ON pods.id = consumed.pod_id`,
-    [ticket, podId],
+    [ticketDigest(ticket), podId],
   );
   const row = rows.rows[0];
   if (!row) throw unauthorized("invalid, expired, or already-used ticket");
@@ -47,6 +54,6 @@ export async function consumeTicket(
 export async function refundTicket(ticket: string): Promise<void> {
   await query(
     "UPDATE ws_tickets SET used_at = NULL WHERE ticket = $1 AND expires_at > now()",
-    [ticket],
+    [ticketDigest(ticket)],
   );
 }

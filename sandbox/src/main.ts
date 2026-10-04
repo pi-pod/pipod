@@ -20,6 +20,8 @@ import {
 } from "./metrics.js";
 
 const VERSION = "0.1.0";
+/** How often verified image lowers have their contents re-hashed after boot. */
+const IMAGE_SCRUB_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -67,6 +69,24 @@ export async function main(): Promise<void> {
   const reaper = new Reaper(cfg, store, manager, cgroups, objects, log, metrics);
   reaper.start();
 
+  // Resolve checks each lower's fingerprint; this re-hashes their contents for corruption
+  // beneath the filesystem. Chained, so a slow pass never overlaps the next.
+  let imageScrub: NodeJS.Timeout | undefined;
+  const scheduleImageScrub = (): void => {
+    imageScrub = setTimeout(() => {
+      void ociImages.scrub().then(
+        (forgotten) => {
+          for (const digest of forgotten) log.error({ digest }, "image layer no longer matches its verified contents; the next pull repairs it");
+        },
+        (err: unknown) => log.error({ err }, "image layer scrub failed"),
+      ).finally(() => {
+        if (!shutdownStarted) scheduleImageScrub();
+      });
+    }, IMAGE_SCRUB_INTERVAL_MS);
+    imageScrub.unref();
+  };
+  scheduleImageScrub();
+
   metrics.bind({
     snapshot: () => ({
       ...manager.metricsSnapshot(),
@@ -105,6 +125,7 @@ export async function main(): Promise<void> {
     shutdownStarted=true;
     log.info({ signal }, "shutting down");
     reaper.stop();
+    clearTimeout(imageScrub);
     // Closing admission precedes quiescence. The service manager's stop deadline
     // is the outer bound; never close SQLite or write a hold midway through an
     // archive/delete that is already inside its serialized critical section.
