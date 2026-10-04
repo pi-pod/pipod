@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.pipod.app.core.session.SessionUsage
 import com.pipod.app.ui.AppListPadding
@@ -57,7 +58,17 @@ internal fun SessionUsageStrip(usage: SessionUsage, onClick: () -> Unit, modifie
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val spend = listOfNotNull(usage.tokenSummary, usage.costSummary).joinToString("  ")
-        if (spend.isNotEmpty()) Text(spend, style = style, color = appColors.secondaryLabel, maxLines = 1)
+        if (spend.isNotEmpty()) {
+            // At large font scales the spend gives way, so the context warning stays visible.
+            Text(
+                text = spend,
+                style = style,
+                color = appColors.secondaryLabel,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
         usage.contextSummary?.let { context ->
             if (spend.isNotEmpty()) Spacer(Modifier.width(8.dp))
             Text(

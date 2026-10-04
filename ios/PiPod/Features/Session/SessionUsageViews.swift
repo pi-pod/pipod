@@ -8,11 +8,13 @@ struct SessionUsageButton: View {
 
     var body: some View {
         Button(action: action) {
-            // The model name beside this keeps priority; the token counts are
-            // the first thing to go when the row runs short.
+            // The model name beside this keeps priority. When the row runs
+            // short the token counts go first, then the cost; the context
+            // figure, which warns before compaction, goes last.
             ViewThatFits(in: .horizontal) {
-                line(showsTokens: true)
-                line(showsTokens: false)
+                line(showsTokens: true, showsCost: true)
+                line(showsTokens: false, showsCost: true)
+                line(showsTokens: false, showsCost: false)
             }
             .font(.caption.monospacedDigit())
             .frame(minHeight: 44)
@@ -24,10 +26,12 @@ struct SessionUsageButton: View {
         .accessibilityIdentifier("composer.usage")
     }
 
-    private func line(showsTokens: Bool) -> some View {
+    private func line(showsTokens: Bool, showsCost: Bool) -> some View {
         HStack(spacing: 6) {
             if showsTokens, let tokens = usage.tokenSummary { Text(tokens) }
-            if let cost = usage.costSummary { Text(cost) }
+            if showsCost || usage.contextSummary == nil, let cost = usage.costSummary {
+                Text(cost)
+            }
             if let context = usage.contextSummary {
                 Text(context).foregroundStyle(usage.contextTone?.color ?? AppColors.secondaryLabel)
             }
