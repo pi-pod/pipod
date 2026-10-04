@@ -73,6 +73,12 @@ export interface PodExtensionOptions {
     /** The launcher version those docs belong to. */
     version: string;
   };
+  /**
+   * What the agent is told about the template its pod launched from: the author's instructions
+   * and what the platform enforces (server/pods/template-brief.ts). Appended to the system
+   * prompt whole, on every turn: it is short, and it bears on every action the agent takes.
+   */
+  templateBrief?: string;
 }
 
 /** Versioned, private command protocol shared by the generated extension and client. */
@@ -1154,18 +1160,39 @@ export default function piPodExtension(pi) {
   installPiPodWorkMarker(pi);
   ${mode === "tui" ? "installPiPodSessionNameBeacon(pi);" : ""}
   ${mode === "tui" && opts.localEcho === true ? "installPiPodEchoBeacon(pi);" : ""}
-${naming === "auto" ? SESSION_NAMING_SOURCE : ""}${opts.docs ? docsPointerSource(opts.docs) : ""}${BROKER_SYNC_SOURCE}}
+${naming === "auto" ? SESSION_NAMING_SOURCE : ""}${systemPromptSource(opts)}${BROKER_SYNC_SOURCE}}
 `;
 }
 
 /**
- * Spliced into the generated extension only when the launcher uploaded its documentation
- * beside the extension (src/poddocs.ts). Appends a short pointer to the system prompt on
- * every turn — where the docs are and when to read them — so the agent can answer questions
- * about its own pod from the installed version's reference instead of from memory.
+ * What the extension adds to the system prompt on every turn, in one handler so the additions
+ * keep a fixed order whatever Pi does with several: the documentation pointer, then the
+ * template brief. Nothing at all when the pod has neither.
  */
-function docsPointerSource(docs: { dir: string; files: string[]; version: string }): string {
-  const note = [
+function systemPromptSource(opts: Pick<PodExtensionOptions, "docs" | "templateBrief">): string {
+  const notes = [
+    ...(opts.docs ? [docsPointerNote(opts.docs)] : []),
+    ...(opts.templateBrief ? [opts.templateBrief] : []),
+  ];
+  if (notes.length === 0) return "";
+  return `
+  // Point the agent at the uploaded pi-pod documentation (src/poddocs.ts) and tell it about the
+  // template this pod launched from (server/pods/template-brief.ts).
+  pi.on("before_agent_start", (event) => ({
+    systemPrompt: event.systemPrompt + "\\n\\n" + ${JSON.stringify(notes.join("\n\n"))},
+  }));
+`;
+}
+
+/**
+ * Included only when the launcher uploaded its documentation beside the extension
+ * (src/poddocs.ts): a short pointer, on every turn, to where the docs are and when to read
+ * them, so the agent can answer questions about its own pod from the installed version's
+ * reference instead of from memory. A pointer, not the text: the reference is long and only
+ * relevant when the conversation turns to pi-pod.
+ */
+function docsPointerNote(docs: { dir: string; files: string[]; version: string }): string {
+  return [
     "## pi-pod environment",
     "This session runs inside a pi-pod sandbox, managed by pi-pod v" + docs.version + " on the user's machine. The",
     "documentation for that exact pi-pod version is on this pod's filesystem under " + docs.dir + ":",
@@ -1174,13 +1201,6 @@ function docsPointerSource(docs: { dir: string; files: string[]; version: string
     "configuration, read reference.md there first (the full annotated reference) and answer or edit from it.",
     "Do not answer pi-pod questions from memory — what you know may be a different pi-pod version's behavior.",
   ].join("\n");
-  return `
-  // Point the agent at the uploaded pi-pod documentation (src/poddocs.ts). A pointer, not the
-  // text: the reference is long and only relevant when the conversation turns to pi-pod.
-  pi.on("before_agent_start", (event) => ({
-    systemPrompt: event.systemPrompt + "\\n\\n" + ${JSON.stringify(note)},
-  }));
-`;
 }
 
 /**

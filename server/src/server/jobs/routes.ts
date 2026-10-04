@@ -7,7 +7,7 @@ import { query, tx, type Queryable } from "../db/index.js";
 import { badRequest, forbidden, conflict, notFound } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import { readLayer } from "../settings/merge.js";
-import { nestedPodsPolicy } from "../pods/lineage.js";
+import { delegatedTemplateId, nestedPodsPolicy, parentDelegation } from "../pods/lineage.js";
 import {
   assertJobScopeChange,
   assertJobTemplateScope,
@@ -191,14 +191,18 @@ export function registerJobRoutes(app: FastifyInstance): void {
       schema: { body: JobBody },
     },
     async (req, reply) => {
+      let templateId = req.body.templateId ?? null;
       if (!req.auth.podId) requirePermission(req.auth, "jobs:write");
       else {
         if (req.body.scope === "org") throw forbidden("pod tokens may only create personal jobs");
-        // A pod's job launches pods later on its behalf: the same policy as launching them now.
+        // A pod's job launches pods later on its behalf: the same policy as launching them now,
+        // and the same template a child of this pod would get.
         const policy = await readLayer("org_policy", req.auth.orgId, req.auth.orgId);
         if (!nestedPodsPolicy(policy.config ?? {}).enabled) {
           throw forbidden("org policy nestedPods.enabled is false: pods may not schedule jobs");
         }
+        const delegation = await parentDelegation({ query }, { orgId: req.auth.orgId, parentPodId: req.auth.podId });
+        templateId = delegatedTemplateId(templateId, delegation);
       }
       const trigger = normalizeJobTrigger(req.body.trigger);
       parseModelRef(req.body.model);
@@ -211,10 +215,10 @@ export function registerJobRoutes(app: FastifyInstance): void {
         ? "(org_id, user_id, name) WHERE archived_at IS NULL AND scope = 'user'"
         : "(org_id, name) WHERE archived_at IS NULL AND scope = 'org'";
       const inserted = await tx(async (client) => {
-        if (req.body.templateId) {
+        if (templateId) {
           await lockTemplateForJob(client, {
             orgId: req.auth.orgId,
-            templateId: req.body.templateId,
+            templateId,
             userId: req.auth.userId,
             jobScope: scope,
             activeDefinition: true,
@@ -234,7 +238,7 @@ export function registerJobRoutes(app: FastifyInstance): void {
             req.body.description ?? null,
             status,
             JSON.stringify(trigger),
-            req.body.templateId ?? null,
+            templateId,
             req.body.model,
             req.body.prompt,
             req.auth.podId ?? null,

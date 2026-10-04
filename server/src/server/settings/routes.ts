@@ -159,7 +159,8 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
         initScript: template.init_script ?? "",
         bakeScript: template.bake_script ?? "",
         piFiles: template.pi_settings,
-      } satisfies SettingsLayerRow & { id: string; name: string; scope: "user" | "org" },
+        agentInstructions: template.agent_instructions ?? "",
+      } satisfies SettingsLayerRow & { id: string; name: string; scope: "user" | "org"; agentInstructions: string },
     };
   });
 }

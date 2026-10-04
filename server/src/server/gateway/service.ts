@@ -44,6 +44,7 @@ import {
 } from "../pods/fork-seed.js";
 import { podRuntimePaths } from "../pods/runtime-paths.js";
 import { getPod } from "../pods/store.js";
+import { podExtensionSettings } from "../pods/template-brief.js";
 import { runCreateRecovery } from "../pods/create-recovery.js";
 import { assertLaunchGateOpen, launchGateIsOpen } from "../pods/launch-control.js";
 import { hostForPod, hostCanDial, personalBoatHostIsAsleep, requireHostAwake } from "../pods/hostidentity.js";
@@ -926,7 +927,7 @@ export class GatewayService {
           const seed = await loadUnconsumedForkSeed(pod.id);
           const forkPath = seed ? paths.forkSeed : undefined;
           const [, identityEnv] = await Promise.all([
-            prepareGatewayRuntime(sandbox, report.workdir, report.config.pi.sessionNaming, paths),
+            prepareGatewayRuntime(sandbox, report.workdir, podExtensionSettings(report), paths),
             podIdentityEnv(this.deps.env, pod),
             seed
               ? sandbox.uploadFile(paths.forkSeed, seed.content, 0o600)

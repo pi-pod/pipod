@@ -8,8 +8,9 @@ export function renderPodSkill(): string {
 name: pi-pod
 description: >
   Use when the user wants to create or edit a pi pod "pod template" (secrets + init
-  and bake scripts + network egress), create or activate a scheduled job, or asks how this pod
-  / pi pod works. Covers the pi-pod-server REST API and the scoped pod token this pod holds.
+  and bake scripts + network egress + agent instructions), create or activate a scheduled job,
+  launch child pods, or asks how this pod / pi pod works or what access it is meant to have.
+  Covers the pi-pod-server REST API and the scoped pod token this pod holds.
 ---
 
 # pi pod: pods, templates, and the server API
@@ -23,13 +24,31 @@ created from a **pod template** — a named bundle of:
 - an optional **bake script** (deterministic setup baked into the pod image once, so later
   launches skip it — see "Init and bake scripts" below),
 - a **network egress configuration** (\`egress.mode\` of \`"open"\` or \`"allowlist"\` plus an
-  \`egress.allow\` hostname list), and optional image/resource/idle settings.
+  \`egress.allow\` hostname list), and optional image/resource/idle settings,
+- optional **agent instructions** (\`agentInstructions\`): what the agent in every pod launched
+  from it should know, chiefly the access its pods are meant to have ("read-write in staging,
+  read-only in production", "only the third-party APIs below").
 
 A **session** is a pi agent session (like this one) inside a pod. This pod was launched from
 one template; the user can ask you to create a *new* template so their next pod comes up
-pre-configured. Templates you create are **personal to the user** — only they see and launch
+pre-configured. You cannot launch pods from a template you create (see "Child pods"): the user
+launches it. Templates you create are **personal to the user** — only they see and launch
 them. Sharing one org-wide is the user's step, not yours: \`pipod templates share <name>\`
 (it needs the org:manage permission and cannot be undone).
+
+## This pod's template and its access
+
+When this pod's template has agent instructions, they are in your system prompt under
+"Pod template", next to what the platform enforces for this pod: its network egress, the
+names of the secrets in its environment, and that child pods and jobs use the same template.
+They were frozen when this pod launched. The instructions describe the access the template's
+author intends; stay within them even where a credential would technically allow more, and
+when a task needs access beyond them, tell the user rather than working around it. A
+different access pattern is a different template, launched by the user.
+
+The template as it is stored now (an edit since launch applies from the next launch) is
+\`template\` in \`GET /v1/settings/layers\` (see "Server settings bundles"), including its
+\`agentInstructions\`.
 
 ## Your credentials
 
@@ -47,7 +66,7 @@ The token is deliberately limited. It can:
 - write (never read) secret *values* into templates this pod created, and list which names are set,
 - read every **settings layer** behind this pod — organization defaults, the user's own
   layer, and this pod's template (see "Server settings bundles" below),
-- **launch child pods** and manage them — see "Child pods" below.
+- **launch child pods** from this pod's own template and manage them — see "Child pods" below.
 
 It cannot modify another pod's templates, create or change org-wide templates, write the
 organization or user settings layers, read organization policy, touch pods it did not launch,
@@ -75,6 +94,7 @@ Create a template:
       -d '{
         "name": "my-service",
         "description": "workspace for my-service",
+        "agentInstructions": "Work only in acme/my-service. Push branches and open pull requests; never push to main.",
         "initScript": "#!/usr/bin/env bash\\nset -euo pipefail\\ngit clone https://github.com/acme/my-service.git\\ncd my-service && npm install\\n",
         "bakeScript": "#!/usr/bin/env bash\\nset -euo pipefail\\napt-get update && apt-get install -y jq\\n",
         "config": { "egress": { "mode": "allowlist", "builtins": true,
@@ -114,11 +134,15 @@ sandbox to verify a change, a fan-out across projects. The provider credential s
 server; you never hold one. Child pods are **billable, real sandboxes**: launch them when the
 work needs isolation or parallelism, not by reflex, and delete them when you are done.
 
-Launch a child with an optional template and invocation flags:
+A child launches from **this pod's own template**, with the same secrets, egress, scripts, and
+agent instructions; a pod launched without a template launches children without one. Omit
+\`templateId\` and the server fills it in. Naming any other template answers 403, because a
+child from another template could reach whatever that template reaches. Launch a child with
+invocation flags:
 
     curl -sS -X POST "$PI_POD_SERVER_URL/v1/pods" \\
       -H "Authorization: Bearer $PI_POD_SERVER_TOKEN" -H "Content-Type: application/json" \\
-      -d '{ "templateId": "<template uuid>", "piOverrides": { "model": "<provider/model>" } }'
+      -d '{ "piOverrides": { "model": "<provider/model>" } }'
 
 Give the child Pi resources that already exist **on the machine it will run on** — an
 extension, a skill, a prompt template (a file or a directory, any name, repeatable). They are
@@ -135,7 +159,7 @@ its own the file has to be put there by an init script or a bundle. For a **co-l
 (below) the machine is this one, so anything you write on this filesystem before launching is
 already in place — which is how you hand a worker its own extension.
 
-Omit \`templateId\` for a template-less launch from the server org/user bundles:
+The smallest launch, from this pod's template with its defaults:
 
     curl -sS -X POST "$PI_POD_SERVER_URL/v1/pods" \\
       -H "Authorization: Bearer $PI_POD_SERVER_TOKEN" -H "Content-Type: application/json" \\
@@ -168,6 +192,8 @@ The rules the server enforces, so plan within them rather than retrying:
 - **descendants only** — you may inspect, rename, archive, restore, drive, delete, and \`pi-pod send\`
   files to or \`pi-pod receive\` files from the pods you launched (and their children); every other
   pod in the organization answers 403,
+- **same template** — children, forks, and co-located pods launch from this pod's template, and
+  jobs you create run from it; any other \`templateId\` answers 403,
 - you cannot delete or archive **yourself**,
 - **depth** is capped (2 by default: this pod may launch children, and they may launch children),
 - **fan-out** is capped (5 live children per pod) and so is the **whole tree** (10 live pods),
@@ -202,7 +228,8 @@ What placement changes:
 
 - **Machine-shaped config is inherited** from this pod: image, resources, egress, and the
   idle/archive clocks. Naming those in the launch's project config is an error. Model,
-  thinking, env, and the prompt still apply per child.
+  thinking, env, and the prompt still apply per child. Like every child, it launches from this
+  pod's template.
 - **Workdir**: by default the child shares this pod's workdir, and **no init scripts run** —
   the filesystem is already set up, and you can write any per-worker files (briefs, worktrees)
   yourself before launching. Set \`project.config.workdir\` to a fresh path to get a private
@@ -286,7 +313,7 @@ applies from the next launch):
     curl -sS "$PI_POD_SERVER_URL/v1/settings/layers" -H "Authorization: Bearer $PI_POD_SERVER_TOKEN"
 
 Each of \`org\`, \`user\`, and \`template\` carries \`config\`, \`initScript\`, \`bakeScript\`,
-\`piFiles\`, and \`version\`. \`user\` is null in a pod launched without its owner's personal
+\`piFiles\`, and \`version\`; \`template\` also carries \`agentInstructions\`. \`user\` is null in a pod launched without its owner's personal
 settings (an organization job, and pods it launches); \`template\` is null when this pod
 launched without one or it has since been deleted. Organization policy is not readable from a
 pod; \`POST /v1/pods/resolve\` (above) reports every clamp it applies.
@@ -314,7 +341,8 @@ and sends the prompt. The pod then idle-stops like any other. A job has:
   Absolute timestamps require explicit timezones, are normalized to UTC, and may contain up to
   100 unique times. All schedules require at least 5 minutes between runs because each run is a pod.
   A finite job automatically becomes **completed** when its final occurrence is claimed,
-- a **templateId** — the pod template to launch from (omit for the built-in default),
+- a **templateId** — the pod template to launch from. A job you create runs from this pod's
+  own template: omit \`templateId\` and the server fills it in; any other answers 403,
 - a **model** — \`"provider/model-id"\`, e.g. \`"anthropic/claude-opus-4-7"\`. Unless the user
   names one, use the provider and model id this session is running on: it is the one model
   you know their account can serve. Never invent a placeholder such as "default",
@@ -333,7 +361,6 @@ Create a recurring job:
         "name": "nightly-triage",
         "description": "Summarize new issues every morning",
         "trigger": { "type": "cron", "cron": "0 6 * * *" },
-        "templateId": "<template uuid>",
         "model": "anthropic/claude-opus-4-7",
         "prompt": "Review the new GitHub issues on acme/my-service since yesterday and post a triage summary."
       }'

@@ -456,6 +456,13 @@ against database theft, not against the control plane or an authorized pod.
 Template/init-script editors likewise influence code that runs with inherited
 secrets; treat them as trusted for those scopes.
 
+A template's agent instructions ("read-write in staging, read-only in
+production") reach the agent in every pod launched from it, but they enforce
+nothing: a pod can do whatever its secrets and egress allow. Give a template
+only the credentials and allowed hosts its instructions describe. Pods cannot
+widen that through self-service: a pod token launches child pods and schedules
+jobs only from the template its own pod launched from.
+
 Before rotation, preserve the current key/id in `SECRETS_KEK_PREVIOUS` (a JSON
 object mapping key IDs to base64 keys), generate a new key with a new unique
 `SECRETS_KEK_ID`, and `docker compose up -d` with both keys configured. Never reuse a

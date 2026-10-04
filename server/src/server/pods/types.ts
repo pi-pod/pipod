@@ -99,6 +99,13 @@ export interface ResolvedConfigReport {
     resolvedPackages?: Array<{ name: string; version: string; source: string }>;
   };
   egress: { description: string; mode: "open" | "allowlist" };
+  /**
+   * The template's agent instructions as of this launch, frozen beside the egress and secrets
+   * they describe and rendered into the agent's system prompt on every Pi start
+   * (template-brief.ts). Absent when the pod launched without a template or with one that has
+   * no instructions.
+   */
+  agentInstructions?: { template: string; text: string };
   /** Wall-clock milliseconds per provisioning phase, recorded as each one completes. */
   timings?: Record<string, number>;
   /** Shim uploaded during provisioning; the gateway skips its own upload while this matches. */

@@ -138,6 +138,7 @@ import {
 } from "./provision-failure.js";
 import { renderPodSkill, SKILL_REMOTE_DIR } from "./skill.js";
 import { getPod } from "./store.js";
+import { podExtensionSettings } from "./template-brief.js";
 import type { InitScope, PodLaunchResult, PodRow, PodServiceDeps, ResolvedConfigReport } from "./types.js";
 import { assertLaunchContextSupported, type LaunchContext } from "./launch-context.js";
 
@@ -1704,7 +1705,7 @@ async function provision(
       };
 
       const installProvisionShim = async (): Promise<void> => {
-        await uploadShim(sandbox, EXIT_CODE_FILE, config.pi.sessionNaming);
+        await uploadShim(sandbox, EXIT_CODE_FILE, podExtensionSettings(report));
         report.shim = {
           version: SHIM_VERSION,
           launcher: launcherVersion(),

@@ -4,8 +4,9 @@
  * to the pod — the server provisions the child with its own custody, exactly as for a person.
  */
 import type { QueryResult, QueryResultRow } from "pg";
-import { conflict, forbidden, notFound } from "../httperrors.js";
+import { conflict, forbidden, HttpError, notFound } from "../httperrors.js";
 import type { OrgPolicy } from "../settings/merge.js";
+import { getTemplate, type TemplateRow } from "../templates/store.js";
 import { AWAKE_POD_SQL } from "./concurrency.js";
 
 /** Absolute ceiling on nesting, independent of policy: every ancestry walk is bounded by it. */
@@ -246,19 +247,31 @@ export async function assertPodTokenReach(
  * reach a layer the parent lacked (an org job runs without the owner's bundle) or a model
  * provider outside the parent's credential contract. A parent that predates contracts
  * delegates no providers.
+ *
+ * The parent's template is delegated whole and alone: a template is the access pattern its
+ * pods were given (secrets, egress, scripts, and the instructions its agent reads), so a pod
+ * that could launch a child from another template could reach anything that template reaches
+ * and drive it from here. Children therefore launch from the parent's own template, or with
+ * none when the parent had none.
  */
 export interface ParentDelegation {
   parentPodId: string;
   includeUserBundle: boolean;
   credentialProviders: ReadonlySet<string>;
+  /** The template the parent launched from; null when it launched without one. */
+  templateId: string | null;
 }
 
 export async function parentDelegation(
   db: LineageDb,
   args: { orgId: string; parentPodId: string },
 ): Promise<ParentDelegation> {
-  const rows = await db.query<{ layer_order: unknown; credential_providers: string[] | null }>(
-    `SELECT resolved_config->'layerOrder' AS layer_order, credential_providers
+  const rows = await db.query<{
+    layer_order: unknown;
+    credential_providers: string[] | null;
+    template_id: string | null;
+  }>(
+    `SELECT resolved_config->'layerOrder' AS layer_order, credential_providers, template_id
        FROM pods WHERE id = $1 AND org_id = $2`,
     [args.parentPodId, args.orgId],
   );
@@ -268,7 +281,56 @@ export async function parentDelegation(
     parentPodId: args.parentPodId,
     includeUserBundle: !Array.isArray(parent.layer_order) || parent.layer_order.includes("user"),
     credentialProviders: new Set(parent.credential_providers ?? []),
+    templateId: parent.template_id,
   };
+}
+
+/**
+ * The template a launch or job uses, given the one it asked for. A person gets what they asked
+ * for. A pod gets its own template whether it names it or not, and is refused any other.
+ * Omitting it never means "no template" for a pod: that would trade the template's egress and
+ * scripts for the defaults beneath it.
+ */
+export function delegatedTemplateId(
+  requested: string | null | undefined,
+  delegation: ParentDelegation | null | undefined,
+): string | null {
+  if (!delegation) return requested ?? null;
+  if (requested && requested.toLowerCase() !== delegation.templateId) {
+    throw forbidden(
+      delegation.templateId
+        ? "a pod launches child pods and schedules jobs only from its own template; omit templateId to use it"
+        : "this pod launched without a template, so its child pods and jobs launch without one; omit templateId",
+    );
+  }
+  return delegation.templateId;
+}
+
+/**
+ * Load the template a launch uses: {@link delegatedTemplateId} for a pod-requested launch, then
+ * the same visibility and bundle checks as any launch. A parent whose template has since been
+ * deleted has nothing left to delegate, which deserves a better answer than "not found" for an
+ * id the pod never sent.
+ */
+export async function launchTemplate(args: {
+  orgId: string;
+  userId: string;
+  templateId: string | null | undefined;
+  delegation: ParentDelegation | null | undefined;
+}): Promise<TemplateRow | null> {
+  const templateId = delegatedTemplateId(args.templateId, args.delegation);
+  if (!templateId) return null;
+  let template: TemplateRow;
+  try {
+    template = await getTemplate(args.orgId, templateId, args.userId);
+  } catch (error) {
+    if (args.delegation && error instanceof HttpError && error.statusCode === 404) {
+      throw conflict("the template this pod launched from has been deleted, so it cannot launch child pods");
+    }
+    throw error;
+  }
+  assertDelegatedTemplate(template, args.delegation);
+  return template;
 }
 
 /**

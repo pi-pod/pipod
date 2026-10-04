@@ -5,9 +5,15 @@ import { POD_DOCS_DIR, uploadPodDocs } from "../poddocs.js";
 import type { Sandbox } from "../providers/types.js";
 import { POD_EXT_PATH, buildPiPodExtension } from "../shim/pi-pod-ext.js";
 
-export interface UploadPodExtensionOptions {
-  mode: "rpc" | "tui";
+/** What a pod's launch decides about its extension, as opposed to how this process runs Pi. */
+export interface PodExtensionSettings {
   sessionNaming?: SessionNaming;
+  /** System-prompt section about the pod's template (server/pods/template-brief.ts). */
+  templateBrief?: string;
+}
+
+export interface UploadPodExtensionOptions extends PodExtensionSettings {
+  mode: "rpc" | "tui";
   localEcho?: boolean;
 }
 
@@ -28,6 +34,7 @@ export async function uploadPodExtension(
         mode: opts.mode,
         sessionNaming: opts.sessionNaming ?? DEFAULT_CONFIG.pi.sessionNaming,
         ...(opts.mode === "tui" && opts.localEcho === true ? { localEcho: true } : {}),
+        ...(opts.templateBrief ? { templateBrief: opts.templateBrief } : {}),
         ...(docFiles.length > 0
           ? { docs: { dir: POD_DOCS_DIR, files: docFiles, version: launcherVersion() } }
           : {}),

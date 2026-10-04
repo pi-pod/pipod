@@ -29,6 +29,19 @@ union across layers and denies at launch with the denying layers named.
 Resolve responses report `configProvenance` (winning layer per leaf),
 `layerOrder`, `warnings`, and `clamps` alongside the config.
 
+## Template agent instructions are not bundle content
+
+A template may also carry `agentInstructions` (`agent_instructions` column, up
+to 8000 characters): what the agent in every pod launched from it is told,
+chiefly the access the template is meant to have. They do not merge with any
+layer and `pipod push` / `pull` leave them alone; set them with
+`pipod templates edit --agent-instructions <file>`, the dashboard, or the API.
+A launch freezes them into its report (`agentInstructions`), and every Pi start
+in the pod appends them to the system prompt with what the platform enforces:
+the egress policy, the names and scopes of the secrets in the environment, and
+the template rule for child pods below. They guide the agent and enforce
+nothing; the pod's secrets and egress decide what it can reach.
+
 ## Secrets are not bundle content
 
 Bundles carry no secret values. Pod secrets resolve from the `secrets` table
@@ -41,6 +54,13 @@ write.
 People write layers with their own sign-in: org defaults need `org:manage`,
 policy `policy:write`, the user bundle is its owner's, and org templates need
 `org:manage`. A pod token writes only personal templates that pod created.
+
+A pod token launches child pods (fresh, forked, or co-located) and schedules
+jobs only from the template its own pod launched from: an omitted `templateId`
+is filled in with it, and any other answers `403`. A pod launched without a
+template launches children without one. A child from another template could
+reach that template's secrets and egress and be driven from its parent, so the
+template is delegated whole, like the owner's bundle and model credentials.
 
 `GET /v1/settings/layers` is the read side for an agent in a pod: org
 defaults, the launching user's bundle, and the pod's template as stored now.

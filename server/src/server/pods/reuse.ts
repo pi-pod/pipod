@@ -32,6 +32,7 @@ import {
 import { platformCredentialsOf, withProviderCredential } from "./providercred.js";
 import { getPod } from "./store.js";
 import { hostForPod } from "./hostidentity.js";
+import { podExtensionSettings } from "./template-brief.js";
 import type { InitScope, PodLaunchResult, PodRow, PodServiceDeps, ResolvedConfigReport } from "./types.js";
 import { assertLaunchContextSupported, type LaunchContext } from "./launch-context.js";
 
@@ -472,7 +473,7 @@ async function provisionReuse(
     // Warm shim was already uploaded during the original provision; a reuse restores
     // it if the prolonged stopped interval lost any file (the disk is retained).
     await phase("shim", async () => {
-      await uploadShim(sandbox, EXIT_CODE_FILE, config.pi.sessionNaming);
+      await uploadShim(sandbox, EXIT_CODE_FILE, podExtensionSettings(report));
       report.shim = {
         version: SHIM_VERSION,
         launcher: launcherVersion(),

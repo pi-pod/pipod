@@ -437,15 +437,23 @@ are never stored on the server.
   templates: `Usage: pipod templates [action]
 
 Manage pod templates on the pi pod server. A template stores config, init and
-bake scripts, Pi settings files, and named secrets. Templates are personal by
-default: only their owner sees and launches them. --org at creation or
-\`templates share\` makes one org-wide.
+bake scripts, Pi settings files, named secrets, and agent instructions.
+Templates are personal by default: only their owner sees and launches them.
+--org at creation or \`templates share\` makes one org-wide.
+
+Agent instructions are added to the agent's system prompt in every pod launched
+from the template, with the hosts and secrets the pod actually has: say what
+access the template is meant to have. They guide the agent and enforce nothing;
+the template's secrets and egress decide what a pod can reach. A pod's child
+pods and the jobs it schedules launch from the pod's own template.
 
 Actions:
   list             List templates with scope and key counts (default)
-  show <name|id>   Show config, scripts, Pi settings, and secret names
+  show <name|id>   Show config, scripts, agent instructions, Pi settings, and
+                   secret names
   create <name>    Create a template
-  edit <name|id>   Update a template's name, description, config, or scripts
+  edit <name|id>   Update a template's name, description, config, scripts, or
+                   agent instructions
   share <name|id>  Make a personal template org-wide (cannot be undone)
   rm <name|id>     Delete a template (alias: delete)
 
@@ -457,6 +465,9 @@ create/edit options:
                         scripts, and sanitized Pi files (contradicts --config)
   --init-script <file>  Store this init script
   --bake-script <file>  Store this bake script
+  --agent-instructions <file>
+                        Store this file as the agent instructions (an empty
+                        file removes them); \`pipod push\` leaves them alone
   --org                 create only: make the template org-wide from the start
   --with-secrets        With --from-here: also upload project env values as
                         template secrets

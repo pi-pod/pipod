@@ -29,14 +29,14 @@ import { enqueuePush } from "../push/queue.js";
 import { listCredentialMeta } from "../model-credentials/store.js";
 import { assertProviderNotDenied, assertProviderPermitted, resolveSettings } from "../settings/merge.js";
 import { planLocalPiSettings } from "../settings/pi-settings.js";
-import { DEFAULT_TEMPLATE_NAME, getTemplate, type TemplateRow } from "../templates/store.js";
+import { DEFAULT_TEMPLATE_NAME } from "../templates/store.js";
 import { withHostMachineProvider } from "./hostmachine.js";
 import { runPodInitSteps } from "./initialization.js";
 import { composePodEnv, savePodLaunchEnv, type LaunchEnvLayers } from "./launchenv.js";
 import { ensureProviderPodStarted } from "./lifecycle.js";
 import {
-  assertDelegatedTemplate,
   delegateCredentials,
+  launchTemplate,
   lockLineageRoot,
   nestedPodsPolicy,
   parentDelegation,
@@ -61,6 +61,7 @@ import { creationMarkers, runtimeMarkers } from "../../core/labels.js";
 import { resolveSecrets } from "../secrets/store.js";
 import { getPod } from "./store.js";
 import { startAgentdSupervisor } from "./supervisor.js";
+import { launchAgentInstructions, podExtensionSettings } from "./template-brief.js";
 import type { InitScope, PodLaunchResult, PodRow, PodServiceDeps, ResolvedConfigReport } from "./types.js";
 
 const HOST_INHERITED_KEYS = [
@@ -127,15 +128,15 @@ export async function launchHostChild(
   await edition().admitPodWork(deps.env, args.userId);
   await edition().ensurePodHostReady(deps, host);
   const project = args.project ?? null;
-  let template: TemplateRow | null = null;
-  if (args.templateId) {
-    template = await getTemplate(args.orgId, args.templateId, args.userId);
-  }
-
   const delegation = args.parentPodId
     ? await parentDelegation({ query }, { orgId: args.orgId, parentPodId: args.parentPodId })
     : null;
-  if (template) assertDelegatedTemplate(template, delegation);
+  const template = await launchTemplate({
+    orgId: args.orgId,
+    userId: args.userId,
+    templateId: args.templateId,
+    delegation,
+  });
   const includeUserLayer = delegation?.includeUserBundle ?? true;
   const [secrets, credentialMetas, resolved] = await Promise.all([
     resolveSecrets({
@@ -184,7 +185,9 @@ export async function launchHostChild(
   if (args.legacyLaunchInputsPresent) {
     inheritedWarnings.push(LEGACY_PROJECT_LAYERS_WARNING);
   }
-  const templateConflicts = explicitInheritedKeys(template?.config ?? null);
+  // The host's own template (what a pod's children inherit) already shaped this machine, so
+  // only another template's machine keys go unhonored.
+  const templateConflicts = template?.id === host.template_id ? [] : explicitInheritedKeys(template?.config ?? null);
   if (templateConflicts.length > 0) {
     inheritedWarnings.push(
       `template config sets ${templateConflicts.join(", ")}, which co-located pods inherit from their host — ignored for this launch`,
@@ -266,6 +269,7 @@ export async function launchHostChild(
       description: host.resolved_config.egress?.description ?? "open",
       mode: host.resolved_config.egress?.mode ?? "open",
     },
+    ...launchAgentInstructions(template),
     workdir,
     warnings: [...resolved.warnings, ...inheritedWarnings],
     // Recorded so every later start — including one the gateway performs itself after a stop —
@@ -520,7 +524,7 @@ async function provisionHostChild(
       const paths = childRuntimePaths(args.podId);
       const execEnv = markers;
       await phase("materialize", () =>
-        uploadShim(sandbox, paths.exitCode, config.pi.sessionNaming, paths),
+        uploadShim(sandbox, paths.exitCode, podExtensionSettings(report), paths),
       );
       report.shim = {
         version: SHIM_VERSION,

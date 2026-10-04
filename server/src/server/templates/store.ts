@@ -18,6 +18,8 @@ export interface TemplateRow {
   description: string | null;
   init_script: string | null;
   bake_script: string | null;
+  /** Shown to the agent in every pod launched from the template (see pods/template-brief.ts). */
+  agent_instructions: string | null;
   config: Record<string, unknown>;
   pi_settings: PiSettingsFiles;
   created_by: string | null;
