@@ -19,8 +19,11 @@ export function isLoopbackRedirect(redirectUri: string): boolean {
   }
 }
 
-/** `dashboardUrl` is where this server's web dashboard is, from `registerDashboard`, or null. */
-export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv, dashboardUrl: string | null): void {
+/**
+ * `dashboardUrl` is where this server's web dashboard is, from `registerDashboard`; without
+ * one, /v1/me names no dashboard.
+ */
+export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv, dashboardUrl: string | null = null): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
   // Public: where a signed-out client signs in. Nothing here is secret — the issuer and a
