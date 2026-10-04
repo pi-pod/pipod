@@ -140,7 +140,9 @@ on the sign-in screen tap **Server · Change**, enter the address the CLI signs 
 (`api.example.com`), then **Sign in**. The app asks the server where to sign in, as the CLI
 does, and remembers it until you choose again; **Use pi pod cloud** goes back. They need
 HTTPS — a phone cannot reach `127.0.0.1`, and the apps never send sign-in tokens in the
-clear. This repository does not publish app builds; build one from [`ios/`](../ios) or
+clear. The apps do not edit settings or templates themselves: **Web dashboard** in their
+Settings opens [the dashboard](#the-dashboard) at `SERVER_URL` in the phone's browser. This
+repository does not publish app builds; build one from [`ios/`](../ios) or
 [`android/`](../android) as their READMEs describe.
 
 ### Zitadel

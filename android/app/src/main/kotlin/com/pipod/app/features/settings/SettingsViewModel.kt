@@ -40,10 +40,10 @@ import kotlinx.coroutines.launch
 data class SettingsAccount(
     val user: AuthUser? = null,
     val organization: Organization? = null,
-    /** Whether the server would accept a write to the organization defaults. */
-    val canManageOrganization: Boolean = false,
     /** Where an administrator manages the organization, when they may open it. */
     val adminConsoleUrl: String? = null,
+    /** Where settings and environments are changed, when the server has a dashboard. */
+    val dashboardUrl: String? = null,
     /**
      * True when the session rides on a baked development token: signing out
      * would sign straight back in, so the screen explains instead of bouncing
@@ -91,8 +91,8 @@ data class SettingsState(
      * omission rule: null (or nothing renderable) draws nothing.
      */
     val billing: BillingSummary? = null,
-    val canManageOrganization: Boolean = false,
     val adminConsoleUrl: String? = null,
+    val dashboardUrl: String? = null,
     val signOutUnavailable: Boolean = false,
     val canSubscribe: Boolean = false,
     val canManageBilling: Boolean = false,
@@ -151,6 +151,7 @@ data class SettingsState(
     val secretStatus: SettingsStatus? = null,
     val organizationStatus: SettingsStatus? = null,
     val adminConsoleStatus: SettingsStatus? = null,
+    val dashboardStatus: SettingsStatus? = null,
     val pendingLogin: PendingCredentialLogin? = null,
     /** Providers offered by the connect sheet, when it is up. */
     val providerChoices: List<ConnectableProvider>? = null,
@@ -236,8 +237,8 @@ class SettingsViewModel(
                 user = account.user,
                 organization = account.organization,
                 billing = account.billing,
-                canManageOrganization = account.canManageOrganization,
                 adminConsoleUrl = account.adminConsoleUrl,
+                dashboardUrl = account.dashboardUrl,
                 signOutUnavailable = account.signOutUnavailable,
                 organizationAlias = if (aliasSeeded) {
                     it.organizationAlias
@@ -1118,6 +1119,22 @@ class SettingsViewModel(
                 it.copy(
                     adminConsoleStatus = SettingsStatus(
                         text = "Could not open the admin console. Visit $url in a browser.",
+                        isError = true,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun openDashboard() {
+        viewModelScope.launch {
+            val url = _state.value.dashboardUrl?.takeIf { it.isNotEmpty() } ?: return@launch
+            _state.update { it.copy(dashboardStatus = null) }
+            if (account.openExternalUrl.open(url)) return@launch
+            _state.update {
+                it.copy(
+                    dashboardStatus = SettingsStatus(
+                        text = "Could not open the web dashboard. Visit $url in a browser.",
                         isError = true,
                     ),
                 )

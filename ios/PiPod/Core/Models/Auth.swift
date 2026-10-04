@@ -71,6 +71,9 @@ public struct MeResponse: Codable, Hashable, Sendable {
     public let organization: Organization?
     public let accountConsoleUrl: String?
     public let adminConsoleUrl: String?
+    /// Where this server's web dashboard is: absolute, or a path to resolve
+    /// against the server's address. Absent when the server has none.
+    public let dashboardUrl: String?
     /// The optional SaaS workstation block, kept raw so one parser owns both
     /// the shapes it arrives in (here and on the pods-list envelope). Absent
     /// under the self-hosted backend, which is the normal case today.
@@ -83,6 +86,12 @@ public struct MeResponse: Codable, Hashable, Sendable {
 
     public var billingSummary: BillingSummary? { BillingSummary.parse(workstation ?? billing) }
 
+    /// `dashboardUrl` as an absolute URL, resolved against the server this
+    /// response came from.
+    public func dashboardURL(relativeTo server: URL) -> URL? {
+        dashboardUrl.flatMap { URL(string: $0, relativeTo: server)?.absoluteURL }
+    }
+
     public init(
         user: AuthUser,
         currentOrgId: String? = nil,
@@ -90,6 +99,7 @@ public struct MeResponse: Codable, Hashable, Sendable {
         organization: Organization? = nil,
         accountConsoleUrl: String? = nil,
         adminConsoleUrl: String? = nil,
+        dashboardUrl: String? = nil,
         workstation: JSONValue? = nil,
         billing: JSONValue? = nil
     ) {
@@ -99,6 +109,7 @@ public struct MeResponse: Codable, Hashable, Sendable {
         self.organization = organization
         self.accountConsoleUrl = accountConsoleUrl
         self.adminConsoleUrl = adminConsoleUrl
+        self.dashboardUrl = dashboardUrl
         self.workstation = workstation
         self.billing = billing
     }
@@ -111,6 +122,7 @@ public struct MeResponse: Codable, Hashable, Sendable {
         organization = try container.decodeIfPresent(Organization.self, forKey: .organization)
         accountConsoleUrl = try container.decodeIfPresent(String.self, forKey: .accountConsoleUrl)
         adminConsoleUrl = try container.decodeIfPresent(String.self, forKey: .adminConsoleUrl)
+        dashboardUrl = try container.decodeIfPresent(String.self, forKey: .dashboardUrl)
         workstation = try container.decodeIfPresent(JSONValue.self, forKey: .workstation)
         billing = try container.decodeIfPresent(JSONValue.self, forKey: .billing)
     }

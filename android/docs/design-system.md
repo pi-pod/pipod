@@ -156,7 +156,6 @@ Ask for the meaning. Do not reach into `Icons.*` from a screen.
 | `UnsupportedListItemCard` | `(modifier, itemName = "item")` | A row this build could not decode. |
 | `UnsupportedListItemCards` | `(rows: List<UnparsedRow>, modifier, itemName)` | The `unparsedRows` a `DecodedList` handed back. |
 | `AdaptiveRefreshButton` | `(label, onClick, modifier)` | A top-bar refresh action. Renders nothing on a phone, where pull-to-refresh is the affordance. |
-| `PlainTextEditor` | `(value, onValueChange, accessibilityLabel, modifier, minHeight = 100.dp, enabled)` | Shell scripts and JSON. Every keyboard substitution is off. |
 | `SecretEntryFields` | `(name, onNameChange, value, onValueChange, semanticsPrefix, isSaving, onSave, modifier, enabled)` | Entering one write-only secret, with validation and the Save action. |
 | `SecretValueField` | `(value, onValueChange, semanticsPrefix, modifier, enabled, focusRequester, imeAction, onSubmit)` | Just the value half, with its show/hide control. |
 
@@ -171,7 +170,7 @@ Ask for the meaning. Do not reach into `Icons.*` from a screen.
 `app-back-button`, `app-close-button`, `app-floating-action`,
 `app-confirm-dialog`, `app-notice-dialog`, `app-sheet`,
 `app-option-picker-$label`, `empty-state`, `refresh-error-tile`,
-`unsupported-list-item`, `plain-text-editor`, `save-secret`.
+`unsupported-list-item`, `save-secret`.
 
 ## Not ported
 

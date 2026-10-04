@@ -39,6 +39,11 @@ data class SessionStoreState(
      */
     val adminConsoleUrl: String? = null,
     /**
+     * Where settings and environments are changed: the server's web dashboard,
+     * as an absolute URL. Null when the server has none.
+     */
+    val dashboardUrl: String? = null,
+    /**
      * The SaaS account summary from `/v1/me`. Null on the self-hosted static
      * backend, which does not send it — the surface then hides silently.
      */
@@ -441,6 +446,7 @@ class SessionStore(
                 currentOrgId = me.currentOrgId,
                 permissions = me.permissions,
                 adminConsoleUrl = me.adminConsoleUrl,
+                dashboardUrl = me.dashboardUrl,
                 billing = me.billingSummary,
             )
         }
@@ -486,6 +492,7 @@ class SessionStore(
                 currentOrgId = null,
                 permissions = emptyList(),
                 adminConsoleUrl = null,
+                dashboardUrl = null,
                 billing = null,
             )
         }

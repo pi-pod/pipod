@@ -326,7 +326,7 @@ and how to make it with their own sign-in:
   org:manage permission), for example \`pipod settings user set pi.model '"provider/model"'\`;
 - scripts or Pi files — \`pipod pull user\` (or \`org\`), edit the local files, then
   \`pipod push user\` (or \`org\`);
-- or the settings screens of the pi pod app, or of the web dashboard on a self-hosted server.
+- or the server's web dashboard, which **Web dashboard** in the pi pod app's Settings opens.
 
 A template this pod created you can change yourself (see "Update a template" above).
 

@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// The result of the last action on a screen, kept next to the control that
 /// caused it. Shared by every workspace editor so success and failure read the
@@ -85,84 +84,6 @@ public struct SectionErrorView: View {
             .frame(minHeight: 44, alignment: .leading)
             .disabled(isRetrying)
             .accessibilityLabel(retryLabel)
-        }
-    }
-}
-
-/// A code/JSON editor that turns smart quotes, smart dashes and autocorrect off.
-///
-/// SwiftUI's `TextEditor` exposes none of those, and one curly quote makes pasted
-/// JSON unparseable — a failure that only surfaces as a save rejected for a
-/// reason the typist cannot see.
-public struct PlainTextEditor: UIViewRepresentable {
-    @Binding public var text: String
-    public var minHeight: CGFloat
-    /// A `UITextView` announces itself as "text field" and nothing else, so on a
-    /// screen whose whole point is this editor the question would go unasked.
-    public var accessibilityLabel: String
-    public var isEnabled: Bool
-
-    public init(
-        text: Binding<String>,
-        minHeight: CGFloat = 120,
-        accessibilityLabel: String,
-        isEnabled: Bool = true
-    ) {
-        self._text = text
-        self.minHeight = minHeight
-        self.accessibilityLabel = accessibilityLabel
-        self.isEnabled = isEnabled
-    }
-
-    public func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
-        view.font = UIFont.monospacedSystemFont(
-            ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular
-        )
-        view.adjustsFontForContentSizeCategory = true
-        view.autocapitalizationType = .none
-        view.autocorrectionType = .no
-        view.smartQuotesType = .no
-        view.smartDashesType = .no
-        view.smartInsertDeleteType = .no
-        view.spellCheckingType = .no
-        view.keyboardType = .asciiCapable
-        view.backgroundColor = .clear
-        view.textColor = .label
-        view.textContainerInset = .zero
-        view.textContainer.lineFragmentPadding = 0
-        view.delegate = context.coordinator
-        view.accessibilityLabel = accessibilityLabel
-        view.accessibilityIdentifier = accessibilityLabel
-        return view
-    }
-
-    public func updateUIView(_ view: UITextView, context: Context) {
-        if view.text != text { view.text = text }
-        view.isEditable = isEnabled
-        view.textColor = isEnabled ? .label : .secondaryLabel
-        view.accessibilityLabel = accessibilityLabel
-    }
-
-    public func sizeThatFits(
-        _ proposal: ProposedViewSize, uiView: UITextView, context: Context
-    ) -> CGSize? {
-        let width = proposal.width ?? uiView.bounds.width
-        let fitted = uiView.sizeThatFits(
-            CGSize(width: width, height: .greatestFiniteMagnitude)
-        )
-        return CGSize(width: width, height: max(minHeight, fitted.height))
-    }
-
-    public func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
-
-    public final class Coordinator: NSObject, UITextViewDelegate {
-        private let text: Binding<String>
-
-        init(text: Binding<String>) { self.text = text }
-
-        public func textViewDidChange(_ textView: UITextView) {
-            text.wrappedValue = textView.text
         }
     }
 }

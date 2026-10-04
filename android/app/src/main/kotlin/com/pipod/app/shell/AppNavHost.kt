@@ -28,9 +28,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.navArgument
-import com.pipod.app.core.api.model.EnvironmentEditorData
 import com.pipod.app.core.api.model.PlanChangeAccount
-import com.pipod.app.core.api.model.PodTemplate
 import com.pipod.app.core.config.RuntimeConfig
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -60,8 +58,6 @@ import com.pipod.app.features.settings.apiLoginSocketFactory
 import com.pipod.app.features.templates.ApiTemplateRepository
 import com.pipod.app.features.templates.TemplateDetailScreen
 import com.pipod.app.features.templates.TemplateDetailViewModel
-import com.pipod.app.features.templates.TemplateEditorScreen
-import com.pipod.app.features.templates.TemplateEditorViewModel
 import com.pipod.app.features.templates.TemplateListScreen
 import com.pipod.app.features.templates.TemplateListViewModel
 import com.pipod.app.ui.AppScaffold
@@ -252,7 +248,7 @@ fun AppNavHost(
 }
 
 /**
- * The environments area navigates within itself — list, detail, editor — the way
+ * The environments area navigates within itself — list, then detail — the way
  * the Flutter screen pushes inside its own route.
  *
  * Keeping it here rather than in the route table is what lets the detail screen
@@ -270,119 +266,36 @@ private fun EnvironmentsRoute(
     // which is also how an environment deleted while the app was away drops the
     // reader back on the list instead of onto a detail for something gone.
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
-    // The editor is an id, not the row: after process death the row it names
-    // is re-resolved from the list the view model reloads, the same way the
-    // detail selection above is. `editing` holds the full row (with the editor
-    // data the detail already fetched) while this process lives; when it is
-    // null after a restore, the id below reopens the editor on the stored
-    // values instead. Typed-but-unsaved text does not survive the restore —
-    // the editor is a form, and forms are cheap to retype but expensive to
-    // parcel — but the save path treats an editor that never loaded the bake
-    // script as unread rather than empty, so reopening never wipes it.
-    var editingId by rememberSaveable { mutableStateOf<String?>(null) }
-    var editingNew by rememberSaveable { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Editing?>(null) }
 
     // Hoisted out of the `when` below so stepping into the detail and back does
     // not throw the list away and re-fetch it.
-    //
-    // The key is stable on purpose. It used to carry a revision counter that a
-    // save incremented to force a reload — but the key is part of the store key,
-    // and `ViewModelStore` never evicts by key, so every save left the previous
-    // list (and its live `viewModelScope`) retained until the whole Settings
-    // entry was destroyed. Reloading is an explicit call now.
     val listViewModel = viewModel(key = "environments") {
         TemplateListViewModel(repository, serverHost = serverHost)
     }
     val listState by listViewModel.state.collectAsState()
     val open = selectedId?.let { id -> listState.templates.firstOrNull { it.id == id } }
-    val active = editing ?: when {
-        editingNew -> Editing(null, null)
-        editingId != null ->
-            listState.templates.firstOrNull { it.id == editingId }?.let { Editing(it, null) }
-        else -> null
-    }
-    fun dismissEditor() {
-        editing = null
-        editingId = null
-        editingNew = false
-    }
 
-    // Back steps out of the editor, then out of the detail, before it leaves
-    // the tab. Registered above the screens so their own dirty-state handlers —
-    // added later, and therefore consulted first — still get to raise their
-    // confirmation instead of this quietly discarding the work.
-    BackHandler(enabled = active != null || open != null) {
-        if (active != null) dismissEditor() else selectedId = null
-    }
+    // Back steps out of the detail before it leaves the tab. Registered above the
+    // screen so its own unsaved-secret handler — added later, and therefore
+    // consulted first — still gets to raise its confirmation.
+    BackHandler(enabled = open != null) { selectedId = null }
 
-    when {
-        active != null -> {
-            // Deliberately `remember` rather than `viewModel`: this is a form
-            // whose life is exactly this composition, and re-opening the editor
-            // must start from the stored environment rather than from a cached
-            // instance holding the last attempt's fields.
-            val viewModel = remember(active) {
-                TemplateEditorViewModel(
-                    repository = repository,
-                    template = active.template,
-                    editorData = active.data,
-                    serverHost = serverHost,
-                )
-            }
-            TemplateEditorScreen(
-                viewModel = viewModel,
-                onDismiss = { dismissEditor() },
-                onSaved = { template, _ ->
-                    dismissEditor()
-                    if (selectedId != null) selectedId = template.id
-                    listViewModel.refresh()
-                },
-            )
+    if (open != null) {
+        val detailViewModel = viewModel(key = "environment-${open.id}") {
+            TemplateDetailViewModel(repository, open, serverHost = serverHost)
         }
-
-        open != null -> {
-            val detailViewModel = viewModel(key = "environment-${open.id}") {
-                TemplateDetailViewModel(repository, open, serverHost = serverHost)
-            }
-            // The list is the source of truth for the row; a save that changed
-            // the name has to reach the detail holding the old one. Keyed on the
-            // value, so this only runs when the row really changed.
-            LaunchedEffectOnce(open) { detailViewModel.reload(open) }
-            TemplateDetailScreen(
-                viewModel = detailViewModel,
-                onBack = { selectedId = null },
-                onEdit = { template, data ->
-                    editing = Editing(template, data)
-                    editingId = template.id
-                    editingNew = false
-                },
-                onChanged = { listViewModel.refresh() },
-            )
-        }
-
-        else -> {
-            TemplateListScreen(
-                viewModel = listViewModel,
-                onOpenTemplate = { selectedId = it.id },
-                onNewTemplate = {
-                    editing = Editing(null, null)
-                    editingId = null
-                    editingNew = true
-                },
-            )
-        }
+        TemplateDetailScreen(viewModel = detailViewModel, onBack = { selectedId = null })
+    } else {
+        TemplateListScreen(viewModel = listViewModel, onOpenTemplate = { selectedId = it.id })
     }
 }
-
-private data class Editing(val template: PodTemplate?, val data: EnvironmentEditorData?)
 
 /**
  * Settings, plus the identity the screen needs from the signed-in session.
  *
  * The account is pushed in on every session change rather than read once:
- * `/v1/me` resolves after the first frame, and permissions decide whether the
- * organization bundle is writable at all.
+ * `/v1/me` resolves after the first frame, and it decides which consoles and
+ * dashboard the screen can open.
  */
 @Composable
 private fun SettingsRoute(container: AppContainer, onOpenEnvironments: () -> Unit) {
@@ -397,8 +310,8 @@ private fun SettingsRoute(container: AppContainer, onOpenEnvironments: () -> Uni
         user = session.user,
         organization = session.organization,
         billing = session.billing,
-        canManageOrganization = session.permissions.contains("org:manage"),
         adminConsoleUrl = session.adminConsoleUrl,
+        dashboardUrl = session.dashboardUrl,
         // A baked development token would sign straight back in, so the screen
         // explains rather than bouncing to the browser.
         signOutUnavailable = RuntimeConfig.devToken.isNotEmpty(),
@@ -437,14 +350,13 @@ private fun SettingsRoute(container: AppContainer, onOpenEnvironments: () -> Uni
         )
     }
 
-    LaunchedEffect(session.user, session.organization, session.permissions, session.adminConsoleUrl, session.billing) {
+    LaunchedEffect(session.user, session.organization, session.adminConsoleUrl, session.dashboardUrl, session.billing) {
         viewModel.setAccount(account)
     }
 
-    // Coming back from the environments screen has to re-read: an environment
-    // saved there can change the secrets this screen is showing,
-    // and the first thing a reader does after editing one is look at the other.
-    // The first RESUME is the one this composition arrived on, which the view
+    // Coming back to the screen has to re-read: what it shows can change while it
+    // is away, such as notification permission in the system settings or billing
+    // after a checkout in the browser. The first RESUME is the one this composition arrived on, which the view
     // model has already loaded for.
     var hasResumed by rememberSaveable { mutableStateOf(false) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -453,7 +365,6 @@ private fun SettingsRoute(container: AppContainer, onOpenEnvironments: () -> Uni
 
     SettingsScreen(
         viewModel = viewModel,
-        repository = settings,
         socketFactory = sockets,
         onOpenEnvironments = onOpenEnvironments,
         openUrl = openUrl,

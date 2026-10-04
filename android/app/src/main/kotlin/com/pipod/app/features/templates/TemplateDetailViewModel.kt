@@ -2,7 +2,6 @@ package com.pipod.app.features.templates
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.pipod.app.core.api.model.EnvironmentEditorData
 import com.pipod.app.core.api.model.PodTemplate
 import com.pipod.app.core.api.model.SecretMeta
 import com.pipod.app.core.config.RuntimeConfig
@@ -13,11 +12,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -25,13 +21,11 @@ import kotlinx.coroutines.launch
 /** Everything the environment detail draws, including the secret being typed. */
 data class TemplateDetailState(
     val template: PodTemplate,
-    val editorData: EnvironmentEditorData? = null,
     val secrets: List<SecretMeta> = emptyList(),
     val unsupportedSecretCount: Int = 0,
     val secretName: String = "",
     val secretValue: String = "",
     val isSavingSecret: Boolean = false,
-    val isDeleting: Boolean = false,
     /** A refresh the reader pulled for, which is the only kind that may spin. */
     val isRefreshing: Boolean = false,
     val message: String? = null,
@@ -50,17 +44,11 @@ data class TemplateDetailState(
         get() = "This runs with your secrets in every pod launched from this environment."
 }
 
-/** The environment is gone; the screen it was pushed onto has to go with it. */
-sealed interface TemplateDetailEvent {
-    data object Deleted : TemplateDetailEvent
-
-    /** The environment changed, so a list behind this screen is now stale. */
-    data object Changed : TemplateDetailEvent
-}
-
 /**
  * The environment detail's state machine, ported from `TemplateDetailView` in
  * `pi-pod-flutter/lib/features/templates/template_list_view.dart`.
+ *
+ * The environment is only read; its secrets are the one thing written here.
  */
 class TemplateDetailViewModel(
     private val repository: TemplateRepository,
@@ -71,10 +59,7 @@ class TemplateDetailViewModel(
     private val _state = MutableStateFlow(TemplateDetailState(template = template))
     val state: StateFlow<TemplateDetailState> = _state.asStateFlow()
 
-    private val _events = MutableSharedFlow<TemplateDetailEvent>(extraBufferCapacity = 8)
-    val events: SharedFlow<TemplateDetailEvent> = _events.asSharedFlow()
-
-    /** One read at a time: the secrets and the editor data settle together. */
+    /** One read at a time: the environment and its secrets settle together. */
     private val refreshing = RefreshJob(viewModelScope)
 
     init {
@@ -82,8 +67,8 @@ class TemplateDetailViewModel(
     }
 
     /**
-     * Reloads the secrets and the editor data together, so the detail cannot go
-     * stale behind a backgrounded app.
+     * Reloads the environment and its secrets together, so the detail cannot go
+     * stale behind a backgrounded app or an edit made in the web dashboard.
      */
     fun refresh() {
         refreshing.start {
@@ -91,8 +76,8 @@ class TemplateDetailViewModel(
             try {
                 coroutineScope {
                     listOf(
+                        async { refreshTemplate() },
                         async { refreshSecrets() },
-                        async { refreshEditorData() },
                     ).awaitAll()
                 }
             } finally {
@@ -101,18 +86,15 @@ class TemplateDetailViewModel(
         }
     }
 
-    /**
-     * Adopts a fresher copy of the same environment and re-reads its detail.
-     *
-     * The route used to force this by putting a revision counter in the
-     * `viewModel` key, which minted a new view model — and retained the old one,
-     * with its scope, for the life of the tab — on every save. Saying "reload"
-     * out loud is both cheaper and clearer about what is meant.
-     */
-    fun reload(template: PodTemplate) {
-        if (_state.value.template == template) return
-        _state.update { it.copy(template = template) }
-        refresh()
+    private suspend fun refreshTemplate() {
+        try {
+            val template = repository.template(_state.value.template.id)
+            _state.update { it.copy(template = template) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            show(FriendlyError.message(error, serverHost), isError = true)
+        }
     }
 
     private suspend fun refreshSecrets() {
@@ -128,19 +110,6 @@ class TemplateDetailViewModel(
             throw cancelled
         } catch (error: Throwable) {
             show(FriendlyError.message(error, serverHost), isError = true)
-        }
-    }
-
-    private suspend fun refreshEditorData(): EnvironmentEditorData? {
-        return try {
-            val data = repository.editorData(_state.value.template.id)
-            _state.update { it.copy(editorData = data) }
-            data
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            show(FriendlyError.message(error, serverHost), isError = true)
-            null
         }
     }
 
@@ -192,34 +161,6 @@ class TemplateDetailViewModel(
             }
         }
     }
-
-    fun deleteTemplate() {
-        viewModelScope.launch {
-            _state.update { it.copy(isDeleting = true) }
-            try {
-                repository.delete(_state.value.template.id)
-                _events.tryEmit(TemplateDetailEvent.Changed)
-                _events.tryEmit(TemplateDetailEvent.Deleted)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                show(FriendlyError.message(error, serverHost), isError = true)
-                _state.update { it.copy(isDeleting = false) }
-            }
-        }
-    }
-
-    /** Folds an edit made in the editor back into this screen. */
-    fun onSaved(template: PodTemplate, editorData: EnvironmentEditorData) {
-        _state.update { it.copy(template = template, editorData = editorData) }
-        show("Environment updated.", isError = false)
-        _events.tryEmit(TemplateDetailEvent.Changed)
-    }
-
-    /** The editor data the editor needs, fetched now if the first load failed. */
-    suspend fun editorDataForEditing(): EnvironmentEditorData? =
-        _state.value.editorData ?: refreshEditorData()
-
 
     private fun show(message: String, isError: Boolean) {
         _state.update { it.copy(message = message, messageIsError = isError) }

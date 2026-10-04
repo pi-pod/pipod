@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Environments (templates)
 
 /// One environment: the setup and bake scripts a pod starts from, plus its
-/// config bundle.
+/// config bundle. The app only reads them; they are written in the web dashboard.
 ///
 /// There is no draft state. Server migration 031 dropped the column and the API
 /// synthesises `status: "active"` for every row, so the field is decoded only
@@ -15,23 +15,15 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
     public let description: String?
     public let status: String
     public let initScript: String?
+    public let bakeScript: String?
     /// What the agent in every pod launched from this environment is told, chiefly
     /// the access its pods are meant to have. Nil when the server predates the
-    /// field, which is different from "" (none): a save must not send what it
-    /// never read.
+    /// field, which is different from "" (none).
     public let agentInstructions: String?
     public let config: JSONValue
     public let createdFromPod: String?
-    /// The optimistic-concurrency token a save sends back as `expectedVersion`.
-    /// Zero means the server reported none, and a save then goes out without the
-    /// key rather than claiming to have read a version it never saw.
-    public let version: Int
     public let createdAt: String
     public let updatedAt: String
-
-    /// The version to write with, or nil when this server does not version
-    /// templates at all.
-    public var expectedVersion: Int? { version > 0 ? version : nil }
 
     public init(
         id: String,
@@ -39,10 +31,10 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
         description: String? = nil,
         status: String = "active",
         initScript: String? = nil,
+        bakeScript: String? = nil,
         agentInstructions: String? = nil,
         config: JSONValue = .object([:]),
         createdFromPod: String? = nil,
-        version: Int = 0,
         createdAt: String,
         updatedAt: String
     ) {
@@ -51,10 +43,10 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
         self.description = description
         self.status = status
         self.initScript = initScript
+        self.bakeScript = bakeScript
         self.agentInstructions = agentInstructions
         self.config = config
         self.createdFromPod = createdFromPod
-        self.version = version
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -66,61 +58,12 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
         description = try container.decodeIfPresent(String.self, forKey: .description)
         status = try container.decodeIfPresent(String.self, forKey: .status) ?? "active"
         initScript = try container.decodeIfPresent(String.self, forKey: .initScript)
+        bakeScript = try container.decodeIfPresent(String.self, forKey: .bakeScript)
         agentInstructions = try container.decodeIfPresent(String.self, forKey: .agentInstructions)
         config = try container.decodeIfPresent(JSONValue.self, forKey: .config) ?? .object([:])
         createdFromPod = try container.decodeIfPresent(String.self, forKey: .createdFromPod)
-        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 0
         createdAt = try container.decode(String.self, forKey: .createdAt)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
-    }
-}
-
-/// Everything the environment editor sends in one write.
-///
-/// `bakeScript` is optional because "never loaded" and "cleared" are different
-/// facts. The server's PATCH `COALESCE`s an absent key to the stored value and
-/// takes an empty string literally, so a draft built before the editor data
-/// arrived must omit the key rather than send "".
-public struct TemplateDraft: Equatable, Sendable {
-    public let name: String
-    public let description: String
-    public let initScript: String
-    public let bakeScript: String?
-    /// Nil leaves the stored instructions alone, for the same reason as
-    /// `bakeScript`: a server that never reported them must not have them erased.
-    public let agentInstructions: String?
-    public let config: JSONValue
-    /// The version the editor opened this environment at, when the server
-    /// reported one. A save that carries it is refused if someone else wrote
-    /// meanwhile.
-    public let expectedVersion: Int?
-
-    public init(
-        name: String,
-        description: String,
-        initScript: String,
-        bakeScript: String? = nil,
-        agentInstructions: String? = nil,
-        config: JSONValue,
-        expectedVersion: Int? = nil
-    ) {
-        self.name = name
-        self.description = description
-        self.initScript = initScript
-        self.bakeScript = bakeScript
-        self.agentInstructions = agentInstructions
-        self.config = config
-        self.expectedVersion = expectedVersion
-    }
-
-    /// What a form's bake-script field is worth sending.
-    ///
-    /// `isLoaded` is false while the editor is showing an empty field because
-    /// the stored script has not arrived — not because anyone cleared it. Those
-    /// two look identical on screen and must not look identical on the wire.
-    public static func bakeScript(typed: String, isLoaded: Bool) -> String? {
-        guard isLoaded else { return nil }
-        return typed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

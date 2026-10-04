@@ -43,6 +43,12 @@ data class MeResponse(
     val accountConsoleUrl: String? = null,
     val adminConsoleUrl: String? = null,
     /**
+     * Where this server's web dashboard is. The server may send a path, which
+     * [com.pipod.app.core.api.ApiClient.me] resolves against the server's
+     * address. Absent when the server has none.
+     */
+    val dashboardUrl: String? = null,
+    /**
      * The SaaS account summary. Held raw because every field inside is
      * independently optional and has to be validated rather than decoded — a
      * negative or non-finite number is dropped, not rendered. The self-hosted

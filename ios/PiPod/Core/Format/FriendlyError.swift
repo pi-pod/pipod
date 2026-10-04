@@ -507,26 +507,6 @@ public enum FriendlyError {
     }
 }
 
-/// Reads whether a server refusal is the optimistic-concurrency one.
-///
-/// It is the only failure whose fix is to read the other person's change rather
-/// than to retry the same write harder, so every editor that sends a version
-/// asks the same question of its error.
-public enum VersionConflict {
-    /// True when the refusal names a version that moved. The server puts the
-    /// reason in `error` on some routes and under `detail` on others, so both
-    /// are read rather than guessing which one this was.
-    public static func isNamed(by error: APIError) -> Bool {
-        let text = ([error.error, error.detail?.compactPrinted()]
-            .compactMap { $0 }
-            .joined(separator: " "))
-            .lowercased()
-        guard text.contains("version") else { return false }
-        return ["conflict", "stale", "changed", "mismatch", "modified"]
-            .contains { text.contains($0) }
-    }
-}
-
 /// Server and provider messages are written for whoever runs the control plane:
 /// they name permission slugs, vendor dashboards and internal identifiers. This
 /// turns them into sentences the person holding the phone can act on.

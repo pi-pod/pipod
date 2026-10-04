@@ -65,23 +65,9 @@ public enum JobRoute: Hashable, Sendable {
 public enum SettingsRoute: Hashable, Sendable {
     case environments
     case environmentDetail(templateId: String, template: PodTemplate?)
-    case newEnvironment
     case credentials
-    case configBundle(scope: ConfigBundleScope)
     case secrets(scope: String, scopeId: String, title: String)
     case planChange
-}
-
-public enum ConfigBundleScope: Hashable, Sendable {
-    case organization(orgId: String)
-    case user(userId: String)
-
-    public var title: String {
-        switch self {
-        case .organization: return "Organization defaults"
-        case .user: return "Your defaults"
-        }
-    }
 }
 
 /// Which tab is showing and what is stacked on it.
