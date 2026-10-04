@@ -15,3 +15,6 @@ coverage/
 .dev/
 .pi-subagents/
 .firecrawl/
+
+# Man pages rendered from cli/man/*.md by `npm run build`.
+cli/man/*.[0-9]

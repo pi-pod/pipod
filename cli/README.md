@@ -7,8 +7,14 @@ npm install -g @pipod/cli    # or from a checkout of this directory: npm ci && n
 pipod login --server <url>   # sign in to your pi pod server
 pipod                        # launch a pod for the current directory and attach
 pipod --help                 # every command and launch option
+pipod help setup             # first-time setup, in order, and who does each step
+man pipod                    # the whole manual (also `pipod help <command|topic>`)
 pipod update                 # upgrade the way it was installed
 ```
+
+The manual, [man/pipod.1.md](man/pipod.1.md) and [man/pipod-config.5.md](man/pipod-config.5.md),
+is the only copy of the help text: `--help` prints a command's opening block, `pipod help`
+prints whole entries, and `npm run build` renders the man pages.
 
 Running your own server: [docs/self-host.md](https://github.com/pi-pod/pipod/blob/main/docs/self-host.md).
 The npm release works with any server at least as new as it; a CLI newer than its server is

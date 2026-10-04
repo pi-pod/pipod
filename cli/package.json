@@ -19,13 +19,19 @@
     "dist",
     "image",
     "docs",
+    "man",
     "templates"
+  ],
+  "man": [
+    "./man/pipod.1",
+    "./man/pipod-config.5"
   ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && npm run build:man",
+    "build:man": "marked-man --no-breaks man/pipod.1.md -o man/pipod.1 && marked-man --no-breaks man/pipod-config.5.md -o man/pipod-config.5",
     "typecheck": "tsc --noEmit",
     "lint": "node --import tsx scripts/check-runtime-surface.ts",
     "test:integration": "node --import tsx --test --test-concurrency=1 test/integration/account-cli.test.ts test/integration/account-login-me-http.test.ts test/integration/billing-cli.test.ts test/integration/capacity-wait-http.test.ts test/integration/cli-main.test.ts test/integration/local-extensions.test.ts test/integration/nested-pods.test.ts test/integration/oidc-security.test.ts test/integration/secrets-cli.test.ts test/integration/workspace-seeding.test.ts test/integration/workstation-wake-http.test.ts",
@@ -42,6 +48,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/ws": "^8.18.1",
+    "marked-man": "^2.1.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
