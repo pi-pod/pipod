@@ -39,6 +39,7 @@ import {
  * @property {"user" | "org"} scope
  * @property {string | null} initScript
  * @property {string | null} bakeScript
+ * @property {string} [agentInstructions] what the agent in its pods is told, chiefly the access they are meant to have
  * @property {Record<string, unknown>} config
  * @property {Record<string, unknown>} piSettings
  * @property {number} version
@@ -269,7 +270,7 @@ function policySections(defaults) {
     },
     {
       title: "Pods launching pods",
-      intro: "What a pod's own agent may do with child pods.",
+      intro: "What a pod's own agent may do with child pods. A child pod, and any job a pod schedules, launches from the pod's own template.",
       fields: [
         checkField({ path: "nestedPods.enabled", label: "Pods may launch child pods", otherwise: true }),
         numberField({ path: "nestedPods.maxDepth", label: "Deepest nesting", min: 0, max: 8, blank: childLimit("maxDepth") }),
@@ -490,6 +491,15 @@ export async function policyEditor(spec) {
 }
 
 /**
+ * A template as the form holds it: text a template does not have yet reads as empty, so
+ * saving it unchanged sends what was there.
+ * @param {Template} template
+ */
+function withTextDefaults(template) {
+  return { ...template, description: template.description ?? "", agentInstructions: template.agentInstructions ?? "" };
+}
+
+/**
  * Creates a template when `id` is null, otherwise edits or deletes it.
  * @param {{
  *   id: string | null,
@@ -528,6 +538,26 @@ export async function templateEditor(spec) {
         textField({ path: "name", label: "Name", required: true, maxLength: 100, placeholder: "backend" }),
         textBlockField({ path: "description", label: "Description", rows: 2, placeholder: "What a pod launched from it is for" }),
         ...sharing,
+      ],
+    },
+    {
+      title: "Agent instructions",
+      intro:
+        "Added to the agent's system prompt in every pod launched from this template, together with the hosts " +
+        "and secrets the pod actually has. Say what access the template is meant to have.",
+      fields: [
+        textBlockField({
+          path: "agentInstructions",
+          label: "Instructions",
+          rows: 6,
+          maxLength: 8000,
+          placeholder:
+            "Read and write in staging with STAGING_DATABASE_URL.\n" +
+            "Production is read-only: query PROD_DATABASE_URL, but never write to it or run migrations.",
+          hint:
+            "The agent is asked to follow these; nothing enforces them. Limit what a pod can reach with the " +
+            "template's secrets and allowed hosts.",
+        }),
       ],
     },
     ...settingsSections({ pi: "piSettings", defaults: spec.defaults, policy: spec.policy }),
@@ -569,7 +599,7 @@ export async function templateEditor(spec) {
         : null,
     sections,
     value: existing
-      ? { ...existing, description: existing.description ?? "" }
+      ? withTextDefaults(existing)
       : { scope: "user", config: {}, piSettings: {} },
     inherited: scope === "org" ? [spec.layers.org, defaults] : [spec.layers.mine, spec.layers.org, defaults],
     readOnly,
@@ -589,13 +619,14 @@ export async function templateEditor(spec) {
         initScript: doc["initScript"] ?? "",
         bakeScript: doc["bakeScript"] ?? "",
         piSettings: doc["piSettings"] ?? {},
+        agentInstructions: doc["agentInstructions"] ?? "",
       };
       /** @type {Template} */
       const stored = existing
         ? await api("PATCH", `/templates/${encodeURIComponent(existing.id)}`, { ...body, expectedVersion: version })
         : await api("POST", "/templates", body);
       version = stored.version;
-      return { ...stored, description: stored.description ?? "" };
+      return withTextDefaults(stored);
     },
     saved(value) {
       showName(String(value["name"]));

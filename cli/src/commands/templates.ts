@@ -88,6 +88,11 @@ async function showCmd(client: AccountClient, args: string[]): Promise<number> {
     info("bake script:");
     out(t.bakeScript);
   }
+  if (t.agentInstructions) {
+    out("");
+    info("agent instructions:");
+    out(t.agentInstructions);
+  }
   if (t.piSettings && Object.keys(t.piSettings).length > 0) {
     info(`Pi settings ${describePiSettings(flatPiSettings(t.piSettings))}`);
   }
@@ -105,6 +110,7 @@ interface TemplateOpts {
   config?: Record<string, unknown>;
   initScript?: string;
   bakeScript?: string;
+  agentInstructions?: string;
   fromHere?: boolean;
   withSecrets?: boolean;
   org?: boolean;
@@ -190,6 +196,12 @@ function parseOpts(args: string[]): { rest: string[]; opts: TemplateOpts } {
         opts.bakeScript = fs.readFileSync(file, "utf8");
         break;
       }
+      case "--agent-instructions": {
+        const file = next();
+        if (!fs.existsSync(file)) throw new PiPodError(`no such agent instructions file: ${file}`);
+        opts.agentInstructions = fs.readFileSync(file, "utf8");
+        break;
+      }
       default:
         rest.push(arg);
     }
@@ -247,6 +259,7 @@ async function createCmd(client: AccountClient, args: string[], flags: Templates
     ...(opts.description ? { description: opts.description } : {}),
     ...(initScript ? { initScript } : {}),
     ...(bakeScript ? { bakeScript } : {}),
+    ...(opts.agentInstructions ? { agentInstructions: opts.agentInstructions } : {}),
     // An explicit refresh is replacement, not merge: an empty project file set clears stale custody.
     ...(opts.fromHere ? { piSettings: piSettings ?? {} } : {}),
   });
@@ -399,10 +412,11 @@ async function editCmd(client: AccountClient, args: string[]): Promise<number> {
     opts.description === undefined &&
     !opts.config &&
     opts.initScript === undefined &&
-    opts.bakeScript === undefined
+    opts.bakeScript === undefined &&
+    opts.agentInstructions === undefined
   ) {
     throw new PiPodError("nothing to change", {
-      hint: "pass --name, --description, --config <file>, --init-script <file> or --bake-script <file>",
+      hint: "pass --name, --description, --config <file>, --init-script <file>, --bake-script <file> or --agent-instructions <file>",
     });
   }
   const updated = await client.updateTemplate(t.id, {
@@ -414,6 +428,7 @@ async function editCmd(client: AccountClient, args: string[]): Promise<number> {
     ...(opts.config ? { config: opts.config } : {}),
     ...(opts.initScript !== undefined ? { initScript: opts.initScript } : {}),
     ...(opts.bakeScript !== undefined ? { bakeScript: opts.bakeScript } : {}),
+    ...(opts.agentInstructions !== undefined ? { agentInstructions: opts.agentInstructions } : {}),
   });
   info(`updated template ${updated.name}`);
   await hintMissingCredentials(client);

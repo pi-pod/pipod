@@ -129,6 +129,8 @@ export interface ApiTemplate {
   initScript: string | null;
   /** Older servers omit this; treat as unset rather than empty. */
   bakeScript?: string | null;
+  /** What the agent in every pod launched from it is told; "" when none. Older servers omit it. */
+  agentInstructions?: string;
   config: Record<string, unknown>;
   /** Sanitized flat Pi files owned by this template. Legacy servers may return two scopes. */
   piSettings?: PiSettingsFilesBody | PiSettingsBundleBody;
@@ -144,6 +146,8 @@ export interface TemplateBody {
   description?: string;
   initScript?: string;
   bakeScript?: string;
+  /** "" removes them. Not part of a pushed bundle: `pipod push` leaves them as they are. */
+  agentInstructions?: string;
   scope?: "user" | "org";
   config: Record<string, unknown>;
   /** Explicit template custody. The CLI always writes the flat file map; the two-scope read shape stays accepted on responses only. */

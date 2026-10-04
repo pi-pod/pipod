@@ -23,7 +23,7 @@ import { FRAME_PROTO_VERSION, type ShimHello } from "./frames.js";
 import { runHeadless, tuiModeFromArgv } from "./headless.js";
 import { wireSessionMirror, type SessionMirror } from "./mirror.js";
 import { bundledPiVersion, comparePiVersions, describeVersionSkew } from "./piversion.js";
-import { uploadPodExtension, withPodExtension } from "./pod-extension.js";
+import { uploadPodExtension, withPodExtension, type PodExtensionSettings } from "./pod-extension.js";
 import { installPodTerminalTitle } from "./pod-title.js";
 import { RemoteRpcClient, type RpcClientBase } from "./rpc.js";
 import { HostBridge } from "./runtime/bridge.js";
@@ -209,7 +209,7 @@ export async function connectToPod(
     rejoined = channel !== null;
   }
   if (!channel) {
-    await uploadShim(target.sandbox, exitCodeFile, target.sessionNaming);
+    await uploadShim(target.sandbox, exitCodeFile, { sessionNaming: target.sessionNaming });
     channel = await target.sandbox.openPty({
       argv: shimArgv(target.piArgv),
       cols: 80,
@@ -312,7 +312,7 @@ export interface ShimPathOverrides {
 export async function uploadShim(
   sandbox: Sandbox,
   exitCodeFile: string,
-  sessionNaming?: SessionNaming,
+  extension: PodExtensionSettings = {},
   paths?: ShimPathOverrides,
 ): Promise<void> {
   const script = buildAgentdScript({
@@ -324,11 +324,7 @@ export async function uploadShim(
     ...(paths?.turnMarker !== undefined ? { turnMarkerPath: paths.turnMarker } : {}),
   });
   await sandbox.uploadFile(paths?.shim ?? SHIM_PATH, new TextEncoder().encode(script));
-  await uploadPodExtension(
-    sandbox,
-    { mode: "rpc", ...(sessionNaming ? { sessionNaming } : {}) },
-    paths?.podExt,
-  );
+  await uploadPodExtension(sandbox, { mode: "rpc", ...extension }, paths?.podExt);
 }
 
 /** The argv the PTY runs: the shim wrapping `pi --mode rpc -e <ext>` (§4.2, §6.1). */
@@ -418,7 +414,7 @@ export async function runRpcSession(opts: RpcSessionOptions): Promise<SessionEnd
   if (opts.session) {
     session = opts.session;
   } else {
-    await uploadShim(opts.sandbox, opts.exitCodeFile, opts.sessionNaming);
+    await uploadShim(opts.sandbox, opts.exitCodeFile, { sessionNaming: opts.sessionNaming });
     session = await opts.sandbox.openPty({
       argv: shimArgv(opts.piArgv),
       cols: 80,

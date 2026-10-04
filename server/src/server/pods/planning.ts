@@ -33,7 +33,7 @@ import {
   type LocalPiSettingsLayers,
   type PlannedPiSettings,
 } from "../settings/pi-settings.js";
-import { getTemplate, type TemplateRow } from "../templates/store.js";
+import type { TemplateRow } from "../templates/store.js";
 import {
   loadProviderRegistry,
   PACKAGE_PROVIDERS,
@@ -51,13 +51,14 @@ import {
 import { platformProviderEnv } from "./providercred.js";
 import { SANDBOX_PROVIDER_NAME } from "./sandboxfleet.js";
 import { assertOperatorSandboxUrl, staticHostForUrl, hostById, currentHostUrl, requireHostAwake, openHostAuth, providerForHost } from "./hostidentity.js";
-import { assertDelegatedTemplate, delegateCredentials, type ParentDelegation } from "./lineage.js";
+import { delegateCredentials, launchTemplate, type ParentDelegation } from "./lineage.js";
 import { getSandboxHostBackend } from "./hostbackend/index.js";
 import { buildCreateOwner } from "./owner-identity.js";
 import { platformToken } from "./operations.js";
 import { assertSandboxMemoryWithinDeployment, isAdmissionDetailLike, OWNED_BOAT_DISK_CEILING_GB, platformDiskDefault, resolveShape } from "./capacity.js";
 import { edition, ownedHosts } from "../edition.js";
 import { platformArchiveMaxMinutes, resolveEffectiveRetention } from "./retention-policy.js";
+import { launchAgentInstructions } from "./template-brief.js";
 import type { InitScope, PodServiceDeps, ResolvedConfigReport } from "./types.js";
 import { assertLaunchContextSupported, type LaunchContext } from "./launch-context.js";
 
@@ -428,11 +429,12 @@ export async function planPodLaunch(
 ): Promise<PodLaunchPlan> {
   assertLaunchContextSupported(args.launchContext);
   const project = args.project ?? null;
-  let template: TemplateRow | null = null;
-  if (args.templateId) {
-    template = await getTemplate(args.orgId, args.templateId, args.userId);
-    assertDelegatedTemplate(template, args.delegation);
-  }
+  const template = await launchTemplate({
+    orgId: args.orgId,
+    userId: args.userId,
+    templateId: args.templateId,
+    delegation: args.delegation,
+  });
   // A launch names its project: that identity scopes the project's pod listing and reuse,
   // and names the pod until its session does. Older clients also sent settings with it;
   // none of those are launch layers. Only /pods/resolve supplies projectConfigRaw, for the
@@ -756,6 +758,7 @@ export async function planPodLaunch(
         }
       : {}),
     egress: { description: "", mode: config.egress.mode },
+    ...launchAgentInstructions(template),
     workdir,
     warnings: [
       ...resolved.warnings,

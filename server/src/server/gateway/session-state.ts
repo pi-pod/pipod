@@ -5,6 +5,7 @@ import {
   CHANNEL_LIVENESS_PROBE_TIMEOUT_MS,
   uploadShim,
 } from "../../core/client/session.js";
+import type { PodExtensionSettings } from "../../core/client/pod-extension.js";
 import { buildPiArgv } from "../../core/lifecycle.js";
 import { DEFAULT_RUNTIME_PATHS, type PodRuntimePaths } from "../pods/runtime-paths.js";
 import type { PiConfig } from "../../core/config.js";
@@ -170,11 +171,11 @@ export function commandActivityKind(command: Record<string, unknown>): CommandAc
 export async function prepareGatewayRuntime(
   sandbox: Sandbox,
   workdir: string,
-  sessionNaming: PiConfig["sessionNaming"],
+  extension: PodExtensionSettings,
   paths: PodRuntimePaths = DEFAULT_RUNTIME_PATHS,
 ): Promise<void> {
   const [, workdirResult] = await Promise.all([
-    uploadShim(sandbox, paths.exitCode, sessionNaming, paths),
+    uploadShim(sandbox, paths.exitCode, extension, paths),
     sandbox.exec(["mkdir", "-p", workdir]),
   ]);
   if (workdirResult.exitCode !== 0) {

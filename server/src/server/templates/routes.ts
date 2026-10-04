@@ -29,6 +29,9 @@ const TemplateBody = z
     description: z.string().max(2000).optional(),
     initScript: z.string().max(256 * 1024).optional(),
     bakeScript: z.string().max(256 * 1024).optional(),
+    // Added to the system prompt of every session in a pod launched from the template, so it
+    // is bounded like a prompt rather than a script. An empty string removes it.
+    agentInstructions: z.string().max(8000).optional(),
     // Personal by default; "org" must be asked for. On PATCH, "org" hands a personal
     // template to the org (one-way — see the scope-change check).
     scope: z.enum(["user", "org"]).optional(),
@@ -56,6 +59,7 @@ function toApi(row: TemplateRow) {
     scope: row.owner_user_id ? ("user" as const) : ("org" as const),
     initScript: row.init_script,
     bakeScript: row.bake_script,
+    agentInstructions: row.agent_instructions ?? "",
     // A template written before a schema removal still stores the retired key; `pipod pull`
     // would otherwise copy it into a fresh project's config.json for the CLI to warn about.
     config: stripRetiredConfigKeys(row.config),
@@ -146,8 +150,8 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
         ? "(org_id, owner_user_id, name) WHERE archived_at IS NULL AND owner_user_id IS NOT NULL"
         : "(org_id, name) WHERE archived_at IS NULL AND owner_user_id IS NULL";
       const inserted = await query<TemplateRow>(
-        `INSERT INTO pod_templates (id, org_id, owner_user_id, name, description, init_script, bake_script, config, pi_settings, created_by, created_from_pod)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO pod_templates (id, org_id, owner_user_id, name, description, init_script, bake_script, config, pi_settings, created_by, created_from_pod, agent_instructions)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT ${conflictTarget} DO NOTHING
          RETURNING *`,
         [
@@ -162,6 +166,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
           JSON.stringify(piSettings),
           req.auth.userId,
           req.auth.podId ?? null,
+          req.body.agentInstructions ?? null,
         ],
       );
       const row = inserted.rows[0];
@@ -182,6 +187,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
           name: row.name,
           scope,
           piSettingsPresent: Object.keys(piSettings).length > 0,
+          agentInstructionsPresent: Boolean(req.body.agentInstructions?.trim()),
           ...(req.auth.podId ? { fromPod: req.auth.podId } : {}),
         },
       });
@@ -247,6 +253,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
              config = COALESCE($7, config),
              pi_settings = COALESCE($8, pi_settings),
              owner_user_id = CASE WHEN $9 THEN NULL ELSE owner_user_id END,
+             agent_instructions = COALESCE($10, agent_instructions),
              version = version + 1,
              updated_at = now()
            WHERE id = $1 AND org_id = $2 RETURNING *`,
@@ -260,6 +267,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
             req.body.config ? JSON.stringify(req.body.config) : null,
             piSettings === null ? null : JSON.stringify(piSettings),
             shareWithOrg,
+            req.body.agentInstructions ?? null,
           ],
         )
         .catch((e: unknown) => {
@@ -283,6 +291,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       detail: {
         ...(req.body.scope === "org" ? { sharedWithOrg: true } : {}),
         ...(piSettings !== null ? { piSettingsChanged: true } : {}),
+        ...(req.body.agentInstructions !== undefined ? { agentInstructionsChanged: true } : {}),
         ...(req.auth.podId ? { fromPod: req.auth.podId } : {}),
       },
     });

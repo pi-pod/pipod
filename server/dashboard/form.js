@@ -365,7 +365,7 @@ export function textField(spec) {
 
 /**
  * Free text kept exactly as typed, such as a description or a script; never inherits.
- * @param {FieldBase & { rows?: number, code?: boolean, placeholder?: string }} spec
+ * @param {FieldBase & { rows?: number, code?: boolean, placeholder?: string, maxLength?: number }} spec
  * @returns {Field}
  */
 export function textBlockField(spec) {
@@ -375,6 +375,7 @@ export function textBlockField(spec) {
     class: spec.code ? "code" : "",
     placeholder: spec.placeholder ?? "",
   });
+  if (spec.maxLength) input.maxLength = spec.maxLength;
   const { node, error, warn } = frame({ ...spec, wide: true }, input);
   return {
     path: spec.path,

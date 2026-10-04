@@ -912,6 +912,8 @@ export function registerPodRoutes(
         imageProvenance: plan.imageRecipe.provenance,
         imageResources: plan.imageRecipe.effectiveResources ?? null,
         egress: { mode: plan.config.egress.mode },
+        // What the agent will be told about the template; null when it has no instructions.
+        agentInstructions: plan.report.agentInstructions ?? null,
         settingsContract: "server-bundles-v1",
         configProvenance: plan.report.configProvenance,
         layerOrder: plan.report.layerOrder,
