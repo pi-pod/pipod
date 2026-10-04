@@ -110,6 +110,9 @@ sealed interface SessionServerMessage {
         val thinkingLevels: List<String>,
     ) : SessionServerMessage
 
+    /** pi's answer to an `rpc` command this client sent, under the client's id. */
+    data class RpcResult(val id: String, val response: JsonObject?) : SessionServerMessage
+
     data object Pong : SessionServerMessage
 
     /**
@@ -154,6 +157,13 @@ interface SessionTransport {
     fun requestModels(): Boolean
     fun uiResponse(response: JsonObject): Boolean
     fun set(model: Map<String, String>? = null, thinkingLevel: String? = null): Boolean
+
+    /**
+     * Sends one pi RPC command through the gateway's passthrough. The answer
+     * comes back to this socket alone as `rpc_result` under [id], which must be
+     * unique: pi retires an id once it has answered it.
+     */
+    fun rpc(id: String, command: JsonObject): Boolean
 }
 
 /**
@@ -301,6 +311,14 @@ class SessionSocket(
         },
     )
 
+    override fun rpc(id: String, command: JsonObject): Boolean = send(
+        buildJsonObject {
+            put("type", "rpc")
+            put("id", id)
+            put("command", command)
+        },
+    )
+
     private fun send(message: JsonObject): Boolean {
         val socket = webSocket
         if (socket == null || !isConnected) return false
@@ -389,6 +407,10 @@ class SessionSocket(
                 ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
                 ?: emptyList(),
         )
+
+        "rpc_result" -> obj.string("id")?.let { id ->
+            SessionServerMessage.RpcResult(id = id, response = obj["response"] as? JsonObject)
+        }
 
         "pong" -> SessionServerMessage.Pong
 

@@ -28,6 +28,7 @@ public struct SessionView: View {
     @State private var attachments: [ChatAttachment] = []
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showFileImporter = false
+    @State private var showsUsage = false
     @State private var attachError: String?
     @State private var isPicking = false
     @State private var launchReport: LaunchReport?
@@ -131,6 +132,10 @@ public struct SessionView: View {
                 attachError = FriendlyError.message(error)
             }
         }
+        // From the root for the same reason as the document browser above.
+        .sheet(isPresented: $showsUsage) {
+            if let stream { SessionUsageSheet(tracker: stream.usage) }
+        }
     }
 
     // MARK: - Screen
@@ -199,6 +204,7 @@ public struct SessionView: View {
                     placeholder: composerPlaceholder(stream),
                     onSend: { sendDraft(stream) },
                     onChooseModel: { router.openModelPicker(podId: podId) },
+                    onShowUsage: { showsUsage = true },
                     attachments: attachments,
                     onRemoveAttachment: { id in
                         attachments.removeAll { $0.id == id }

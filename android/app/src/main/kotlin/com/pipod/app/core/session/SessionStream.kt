@@ -149,6 +149,8 @@ data class SessionStreamState(
     val hiddenThinkingLabel: String? = null,
     val expandedToolDetails: Set<String> = emptySet(),
     val toolsExpandedByExtension: Boolean = false,
+    /** What pi has spent in this pod's session; null until pi first answers. */
+    val usage: SessionUsage? = null,
 ) {
     /** Tool cards the user has opened, keyed as the transcript presentation keys them. */
     fun isToolExpanded(key: String): Boolean = toolsExpandedByExtension || key in expandedToolDetails
@@ -206,6 +208,12 @@ class SessionStream(
      * the socket, so a lock of its own would be a second lock order.
      */
     val remoteUi: RemoteUiStore = RemoteUiStore(lock = lock)
+
+    /** Called under [lock], like every other reducer entry point. */
+    private val usageTracker = SessionUsageTracker { id, command ->
+        val transport = socket
+        isConnected && transport != null && transport.rpc(id, command)
+    }
 
     private val _state = MutableStateFlow(SessionStreamState())
     val state: StateFlow<SessionStreamState> = _state.asStateFlow()
@@ -1557,6 +1565,8 @@ class SessionStream(
 
             is SessionServerMessage.Models -> handleModels(message)
 
+            is SessionServerMessage.RpcResult -> usageTracker.accept(message.id, message.response)
+
             is SessionServerMessage.Error -> {
                 // Remote-UI errors are scoped to one extension surface: the
                 // surface goes read-only and says so itself, rather than
@@ -1657,6 +1667,7 @@ class SessionStream(
         // anything answered elsewhere while detached is gone from this list.
         dialogs.clear()
         socket?.requestModels()
+        usageTracker.attached()
         // A pod this app just launched first switches to the remembered model, which needs the
         // catalog: its parked messages wait for that (see [startOnRememberedModel]).
         if (ModelMemory.startingModel(podId) == null) flushQueuedOffline()
@@ -1761,6 +1772,7 @@ class SessionStream(
                 // applying afterwards. Terminal wording comes only from the
                 // end events below, never from this boundary.
                 updateRunningState()
+                usageTracker.refresh()
             }
 
             "compaction_start" -> {
@@ -1771,6 +1783,8 @@ class SessionStream(
             "compaction_end" -> {
                 isCompacting = false
                 updateRunningState()
+                // Summarizing the history is itself priced usage.
+                usageTracker.refresh()
             }
 
             "agent_end", "turn_end" -> Unit
@@ -1816,6 +1830,9 @@ class SessionStream(
                     else -> upsertAssistant(itemId, text, timestamp, inProgress = false)
                 }
                 activeAssistantItemId = null
+                // Each finished reply is priced, so a long tool-calling turn
+                // shows its spend growing instead of jumping once at the end.
+                usageTracker.refresh()
             }
 
             "tool_execution_start", "tool_execution_update", "tool_execution_end" ->
@@ -2288,6 +2305,7 @@ class SessionStream(
             hiddenThinkingLabel = hiddenThinkingLabel,
             expandedToolDetails = expandedToolDetails.toSet(),
             toolsExpandedByExtension = toolsExpandedByExtension,
+            usage = usageTracker.latest,
         )
     }
 

@@ -14,6 +14,7 @@ struct ComposerBar: View {
     let placeholder: String
     let onSend: () -> Void
     let onChooseModel: () -> Void
+    let onShowUsage: () -> Void
 
     /// Images staged for the next turn. Empty is the common case and renders no
     /// strip at all.
@@ -51,13 +52,17 @@ struct ComposerBar: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            HStack {
+            HStack(spacing: 8) {
                 ModelPickerButton(
                     model: stream,
                     action: onChooseModel,
                     identifier: "composer.modelPicker"
                 )
+                .layoutPriority(1)
                 Spacer(minLength: 0)
+                if let usage = stream.usage.latest, !usage.isEmpty {
+                    SessionUsageButton(usage: usage, action: onShowUsage)
+                }
             }
             .padding(.horizontal, 4)
 
