@@ -36,7 +36,9 @@ struct ModelPickerButton: View {
                 }
             }
             .font(.caption)
-            .frame(maxWidth: 220)
+            // Leading, so the chip sits at the start of the composer row however much
+            // of the row its button is given.
+            .frame(maxWidth: 220, alignment: .leading)
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
         }

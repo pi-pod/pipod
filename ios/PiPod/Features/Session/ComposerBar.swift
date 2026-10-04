@@ -52,19 +52,7 @@ struct ComposerBar: View {
 
     var body: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                ModelPickerButton(
-                    model: stream,
-                    action: onChooseModel,
-                    identifier: "composer.modelPicker"
-                )
-                .layoutPriority(1)
-                Spacer(minLength: 0)
-                if let usage = stream.usage.latest, !usage.isEmpty {
-                    SessionUsageButton(usage: usage, action: onShowUsage)
-                }
-            }
-            .padding(.horizontal, 4)
+            modelRow
 
             if !attachments.isEmpty || attachError != nil {
                 AttachmentStrip(
@@ -178,6 +166,31 @@ struct ComposerBar: View {
         .padding(.vertical, 6)
         .background(AppColors.bar)
     }
+
+    /// The two halves of pi's footer: the model the next turn runs on, and what the
+    /// session has spent. The spend is shown whole whenever it fits; when it does not, it
+    /// gives up its start (token counts, then cost), and never squeezes the model name
+    /// below `modelMinWidth`. No `ViewThatFits` here: inside this bar it re-measured
+    /// without end after a send and pinned the main thread.
+    private var modelRow: some View {
+        HStack(spacing: 8) {
+            ModelPickerButton(
+                model: stream,
+                action: onChooseModel,
+                identifier: "composer.modelPicker"
+            )
+            .frame(minWidth: Self.modelMinWidth, alignment: .leading)
+            // The gap yields first, so the model name is never squeezed for it.
+            Spacer(minLength: 0).layoutPriority(-1)
+            if let usage = stream.usage.latest, !usage.isEmpty {
+                SessionUsageButton(usage: usage, action: onShowUsage)
+                    .layoutPriority(1)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private static let modelMinWidth: CGFloat = 140
 
     /// What is left, and — past the limit — why Send is off.
     private var counterRow: some View {

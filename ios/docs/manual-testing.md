@@ -366,10 +366,16 @@ Unmarked items are **not yet verified** — that is the point of the list.
 - [sim] interrupt stops a long turn (`SLOW`)
 - [sim] the model and thinking level are on the toolbar without opening the picker, and
       switching takes effect
-- [ ] pi's session usage sits beside the model in the composer row (`↑in ↓out $cost
-      context%/window`, the token part dropping first when the row is narrow), updates after
-      each reply (`HEAVY` walks the context past the 70% and 90% tones), stays hidden until
-      something is spent, and opens the breakdown sheet on tap
+- [sim] pi's session usage sits beside the model in the composer row (`↑in ↓out $cost
+      context%/window`), updates after each reply, including turns another client drove
+      (`HEAVY` walks the context past the 70% and 90% tones), stays hidden until something
+      is spent, and opens the breakdown sheet on tap, which keeps updating while open
+      ([row](screenshots/session-usage.png), [sheet](screenshots/session-usage-sheet.png)).
+      A short row loses the line's start, token counts first; at accessibility sizes only
+      the context figure shows, and the model name stays whole. The first version fitted
+      the line with `ViewThatFits`, and after a send that pinned the main thread at 100%
+      with a blank transcript; the row now uses fixed layout priorities, and three
+      back-to-back sends at default and accessibility sizes stay idle
 - [sim] approvals appear inline and resolve (`CONFIRM`, `SELECT`, `INPUT`, `EDITOR`), from
       the conversation **and** from the Approvals tab; the turn resumes within a second,
       one card clears, one receipt is left, and "pi is working" does not linger
