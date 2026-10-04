@@ -36,6 +36,16 @@ export const BROKER_OAUTH_PROVIDERS = [
 
 const BROKER_OAUTH_PROVIDER_SET: ReadonlySet<string> = new Set(BROKER_OAUTH_PROVIDERS);
 
+/**
+ * Sign-in methods a listed provider offers that cannot finish on the server: they wait for the
+ * browser to redirect to a loopback port on the machine running the login, and take no pasted
+ * code. The broker leaves them out of the method choice. Radius (pi 1.0.2) offers its device
+ * code beside such a browser method.
+ */
+export const SERVER_UNFINISHABLE_LOGIN_METHODS: Readonly<Record<string, readonly string[]>> = {
+  radius: ["browser"],
+};
+
 export interface BrokerCapability {
   oauth: boolean;
   apiKey: boolean;

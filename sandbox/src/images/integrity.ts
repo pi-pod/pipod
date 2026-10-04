@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, type BigIntStats } from "node:fs";
 import { lstat, readdir, readlink, readFile, stat } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -43,6 +43,27 @@ export async function layerTreeDigest(root: string): Promise<string> {
     maxBuffer: 64 * 1024 * 1024,
   });
   hash.update(stdout.split("\n\n").filter(Boolean).map((block) => block.replace(`# file: ${root}`, "# file: .")).sort().join("\n\n"));
+  return hash.digest("hex");
+}
+
+/**
+ * What a tree looks like to the filesystem, without reading file contents: every entry's path,
+ * type, mode, owner, device, size, inode, link count, mtime and ctime. Writing, truncating,
+ * linking, renaming, removing, chmod, chown and xattr changes all move ctime, which userspace
+ * cannot set back, so an unchanged fingerprint means nothing changed the tree through the
+ * filesystem since {@link layerTreeDigest} verified it. Only the content digest sees silent
+ * media corruption.
+ */
+export async function layerTreeFingerprint(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  async function visit(relative: string, s: BigIntStats): Promise<void> {
+    hash.update(`${JSON.stringify(relative)} ${s.mode} ${s.uid} ${s.gid} ${s.rdev} ${s.size} ${s.ino} ${s.nlink} ${s.mtimeNs} ${s.ctimeNs}\n`);
+    if (!s.isDirectory()) return;
+    const names = (await readdir(path.join(root, relative))).sort();
+    const children = await Promise.all(names.map((name) => lstat(path.join(root, relative, name), { bigint: true })));
+    for (const [i, name] of names.entries()) await visit(path.join(relative, name), children[i]!);
+  }
+  await visit("", await lstat(root, { bigint: true }));
   return hash.digest("hex");
 }
 

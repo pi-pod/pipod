@@ -149,7 +149,7 @@ public struct CredentialsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text("Pods using it will need a reconnect.")
+                Text("Pods stop using it. The provider still accepts it until you revoke it there; do that if a pod may have exposed it.")
             }
             .sheet(item: $login) { request in
                 CredentialLoginView(provider: request.provider, authType: request.authType) {

@@ -236,7 +236,7 @@ fun SettingsScreen(
         scope.launch {
             val confirmed = dialogs.confirm(
                 title = "Delete the saved $name sign-in?",
-                message = "Pods using it will need a reconnect.",
+                message = "Pods stop using it. The provider still accepts it until you revoke it there; do that if a pod may have exposed it.",
                 confirmLabel = "Delete sign-in",
                 destructive = true,
                 confirmSemanticsLabel = "Confirm delete $name model provider sign-in",

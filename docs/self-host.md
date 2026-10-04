@@ -458,6 +458,12 @@ against database theft, not against the control plane or an authorized pod.
 Template/init-script editors likewise influence code that runs with inherited
 secrets; treat them as trusted for those scopes.
 
+Model credentials have the same boundary. A pod's `~/.pi/agent/auth.json` holds the
+API keys and OAuth access tokens leased to it (never an OAuth refresh token), and any
+code in the pod can read them and use the pod's token to fetch the current lease.
+Removing a credential takes it out of the owner's pods, but the provider still
+accepts it: revoke it there if a pod may have exposed it.
+
 A template's agent instructions ("read-write in staging, read-only in
 production") reach the agent in every pod launched from it, but they enforce
 nothing: a pod can do whatever its secrets and egress allow. Give a template

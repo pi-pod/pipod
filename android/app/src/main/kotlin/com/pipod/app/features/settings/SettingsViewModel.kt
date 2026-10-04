@@ -1031,7 +1031,7 @@ class SettingsViewModel(
         }
     }
 
-    /** Called after the reader has confirmed. Pods using it will need a reconnect. */
+    /** Called after the reader has confirmed. Pods stop using it; the server removes it from them. */
     fun removeCredential(credential: CredentialStatus) {
         viewModelScope.launch {
             val providerId = credential.providerId

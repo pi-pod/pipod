@@ -58,10 +58,15 @@ fetch, never a mutable-tag refresh. Missing/corrupt blobs are downloaded and dig
 Keep `STATE_DIR/images` compressed blobs and SQLite across snapshots. Do not mount the
 extracted layer cache or image metadata on tmpfs. Boot validation deliberately pays temporary
 extraction space and I/O per unique layer; allow several minutes for a large cache rather
-than disabling the gate. Image resolution also re-hashes verified trees before launch, so
-post-boot loss or corruption cannot become a successful start (a re-pull repairs it). This
-adds image-size-dependent I/O to starts. Standalone image-store callers must validate or pull
-before resolving cached refs. Run only one runtime/offline verifier per state directory.
+than disabling the gate. Image resolution re-checks each verified tree's fingerprint before
+launch — every entry's path, type, mode, owner, size, inode, link count, mtime and ctime,
+without reading file contents — so post-boot loss or modification cannot become a successful
+start (a re-pull repairs it). Every change made through the filesystem moves ctime, which
+userspace cannot set back. Corruption beneath the filesystem leaves the fingerprint alone, so
+the runtime also re-hashes verified trees' contents every six hours and forgets any that no
+longer match; their next resolve misses and a pull repairs them. Standalone image-store callers
+must validate or pull before resolving cached refs. Run only one runtime/offline verifier per
+state directory.
 
 ## Boat configuration
 

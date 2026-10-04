@@ -144,6 +144,7 @@ export async function acquireLease(
   return {
     lease: {
       revision: computeAggregateRevision(included),
+      scope: [...providerIds],
       providers,
     },
     failures,

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { assertLayerNotMounted, fileDigest, layerTreeDigest, verifyDiffDigest } from "./integrity.js";
+import { assertLayerNotMounted, fileDigest, layerTreeDigest, layerTreeFingerprint, verifyDiffDigest } from "./integrity.js";
 import { open, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -191,7 +191,13 @@ export class OciImageStore implements ImageStore {
   readonly #blobTasks = new Map<string, Promise<string>>();
   readonly #layerTasks = new Map<string, Promise<number>>();
   readonly #maxImageBytes: number;
-  readonly #verifiedLayers = new Map<string, string>();
+  /**
+   * Lowers whose contents were verified since boot: the content digest that verified them and
+   * the tree's fingerprint at that moment. A resolve compares the fingerprint, which reads no
+   * file contents; {@link scrub} compares the contents.
+   */
+  readonly #verifiedLayers = new Map<string, { content: string; fingerprint: string }>();
+  readonly #layerChecks = new Map<string, Promise<boolean>>();
 
   constructor(options: {
     stateDir: string;
@@ -464,16 +470,56 @@ export class OciImageStore implements ImageStore {
     return destination;
   }
 
+  /**
+   * Whether a verified lower is unchanged since its contents were verified, by fingerprint:
+   * cheap enough for every resolve, and it still sees post-boot loss or modification. A
+   * changed lower is forgotten, so the next pull re-verifies and repairs it. Concurrent checks
+   * of one lower share a walk.
+   */
   async #layerStillVerified(digest: string): Promise<boolean> {
-    const expected = this.#verifiedLayers.get(digest);
-    if (expected === undefined) return false;
+    const pending = this.#layerChecks.get(digest);
+    if (pending) return pending;
+    const check = (async () => {
+      const verified = this.#verifiedLayers.get(digest);
+      if (verified === undefined) return false;
+      try {
+        if (await layerTreeFingerprint(this.layerDir(digest)) === verified.fingerprint) return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      // A repair that finished meanwhile recorded a new verification; keep that one.
+      if (this.#verifiedLayers.get(digest) === verified) this.#verifiedLayers.delete(digest);
+      return false;
+    })();
+    this.#layerChecks.set(digest, check);
     try {
-      if (await layerTreeDigest(this.layerDir(digest)) === expected) return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return await check;
+    } finally {
+      if (this.#layerChecks.get(digest) === check) this.#layerChecks.delete(digest);
     }
-    this.#verifiedLayers.delete(digest);
-    return false;
+  }
+
+  /**
+   * Re-hash every verified lower's contents, one at a time, and forget the ones that no longer
+   * match, so their next resolve misses and a pull repairs them. Resolve's fingerprint sees
+   * every change made through the filesystem; this sees corruption beneath it. Returns the
+   * digests forgotten.
+   */
+  async scrub(): Promise<string[]> {
+    const forgotten: string[] = [];
+    for (const [digest, verified] of [...this.#verifiedLayers]) {
+      if (this.#layerTasks.has(digest)) continue;
+      let content: string | null = null;
+      try {
+        content = await layerTreeDigest(this.layerDir(digest));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (content === verified.content || this.#verifiedLayers.get(digest) !== verified) continue;
+      this.#verifiedLayers.delete(digest);
+      forgotten.push(digest);
+    }
+    return forgotten;
   }
 
   /** Extracts and verifies a layer; returns the bytes it newly extracted (0 when already present). */
@@ -506,7 +552,7 @@ export class OciImageStore implements ImageStore {
           await rename(rebuilt, target);
           if (await layerTreeDigest(target) !== expected) throw new Error(`layer repair verification failed: ${digest}`);
         }
-        this.#verifiedLayers.set(digest, expected);
+        this.#verifiedLayers.set(digest, { content: expected, fingerprint: await layerTreeFingerprint(target) });
         return size;
       } finally {
         await rm(rebuilt, { recursive: true, force: true });

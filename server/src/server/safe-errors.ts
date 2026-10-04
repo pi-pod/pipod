@@ -798,6 +798,23 @@ export function sanitizeForLog(error: unknown): Record<string, unknown> {
   return out;
 }
 
+/** Query parameters whose values are credentials: WebSocket tickets, OAuth codes, tokens. */
+const SECRET_QUERY_PARAM = /ticket|token|secret|password|key|^code$/i;
+
+/**
+ * `url` with credential-bearing query values replaced by `REDACTED`. WebSocket clients carry
+ * their one-shot ticket in the URL, and pino's path redaction cannot reach inside a string.
+ */
+export function redactUrlForLog(url: string): string {
+  const start = url.indexOf("?");
+  if (start < 0) return url;
+  const params = new URLSearchParams(url.slice(start + 1));
+  const secret = [...new Set(params.keys())].filter((name) => SECRET_QUERY_PARAM.test(name));
+  if (secret.length === 0) return url;
+  for (const name of secret) params.set(name, "REDACTED");
+  return `${url.slice(0, start)}?${params.toString()}`;
+}
+
 /**
  * Pino `redact` paths: request/response fields that must never persist. Entire
  * bodies are redacted by default so a future serializer must opt out explicitly

@@ -13,7 +13,7 @@ import { query } from "../db/index.js";
 import { HttpError } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import type { KekProvider } from "../secrets/crypto.js";
-import { brokerCapability, type BrokerCapability } from "./dependencies.js";
+import { SERVER_UNFINISHABLE_LOGIN_METHODS, brokerCapability, type BrokerCapability } from "./dependencies.js";
 import {
   credentialIsExpired,
   dbCredentialStore,
@@ -189,7 +189,7 @@ export async function executeLogin(
 
   try {
     await runWithLoginDeadline(opts?.signal, interaction.signal, async (signal) => {
-      const wired = withInteractionSignal(interaction, signal);
+      const wired = withServerLoginMethods(providerId, withInteractionSignal(interaction, signal));
       const exec =
         opts?.loginExec ??
         ((id, type, wiredInteraction) => defaultLoginExec(kek, subject, id, type, wiredInteraction));
@@ -322,6 +322,21 @@ function withInteractionSignal(
       return interaction.prompt(prompt);
     },
     notify: (event) => interaction.notify(event),
+  };
+}
+
+/** Leave out sign-in methods that cannot finish on the server; with one left, choose it. */
+function withServerLoginMethods(providerId: string, interaction: BrokerAuthInteraction): BrokerAuthInteraction {
+  const unfinishable = SERVER_UNFINISHABLE_LOGIN_METHODS[providerId];
+  if (!unfinishable) return interaction;
+  return {
+    ...interaction,
+    prompt: async (prompt) => {
+      if (prompt.type !== "select") return interaction.prompt(prompt);
+      const options = prompt.options.filter((option) => !unfinishable.includes(option.id));
+      if (options.length === 1) return options[0]!.id;
+      return interaction.prompt({ ...prompt, options });
+    },
   };
 }
 
