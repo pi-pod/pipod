@@ -12,20 +12,17 @@
  *
  * pi already publishes all of it. `@earendil-works/pi-ai` exports `getBuiltinProviders()`,
  * `getBuiltinModels(id)` — whose models carry the `baseUrl` the allow set needs — and
- * `findEnvKeys(id, env)`. So when the host has pi installed, that is the source, and the list
- * updates when pi updates without anyone editing this file.
+ * `findEnvKeys(id, env)`. The server depends on the exact pi its pods run, so that copy is the
+ * source, and the list moves with the pi pin without anyone editing this file.
  *
- * The fallback is not optional, though: pi-pod's whole premise is that pi lives in the *image*
- * and the host is only a terminal (§1). A CI runner or a fresh laptop can legitimately have no
- * pi at all, and a launcher that could only work on machines already running the thing it
- * launches would be a strange tool. So a static table survives below as the fallback, and
- * preflight says which source produced the answer.
+ * A static table survives below as the fallback for a layout where that copy cannot be found,
+ * and preflight says which source produced the answer.
  *
  * What is *not* derivable is noted at {@link OAUTH_REFRESH_HOSTS}.
  */
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { debug } from "./log.js";
 
 /** What pi-pod needs to know about one provider. */
@@ -38,7 +35,7 @@ export interface ProviderFacts {
 
 export interface ProviderRegistry {
   /** Named in findings, because "pi-pod does not recognize this" means different things. */
-  source: "host pi" | "built-in";
+  source: "pinned pi" | "built-in";
   providers: Record<string, ProviderFacts>;
 }
 
@@ -52,24 +49,28 @@ export interface ProviderRegistry {
  * boots — which makes the refresh the pod's first request, not a rare one. An allow set that
  * covers only inference therefore looks complete and fails immediately.
  *
- * Short, and slow-moving: a provider adds an OAuth flow once. Verified against pi 0.82.0
- * (`pi-ai/dist/auth/oauth/`).
+ * Short, and slow-moving: a provider adds an OAuth flow once. Verified against pi 1.0.2
+ * (`pi-ai/dist/auth/oauth/`). Meta's device sign-in and its daily key minting use two hosts;
+ * Radius lists its default gateway.
  */
 export const OAUTH_REFRESH_HOSTS: Record<string, string[]> = {
-  "openai-codex": ["auth.openai.com"],
-  anthropic: ["console.anthropic.com"],
+  anthropic: ["platform.claude.com"],
   "github-copilot": ["github.com", "api.github.com"],
+  "kimi-coding": ["auth.kimi.com"],
+  meta: ["auth.meta.com", "api.meta.ai"],
+  openai: ["auth.openai.com"],
+  "openai-codex": ["auth.openai.com"],
   openrouter: ["openrouter.ai"],
+  radius: ["radius.pi.dev"],
   xai: ["auth.x.ai"],
-  "kimi-coding": ["api.kimi.com"],
 };
 
 /**
- * The fallback table, used when the host has no pi to ask.
+ * The fallback table, used when the pinned pi cannot be read.
  *
- * A snapshot of pi 0.82.0 rather than a hand-curated list — the point is to be wrong in the
- * same way pi is, not in a way of our own. Regenerate it from a host that has pi with
- * `npm run lint`, which reports drift when it can reach one.
+ * A snapshot of pi 1.0.2 rather than a hand-curated list — the point is to be wrong in the
+ * same way pi is, not in a way of our own. Regenerate it with the derivation in
+ * {@link loadProviderRegistry} when the pin moves.
  */
 export const BUILTIN_PROVIDERS: Record<string, ProviderFacts> = {
   "amazon-bedrock": { envKeys: [], endpoints: ["bedrock-runtime.us-east-1.amazonaws.com", "bedrock-runtime.eu-central-1.amazonaws.com"] },
@@ -88,6 +89,7 @@ export const BUILTIN_PROVIDERS: Record<string, ProviderFacts> = {
   groq: { envKeys: ["GROQ_API_KEY"], endpoints: ["api.groq.com"] },
   huggingface: { envKeys: ["HF_TOKEN"], endpoints: ["router.huggingface.co"] },
   "kimi-coding": { envKeys: ["KIMI_API_KEY"], endpoints: ["api.kimi.com"] },
+  meta: { envKeys: ["META_API_KEY"], endpoints: ["api.meta.ai"] },
   minimax: { envKeys: ["MINIMAX_API_KEY"], endpoints: ["api.minimax.io"] },
   "minimax-cn": { envKeys: ["MINIMAX_CN_API_KEY"], endpoints: ["api.minimaxi.com"] },
   mistral: { envKeys: ["MISTRAL_API_KEY"], endpoints: ["api.mistral.ai"] },
@@ -101,7 +103,10 @@ export const BUILTIN_PROVIDERS: Record<string, ProviderFacts> = {
   openrouter: { envKeys: ["OPENROUTER_API_KEY"], endpoints: ["openrouter.ai"] },
   "qwen-token-plan": { envKeys: ["QWEN_TOKEN_PLAN_API_KEY"], endpoints: ["token-plan.ap-southeast-1.maas.aliyuncs.com"] },
   "qwen-token-plan-cn": { envKeys: ["QWEN_TOKEN_PLAN_CN_API_KEY"], endpoints: ["token-plan.cn-beijing.maas.aliyuncs.com"] },
+  "qwen-token-plan-individual": { envKeys: ["QWEN_TOKEN_PLAN_API_KEY"], endpoints: ["token-plan.ap-southeast-1.maas.aliyuncs.com"] },
+  radius: { envKeys: ["RADIUS_API_KEY"], endpoints: ["radius.pi.dev"] },
   together: { envKeys: ["TOGETHER_API_KEY"], endpoints: ["api.together.ai"] },
+  typesafe: { envKeys: ["TYPESAFE_API_KEY"], endpoints: [] },
   "vercel-ai-gateway": { envKeys: ["AI_GATEWAY_API_KEY"], endpoints: ["ai-gateway.vercel.sh"] },
   xai: { envKeys: ["XAI_API_KEY"], endpoints: ["api.x.ai"] },
   xiaomi: { envKeys: ["XIAOMI_API_KEY"], endpoints: ["api.xiaomimimo.com"] },
@@ -302,11 +307,11 @@ export function knownEnvKeys(registry: ProviderRegistry): string[] {
 let cached: Promise<ProviderRegistry> | null = null;
 
 /**
- * The registry for this run: the host's pi when it can be reached, the built-in table otherwise.
+ * The registry for this run: the server's pinned pi, the built-in table if it cannot be read.
  *
- * Cached for the process. Never throws and never blocks a launch — a host without pi, a pi laid
- * out somewhere unfamiliar, and a pi whose exports have moved all land on the fallback with a
- * debug line, because none of them is a reason a pod cannot start.
+ * Cached for the process. Never throws and never blocks a launch — a pi laid out somewhere
+ * unfamiliar and a pi whose exports have moved both land on the fallback with a debug line,
+ * because neither is a reason a pod cannot start.
  */
 export function loadProviderRegistry(opts: { piPath?: string | undefined } = {}): Promise<ProviderRegistry> {
   cached ??= loadUncached(opts);
@@ -319,16 +324,16 @@ export function resetProviderRegistry(): void {
 }
 
 async function loadUncached(opts: { piPath?: string | undefined }): Promise<ProviderRegistry> {
-  const dir = piAiDir(opts.piPath);
+  const piPath = opts.piPath ?? pinnedPiPath();
+  const dir = piPath ? piAiDir(piPath) : null;
   if (!dir) {
-    debug("no @earendil-works/pi-ai beside the host's pi — using the built-in provider table");
+    debug("no @earendil-works/pi-ai beside the pinned pi — using the built-in provider table");
     return BUILTIN_REGISTRY;
   }
 
   try {
-    // Importing the user's own pi, in the launcher process. The same trust as reading their
-    // settings.json and running their `pi`: these two modules are provider *data*, and pi-pod
-    // is already about to execute far more of this machine's pi inside the pod.
+    // Two modules of the server's own pi dependency: provider *data*, imported by path because
+    // the package does not export them.
     const all = (await import(pathToUrl(path.join(dir, "dist", "providers", "all.js")))) as {
       getBuiltinProviders(): string[];
       getBuiltinModels(id: string): Array<{ baseUrl?: string }>;
@@ -354,10 +359,10 @@ async function loadUncached(opts: { piPath?: string | undefined }): Promise<Prov
     }
 
     if (Object.keys(providers).length === 0) throw new Error("pi-ai reported no providers");
-    debug(`provider table from the host's pi: ${Object.keys(providers).length} providers (${dir})`);
-    return { source: "host pi", providers: withDerived(providers) };
+    debug(`provider table from the pinned pi: ${Object.keys(providers).length} providers (${dir})`);
+    return { source: "pinned pi", providers: withDerived(providers) };
   } catch (e) {
-    debug(`could not read the host's pi provider table (${e instanceof Error ? e.message : String(e)}) — using the built-in one`);
+    debug(`could not read the pinned pi provider table (${e instanceof Error ? e.message : String(e)}) — using the built-in one`);
     return BUILTIN_REGISTRY;
   }
 }
@@ -394,21 +399,26 @@ function hostnamesOf(baseUrls: Array<string | undefined>): string[] {
   return [...hosts];
 }
 
-/**
- * `@earendil-works/pi-ai` beside the host's `pi`, or null.
- *
- * Resolved from the binary rather than from pi-pod's own `node_modules`, because pi-pod does not
- * depend on pi and must not start. Both install layouts are checked at every ancestor: nested
- * (`<pkg>/node_modules/@earendil-works/pi-ai`, which is what Homebrew and a plain `npm i -g`
- * produce) and hoisted (`<node_modules>/@earendil-works/pi-ai`).
- */
-export function piAiDir(piPath?: string | undefined): string | null {
-  const bin = piPath ?? whichPi();
-  if (!bin) return null;
+/** The entry module of the pi this server pins (and runs in every pod), or null. */
+function pinnedPiPath(): string | null {
+  try {
+    return fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  } catch {
+    return null;
+  }
+}
 
+/**
+ * `@earendil-works/pi-ai` beside a file of the pi package, or null.
+ *
+ * pi-ai is pi's dependency, not the server's, so it is found from pi's location. Both install
+ * layouts are checked at every ancestor: nested (`<pkg>/node_modules/@earendil-works/pi-ai`) and
+ * hoisted (`<node_modules>/@earendil-works/pi-ai`).
+ */
+export function piAiDir(piPath: string): string | null {
   let dir: string;
   try {
-    dir = path.dirname(fs.realpathSync(bin));
+    dir = path.dirname(fs.realpathSync(piPath));
   } catch {
     return null;
   }
@@ -426,20 +436,6 @@ export function piAiDir(piPath?: string | undefined): string | null {
     dir = parent;
   }
   return null;
-}
-
-function whichPi(): string | null {
-  try {
-    const out = execFileSync("sh", ["-c", "command -v pi"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
-    }).trim();
-    return out === "" ? null : out;
-  } catch {
-    // No pi on PATH — the normal case on a machine that only ever launches pods.
-    return null;
-  }
 }
 
 /** `import()` of an absolute path needs a URL on Windows, and tolerates one everywhere. */

@@ -181,19 +181,23 @@ export async function executeLogin(
   interaction: BrokerAuthInteraction,
   opts?: { signal?: AbortSignal; loginExec?: LoginExec },
 ): Promise<CredentialStatus> {
-  const capability = brokerCapability(providerId);
+  const capability = await brokerCapability(providerId);
   const methodSupported = authType === "oauth" ? capability.oauth : capability.apiKey;
   if (!methodSupported) {
     throw unsupportedLoginError(providerId, authType, capability);
   }
 
-  await runWithLoginDeadline(opts?.signal, interaction.signal, async (signal) => {
-    const wired = withInteractionSignal(interaction, signal);
-    const exec =
-      opts?.loginExec ??
-      ((id, type, wiredInteraction) => defaultLoginExec(kek, subject, id, type, wiredInteraction));
-    await exec(providerId, authType, wired);
-  });
+  try {
+    await runWithLoginDeadline(opts?.signal, interaction.signal, async (signal) => {
+      const wired = withInteractionSignal(interaction, signal);
+      const exec =
+        opts?.loginExec ??
+        ((id, type, wiredInteraction) => defaultLoginExec(kek, subject, id, type, wiredInteraction));
+      await exec(providerId, authType, wired);
+    });
+  } catch (error) {
+    throw isCallbackPortBusy(error) ? callbackPortBusyError(providerId) : error;
+  }
 
   const entry = await readCredentialEntry(kek, subject, providerId);
   const meta = (await listCredentialMeta(subject)).find((row) => row.providerId === providerId) ?? null;
@@ -227,7 +231,45 @@ async function defaultLoginExec(
     refreshOnCreate: false,
     signal: interaction.signal,
   });
-  await runtime.login(providerId, authType, interaction);
+  await runtime.login(providerId, authType, interaction, { getDeviceId: () => brokerDeviceId(subject) });
+}
+
+/**
+ * The installation ID pi's `LoginOptions.getDeviceId` asks for; Sign in with ChatGPT sends it to
+ * OpenAI as the agent host. pi keeps one per installation, and to the broker each account is an
+ * installation. Derived rather than stored, it is the same on every reconnect and every API
+ * process and differs between accounts. UUID syntax is required, so it is laid out as an
+ * RFC 9562 version-8 UUID.
+ */
+function brokerDeviceId(subject: CredentialSubject): string {
+  const bytes = createHash("sha256")
+    .update(JSON.stringify(["pipod-broker-device-id", subject.orgId, subject.userId]))
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Browser flows bind a fixed loopback callback port on the machine running the login — here, the
+ * server, shared by every account. Sign in with ChatGPT refuses to start while another login
+ * holds 1455 (a pending ChatGPT or OpenAI Codex sign-in), and pi's message blames a local pi
+ * session or the Codex CLI, so it is recognized by that wording and replaced.
+ */
+function isCallbackPortBusy(error: unknown): boolean {
+  return error instanceof Error && /\bport \d+ is in use\b/i.test(error.message);
+}
+
+function callbackPortBusyError(providerId: string): HttpError {
+  return new HttpError(409, "login_failed", {
+    code: "login_failed",
+    message:
+      "Another sign-in on this server is using the callback port this one needs. " +
+      `Try again when it finishes; a sign-in waits at most ${LOGIN_DEADLINE_MS / 60_000} minutes.`,
+    provider: providerId,
+  });
 }
 
 function hasUsableOAuthRefresh(

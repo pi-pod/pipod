@@ -68,8 +68,11 @@ export const SETTINGS_FILES = ["settings.json", "models.json", "mcporter.json"] 
  * A denylist rather than a keep-list, on the same forward-compatibility bargain unknown config
  * keys get (§4.1): a preference pi adds next release should travel without a launcher upgrade.
  * The cost is that a *new* host-coupled key would travel once, until it is named here.
+ *
+ * `deviceId` (pi 1.0) identifies the installation to OpenAI when it signs in with ChatGPT; pi
+ * keeps it out of project settings so clones never share one, and a pod is its own installation.
  */
-export const HOST_COUPLED_SETTINGS_KEYS = ["hooks", "mcpServers"] as const;
+export const HOST_COUPLED_SETTINGS_KEYS = ["hooks", "mcpServers", "deviceId"] as const;
 
 const ENV_REFERENCE = /^\$(?:[A-Z_][A-Z0-9_]*|\{[A-Z_][A-Z0-9_]*\})$/;
 const CREDENTIAL_FIELD =

@@ -3,7 +3,8 @@ import * as path from "node:path";
 import { PiPodError } from "./errors.js";
 
 export const HOST_PI_AGENT_SUBPATH = path.join(".pi", "agent");
-export const HOST_COUPLED_SETTINGS_KEYS = ["hooks", "mcpServers"] as const;
+/** Mirrors the server's list; see its comment for why each key stays on this machine. */
+export const HOST_COUPLED_SETTINGS_KEYS = ["hooks", "mcpServers", "deviceId"] as const;
 
 export interface HostConfigSelection {
   settings: boolean;

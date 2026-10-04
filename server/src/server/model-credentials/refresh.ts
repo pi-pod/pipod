@@ -124,11 +124,13 @@ function hasUsableRefreshToken(entry: Record<string, unknown>): boolean {
 /**
  * Map a refresh/network failure onto a bounded classification. Only the error's message is
  * inspected, and only against a small regex — the message itself is never returned, logged,
- * or stored.
+ * or stored. pi reports every refresh failure the same way, so the provider's own wording is
+ * all there is: Meta's identity token cannot be renewed, and pi says "Meta session expired"
+ * when it stops minting keys.
  */
 export function classifyRefreshError(error: unknown): ClassifiedRefreshError {
   const message = errorMessage(error);
-  if (/revoked/i.test(message)) {
+  if (/revoked|session expired/i.test(message)) {
     return { state: "reconnect_required", reason: "revoked" };
   }
   if (/invalid_grant|invalid_client/i.test(message)) {

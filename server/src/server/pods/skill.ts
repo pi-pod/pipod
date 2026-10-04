@@ -246,15 +246,16 @@ Co-located children may themselves use \`"host": "self"\` — the new pod lands 
 machine. Delete workers when their task is done; they are free while stopped but clutter the
 user's pod list.
 
-## Subscription sign-in (pi /login)
+## Model provider sign-in
 
-If the user wants to use an AI subscription (Claude, ChatGPT plans) instead of API keys, they
-run \`/login\` in this pi session — the URL/code flow works from the phone. Afterwards, tell
-them to open this pod in the pi pod app and tap **Save pi sign-in to your account**: the server
-stores the resulting auth file (encrypted, values never readable back) and every pod they
-launch afterwards boots already signed in. You cannot save it yourself — that step is
-deliberately human-only. If a sign-in stops working (tokens rotate), \`/login\` again and
-re-save the same way.
+Model credentials belong to the user's account, not to a pod: a provider they connect once
+works in every pod they launch. The server keeps OAuth refresh tokens; pods receive access
+tokens and API keys. To use a subscription (Claude Pro/Max, ChatGPT, …) or save an API key, the user
+connects the provider in the pi pod app under **Settings → Model providers**, with
+\`pipod credentials connect <provider>\`, or with \`/login\` while attached to a pod from the
+pipod CLI. ChatGPT plans sign in through the \`openai\` provider ("Sign in with ChatGPT");
+\`openai-codex\` is pi's legacy route. Signing in is deliberately human-only — you cannot do it
+for them. If a sign-in stops working, they reconnect it the same way.
 
 ## Init and bake scripts
 

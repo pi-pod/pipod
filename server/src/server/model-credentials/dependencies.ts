@@ -6,25 +6,28 @@
  * `pi-claude-bridge`) needs that same Anthropic grant even when the selected model is
  * something else, because the package exposes tools like AskClaude.
  *
- * Broker login is narrower still: only the pinned Pi builtins in {@link BROKER_OAUTH_PROVIDERS}
- * have an OAuth flow the control plane will run, and `claude-bridge` itself is not loginable.
+ * Broker login is narrower still: it covers the builtins of the server's pinned Pi, OAuth only
+ * for those in {@link BROKER_OAUTH_PROVIDERS}, and `claude-bridge` itself is not loginable.
  */
-import {
-  BUILTIN_REGISTRY,
-  PACKAGE_PROVIDERS,
-  packagesInclude,
-  providerFacts,
-} from "../../core/piregistry.js";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { PACKAGE_PROVIDERS, packagesInclude } from "../../core/piregistry.js";
 
 export const MODEL_CREDENTIAL_DEPENDENCIES: Record<string, readonly string[]> = {
   "claude-bridge": ["anthropic"],
 };
 
-/** The pi builtins whose OAuth login the server's pinned pi supports. */
+/**
+ * The pi builtins whose OAuth login the broker runs. The broker logs in on the server, never
+ * where the user's browser is, so each flow here was checked against the pinned pi for a way to
+ * finish remotely: a device code, a pasted code, or a pasted redirect URL. Check a new pi OAuth
+ * provider the same way before listing it.
+ */
 export const BROKER_OAUTH_PROVIDERS = [
   "anthropic",
   "github-copilot",
   "kimi-coding",
+  "meta",
+  "openai",
   "openai-codex",
   "openrouter",
   "radius",
@@ -39,23 +42,74 @@ export interface BrokerCapability {
   supported: boolean;
 }
 
+/** How the server's pinned pi lets one builtin provider authenticate. */
+export interface PinnedPiProvider {
+  id: string;
+  name: string;
+  oauth?: { name: string; loginLabel?: string };
+  apiKey: boolean;
+}
+
+let pinnedProviders: Promise<ReadonlyMap<string, PinnedPiProvider>> | undefined;
+
+/**
+ * The pinned pi's builtin providers, read from the same `ModelRuntime` that runs broker logins,
+ * so the broker never offers a login pi would refuse or hides one it accepts. Loaded once,
+ * without credential files or model-catalog network.
+ */
+export function pinnedPiProviders(): Promise<ReadonlyMap<string, PinnedPiProvider>> {
+  pinnedProviders ??= loadPinnedPiProviders().catch((error: unknown) => {
+    pinnedProviders = undefined;
+    throw error;
+  });
+  return pinnedProviders;
+}
+
+async function loadPinnedPiProviders(): Promise<ReadonlyMap<string, PinnedPiProvider>> {
+  const runtime = await ModelRuntime.create({
+    credentials: {
+      read: async () => undefined,
+      list: async () => [],
+      modify: async (_providerId, fn) => fn(undefined),
+      delete: async () => {},
+    },
+    allowModelNetwork: false,
+    modelsPath: null,
+    refreshOnCreate: false,
+  });
+  const providers = new Map<string, PinnedPiProvider>();
+  for (const provider of runtime.getProviders()) {
+    const oauth = provider.auth?.oauth;
+    providers.set(provider.id, {
+      id: provider.id,
+      name: provider.name,
+      ...(oauth ? { oauth: { name: oauth.name, ...(oauth.loginLabel ? { loginLabel: oauth.loginLabel } : {}) } } : {}),
+      apiKey: provider.auth?.apiKey !== undefined,
+    });
+  }
+  return providers;
+}
+
 /** Credential provider ids for a model/package provider. Unknown ids default to themselves. */
 export function credentialProvidersFor(providerId: string): readonly string[] {
   return MODEL_CREDENTIAL_DEPENDENCIES[providerId] ?? [providerId];
 }
 
-/**
- * What the broker can log this provider in as.
- *
- * OAuth is allowlisted — not every Pi OAuth host is one the control plane will drive.
- * API-key login follows the builtin registry's env keys; package-only ids such as
- * `claude-bridge` therefore come back unsupported (their dependency is the loginable one).
- */
-export function brokerCapability(providerId: string): BrokerCapability {
-  const oauth = BROKER_OAUTH_PROVIDER_SET.has(providerId);
-  const facts = providerFacts(BUILTIN_REGISTRY, providerId);
-  const apiKey = (facts?.envKeys.length ?? 0) > 0;
+/** {@link brokerCapability} for a provider already looked up in {@link pinnedPiProviders}. */
+export function capabilityOf(provider: PinnedPiProvider | undefined): BrokerCapability {
+  const oauth = provider?.oauth !== undefined && BROKER_OAUTH_PROVIDER_SET.has(provider.id);
+  const apiKey = provider?.apiKey ?? false;
   return { oauth, apiKey, supported: oauth || apiKey };
+}
+
+/**
+ * What the broker can log this provider in as: OAuth when the pinned pi has a flow listed in
+ * {@link BROKER_OAUTH_PROVIDERS}, an API key whenever pi accepts one. Ids pi does not ship —
+ * package providers such as `claude-bridge` — are unsupported; their dependency is the
+ * loginable one.
+ */
+export async function brokerCapability(providerId: string): Promise<BrokerCapability> {
+  return capabilityOf((await pinnedPiProviders()).get(providerId));
 }
 
 function uniqueSorted(ids: Iterable<string>): string[] {
