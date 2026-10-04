@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.pipod.app.core.session.ChatAttachment
 import com.pipod.app.core.session.ChatAttachmentLimits
+import com.pipod.app.core.session.SessionUsage
 import com.pipod.app.shell.ContentPane
 import com.pipod.app.ui.AppActivityIndicator
 import com.pipod.app.ui.AppFieldShape
@@ -79,6 +80,8 @@ data class ComposerState(
     val canAttach: Boolean = true,
     /** The pod's launch failed: nothing typed here could ever be delivered. */
     val isDisabled: Boolean = false,
+    /** What pi has spent in this session; the readout stays away until something has been. */
+    val usage: SessionUsage? = null,
 ) {
     val canSend: Boolean get() = !isDisabled && (text.trim().isNotEmpty() || attachments.isNotEmpty())
 }
@@ -118,6 +121,7 @@ fun ComposerBar(
     modifier: Modifier = Modifier,
     onAttach: () -> Unit = {},
     onRemoveAttachment: (String) -> Unit = {},
+    onShowUsage: () -> Unit = {},
     focusRequester: FocusRequester? = null,
 ) {
     Column(
@@ -132,6 +136,9 @@ fun ComposerBar(
             Column(
                 Modifier.padding(start = 12.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
             ) {
+                state.usage?.takeUnless { it.isEmpty }?.let { usage ->
+                    SessionUsageStrip(usage = usage, onClick = onShowUsage)
+                }
                 if (state.attachments.isNotEmpty() || state.attachError != null) {
                     AttachmentStrip(
                         attachments = state.attachments,

@@ -110,6 +110,8 @@ public enum SessionServerMessage: Sendable {
         requestID: String, models: [JSONValue], current: JSONValue?, thinkingLevel: String?,
         thinkingLevels: [String]
     )
+    /// pi's answer to an `rpc` command this client sent, under the client's id.
+    case rpcResult(id: String, response: JSONValue)
     case pong
     /// `detail` carries the gateway's typed refusal body. A host-demand refusal
     /// arrives as an `error` frame immediately before close code 4420, and that
@@ -140,6 +142,7 @@ public protocol SessionTransport: AnyObject {
     @discardableResult func set(
         model: [String: String]?, thinkingLevel: String?, requestID: String?
     ) -> Bool
+    @discardableResult func rpc(id: String, command: JSONValue) -> Bool
 }
 
 /// One open WebSocket, narrow enough that a test double is a dozen lines.
@@ -314,6 +317,14 @@ public final class SessionSocket: SessionTransport {
         return send(.object(body))
     }
 
+    /// Sends one pi RPC command through the gateway's passthrough. The answer
+    /// comes back to this socket alone as `rpc_result` under `id`, which must
+    /// be unique: pi retires an id once it has answered it.
+    @discardableResult
+    public func rpc(id: String, command: JSONValue) -> Bool {
+        send(.object(["type": .string("rpc"), "id": .string(id), "command": command]))
+    }
+
     private func send(_ message: JSONValue) -> Bool {
         guard let channel, isConnected else { return false }
         guard let data = try? JSONCoding.data(from: message),
@@ -413,6 +424,10 @@ public final class SessionSocket: SessionTransport {
                 models: models, current: current,
                 thinkingLevel: thinkingLevel, thinkingLevels: thinkingLevels
             )
+        case "rpc_result":
+            guard let id = object["id"]?.stringValue, let response = map(object["response"])
+            else { return nil }
+            return .rpcResult(id: id, response: response)
         case "pong":
             return .pong
         case "error":

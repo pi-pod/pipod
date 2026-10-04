@@ -97,7 +97,6 @@ const CANNED: Record<string, unknown> = {
       sourceInfo: { path: "internal", source: "auto", scope: "user", origin: "top-level" },
     })),
   },
-  get_session_stats: { sessionId: "fake-session", tokens: { total: 0 } },
   get_last_assistant_text: { text: "fake pi says hi" },
 };
 
@@ -115,13 +114,32 @@ const MODEL_SET_DELAY_MS = Math.max(
 );
 
 /** The whole-message shape RpcClientBase hands the gateway, which is what clients render. */
-function assistantMessage(text: string, stopReason?: string): Record<string, unknown> {
+function assistantMessage(
+  text: string,
+  stopReason?: string,
+  usage?: FakeReplyUsage,
+): Record<string, unknown> {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     ...(stopReason ? { stopReason } : {}),
+    ...(usage ? { usage } : {}),
   };
 }
+
+/** One reply's usage in pi's `Usage` shape, priced like a mid-range model. */
+interface FakeReplyUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+}
+
+const FAKE_CONTEXT_WINDOW = 200_000;
+/** Dollars per million tokens: input, output, cache read, cache write. */
+const FAKE_PRICES = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } as const;
 
 function replyFor(message: string): string {
   const echo = /reply with exactly ([^.\n]+)/i.exec(message);
@@ -143,6 +161,11 @@ class FakePty implements PtySession {
     model: { ...INITIAL_STATE.model },
   };
   private readonly remoteUi = new RemoteUiFixture((event) => this.emitEvent(event));
+  /** What get_session_stats reports, grown by every reply the way pi's session log grows. */
+  private readonly totals = {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
+    userMessages: 0, assistantMessages: 0, toolCalls: 0, contextTokens: 0,
+  };
 
   constructor() {
     setImmediate(() => this.emitHello());
@@ -203,7 +226,11 @@ class FakePty implements PtySession {
         else apply();
         continue;
       }
-      const data = command.type === "get_state" ? this.state : CANNED[command.type];
+      const data = command.type === "get_state"
+        ? this.state
+        : command.type === "get_session_stats"
+          ? this.sessionStats()
+          : CANNED[command.type];
       this.emitEvent({
         type: "response",
         command: command.type,
@@ -274,6 +301,7 @@ class FakePty implements PtySession {
    *
    * Keywords in the prompt pick a scenario so local UI testing is deterministic:
    *   TOOL     — a tool card that runs and then succeeds
+   *   HEAVY    — a reply that fills a large share of the context (usage readouts)
    *   SLOW     — a long turn, so interrupt has something to stop
    *   CONFIRM | SELECT | INPUT | EDITOR — a blocking approval of that method
    *   REMOTEUI | REMOTEUICLOSE — open or tear down the remote extension UI fixture
@@ -296,7 +324,9 @@ class FakePty implements PtySession {
       break;
     }
 
+    this.totals.userMessages += 1;
     if (want("TOOL")) {
+      this.totals.toolCalls += 1;
       const toolCallId = `call-${randomBytes(3).toString("hex")}`;
       this.emitEvent({
         type: "tool_execution_start",
@@ -325,18 +355,73 @@ class FakePty implements PtySession {
       await delay(want("SLOW") ? 1200 : 90);
     }
 
+    const usage = this.recordReply(message, turn.aborted ? shown : reply, want("HEAVY"));
     if (turn.aborted) {
       this.emitEvent({
         type: "message_end",
-        message: assistantMessage(shown + "\n\n[interrupted]", "aborted"),
+        message: assistantMessage(shown + "\n\n[interrupted]", "aborted", usage),
       });
     } else {
-      this.emitEvent({ type: "message_end", message: assistantMessage(reply) });
+      this.emitEvent({ type: "message_end", message: assistantMessage(reply, undefined, usage) });
     }
     this.emitEvent({ type: "agent_end" });
     this.emitEvent({ type: "agent_settled" });
     this.state.isStreaming = false;
     if (this.activeTurn === turn) this.activeTurn = null;
+  }
+
+  /**
+   * Prices one reply and adds it to the session totals. The context re-reads everything
+   * said so far, so cache reads grow turn over turn; HEAVY in the prompt adds a large file's
+   * worth of context, so a few of them walk the context gauge past pi's 70% and 90% marks.
+   */
+  private recordReply(prompt: string, reply: string, heavy: boolean): FakeReplyUsage {
+    const input = 400 + prompt.length * 4 + (heavy ? 60_000 : 0);
+    const output = 40 + reply.length;
+    const cacheRead = this.totals.contextTokens;
+    const cacheWrite = input;
+    const cost = {
+      input: (input * FAKE_PRICES.input) / 1e6,
+      output: (output * FAKE_PRICES.output) / 1e6,
+      cacheRead: (cacheRead * FAKE_PRICES.cacheRead) / 1e6,
+      cacheWrite: (cacheWrite * FAKE_PRICES.cacheWrite) / 1e6,
+      total: 0,
+    };
+    cost.total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite;
+    this.totals.input += input;
+    this.totals.output += output;
+    this.totals.cacheRead += cacheRead;
+    this.totals.cacheWrite += cacheWrite;
+    this.totals.cost += cost.total;
+    this.totals.assistantMessages += 1;
+    this.totals.contextTokens = Math.min(FAKE_CONTEXT_WINDOW, cacheRead + input + output);
+    return { input, output, cacheRead, cacheWrite, totalTokens: input + output + cacheRead + cacheWrite, cost };
+  }
+
+  /** pi's get_session_stats shape over the totals above. */
+  private sessionStats(): Record<string, unknown> {
+    const t = this.totals;
+    return {
+      sessionId: this.state.sessionId,
+      userMessages: t.userMessages,
+      assistantMessages: t.assistantMessages,
+      toolCalls: t.toolCalls,
+      toolResults: t.toolCalls,
+      totalMessages: t.userMessages + t.assistantMessages + t.toolCalls,
+      tokens: {
+        input: t.input,
+        output: t.output,
+        cacheRead: t.cacheRead,
+        cacheWrite: t.cacheWrite,
+        total: t.input + t.output + t.cacheRead + t.cacheWrite,
+      },
+      cost: t.cost,
+      contextUsage: {
+        tokens: t.contextTokens,
+        contextWindow: FAKE_CONTEXT_WINDOW,
+        percent: (t.contextTokens / FAKE_CONTEXT_WINDOW) * 100,
+      },
+    };
   }
 
   /** Emit a blocking extension UI request and wait for the response the app sends back. */

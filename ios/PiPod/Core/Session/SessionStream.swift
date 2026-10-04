@@ -47,6 +47,9 @@ public final class SessionStream: ModelSelecting {
     /// runs an extension that opens one.
     @ObservationIgnored public let remoteUI = RemoteUIStore()
 
+    /// What pi has spent in this pod's session, refreshed while attached.
+    @ObservationIgnored public let usage = SessionUsageTracker()
+
     // MARK: - Observable state
 
     public private(set) var items: [StreamItem] = []
@@ -242,6 +245,10 @@ public final class SessionStream: ModelSelecting {
         }
         remoteUI.onControl = { [weak self] frame in
             self?.applyRemoteUIControl(frame)
+        }
+        usage.sender = { [weak self] id, command in
+            guard let self, self.isConnected, let socket = self.socket else { return false }
+            return socket.rpc(id: id, command: command)
         }
         // An extension-owned editor submits the same way pi's own does: the text
         // becomes a user prompt.
@@ -1536,6 +1543,9 @@ public final class SessionStream: ModelSelecting {
                 requestID: requestID
             )
 
+        case .rpcResult(let id, let response):
+            usage.accept(id: id, response: response)
+
         case .error(let code, let message, let detail):
             if code == "credential_reconnect_required" {
                 credentialSettingsNeeded = true
@@ -1674,6 +1684,7 @@ public final class SessionStream: ModelSelecting {
         // anything answered elsewhere while detached is gone from this list.
         openDialogs.removeAll()
         _ = socket?.requestModels()
+        usage.attached()
         flushQueuedOffline()
         Task { await refreshPodRecord() }
     }
@@ -1857,6 +1868,7 @@ public final class SessionStream: ModelSelecting {
             streaming = false
             awaitingReply = false
             updateRunningState()
+            usage.refresh()
 
         case "compaction_start":
             compacting = true
@@ -1865,6 +1877,8 @@ public final class SessionStream: ModelSelecting {
         case "compaction_end":
             compacting = false
             updateRunningState()
+            // Summarizing the history is itself priced usage.
+            usage.refresh()
 
         case "agent_end", "turn_end", "session_info_changed":
             break
@@ -1903,6 +1917,9 @@ public final class SessionStream: ModelSelecting {
                 upsertAssistant(itemId, text, timestamp, inProgress: false)
             }
             activeAssistantItemId = nil
+            // Each finished reply is priced, so a long tool-calling turn shows
+            // its spend growing instead of jumping once at the end.
+            usage.refresh()
 
         case "tool_execution_start", "tool_execution_update", "tool_execution_end":
             upsertTool(id: id, seq: seq, kind: kind, timestamp: timestamp, payload: payload)

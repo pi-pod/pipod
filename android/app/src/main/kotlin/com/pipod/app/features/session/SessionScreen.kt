@@ -207,6 +207,7 @@ fun SessionScreen(
 
     var followsLatest by remember { mutableStateOf(true) }
     var readThroughCount by remember { mutableIntStateOf(0) }
+    var showsUsage by remember { mutableStateOf(false) }
     val isDragged by listState.interactionSource.collectIsDraggedAsState()
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
 
@@ -356,6 +357,7 @@ fun SessionScreen(
                     onInterrupt = actions.onInterrupt,
                     onAttach = actions.onAttach,
                     onRemoveAttachment = actions.onRemoveAttachment,
+                    onShowUsage = { showsUsage = true },
                     focusRequester = composerFocus,
                 )
                 RemoteUiWidgetStack(
@@ -371,6 +373,10 @@ fun SessionScreen(
                         revision = revision,
                     )
                 }
+            }
+
+            if (showsUsage) {
+                SessionUsageSheet(usage = state.stream.usage, onDismiss = { showsUsage = false })
             }
 
             // Watch the reducer's own revision rather than the item list: a

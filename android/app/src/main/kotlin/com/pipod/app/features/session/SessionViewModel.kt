@@ -45,6 +45,7 @@ data class SessionState(
             isConnected = stream.isConnected,
             canAttach = !isPickingImages && !launchFailed,
             isDisabled = launchFailed,
+            usage = stream.usage,
         )
 
     /** The pod's launch failed, so it will never hold a conversation; the error says why. */

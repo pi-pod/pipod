@@ -366,6 +366,10 @@ Unmarked items are **not yet verified** — that is the point of the list.
 - [sim] interrupt stops a long turn (`SLOW`)
 - [sim] the model and thinking level are on the toolbar without opening the picker, and
       switching takes effect
+- [ ] pi's session usage sits beside the model in the composer row (`↑in ↓out $cost
+      context%/window`, the token part dropping first when the row is narrow), updates after
+      each reply (`HEAVY` walks the context past the 70% and 90% tones), stays hidden until
+      something is spent, and opens the breakdown sheet on tap
 - [sim] approvals appear inline and resolve (`CONFIRM`, `SELECT`, `INPUT`, `EDITOR`), from
       the conversation **and** from the Approvals tab; the turn resumes within a second,
       one card clears, one receipt is left, and "pi is working" does not linger
@@ -491,7 +495,9 @@ fake provider, not a sandbox host, so it covers the gateway and the API faithful
 covers real provisioning not at all.
 
 Prompt keywords, on a pod the fake provider actually owns: `TOOL`, `SLOW`, `CONFIRM`,
-`SELECT`, `INPUT`, `EDITOR`, `REMOTEUI`, `REMOTEUICLOSE`.
+`SELECT`, `INPUT`, `EDITOR`, `REMOTEUI`, `REMOTEUICLOSE`, and `HEAVY` (a reply that fills a
+large share of the context, for the usage readout). Every reply is priced, and
+`get_session_stats` answers with the running totals.
 
 Two things about it are load-bearing:
 

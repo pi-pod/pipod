@@ -9,6 +9,28 @@ AuthGate/SessionStore integration smoke alongside a production startup check.
 This file records what was visually inspected.
 
 
+## Session usage pass (2026-10-04)
+
+Exercised by hand on an owned API 36 x86_64 emulator against the isolated fake-provider server
+(`dev/main-fake.mts`, its own Postgres, dev JWKS, `adb reverse`), debug build signed in by
+launch argument. The fake pi prices every reply and answers `get_session_stats` in pi's shape;
+`HEAVY` in a prompt adds 60k tokens of context.
+
+- the strip above the composer shows pi's footer line (`↑61k ↓205 $0.437 30.8%/200k`) and
+  matches the pod's own `get_session_stats` exactly
+  ([session usage](screenshots/session-usage.png));
+- tapping it opens the breakdown sheet with exact tokens, cost, context and activity, and the
+  footnote that cost is pi's list-price estimate
+  ([breakdown, dark](screenshots/session-usage-sheet-dark.png));
+- it updates after each reply, including turns another client drove on the same pod; the
+  context figure turns caution past 70% and danger past 90%, in light and dark;
+- a pod with no replies shows no strip, and the first reply brings it in;
+- reopening the session restores it from a fresh fetch; stopping the pod keeps the last totals.
+
+Not exercised: a real model's usage, a subscription-backed provider (pi's stats do not say
+whether one is in use, so the sheet's footnote says it may cover the cost), and the
+post-compaction `?` context state on a device.
+
 ## Self-hosted pass (2026-10-01)
 
 Exercised by hand on an owned simulator/emulator against a self-hosted deployment
@@ -128,7 +150,7 @@ segments and the silent-absence case were all read off the pixels, not trusted
 from a harness.
 
 Fake-provider caveat: the agent is a deterministic script (`TOOL`, `SLOW`,
-`CONFIRM` / `SELECT` / `INPUT` / `EDITOR`, `REMOTEUI`), not a model, and the
+`CONFIRM` / `SELECT` / `INPUT` / `EDITOR`, `REMOTEUI`, `HEAVY`), not a model, and the
 sandboxes are not real VMs. Anything below that exercises an agent turn proves
 the client's protocol handling (stream/message/tool frames, interrupt,
 approvals with `type: "extension_ui_response"`, reattach replay), not model
