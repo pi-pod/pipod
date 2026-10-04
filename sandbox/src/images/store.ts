@@ -301,9 +301,8 @@ export class OciImageStore implements ImageStore {
       throw error;
     }
     if (record.layers.length === 0) return null;
-    for (const digest of record.layers) {
-      if (!(await this.#layerStillVerified(digest))) return null;
-    }
+    const verified = await Promise.all(record.layers.map((digest) => this.#layerStillVerified(digest)));
+    if (verified.includes(false)) return null;
     return publicImage(record);
   }
 

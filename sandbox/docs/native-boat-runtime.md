@@ -27,7 +27,7 @@ With the service stopped, verify the checksum and extract into `/opt/pipod-sandb
 `/usr/local/bin/node /opt/pipod-sandbox/dist/main.js`.
 
 Runtime OS dependencies: crun, iproute2, nftables, e2fsprogs, mount/util-linux, tar, gzip,
-zstd, attr, ca-certificates and curl. Run as root with writable cgroup v2. Systemd is the
+zstd, attr, GNU findutils, ca-certificates and curl. Run as root with writable cgroup v2. Systemd is the
 native init/reaper; the container still uses tini.
 
 ## Ordered boot and the integrity gate
