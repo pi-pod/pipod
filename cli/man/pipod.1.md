@@ -260,6 +260,9 @@ the pod's configured Pi resources for that launch; anything else Pi-related belo
 starts the new pod on an existing pod's machine, sharing its files; `--on self` does that
 from inside a pod.
 
+Inside a pod, signed in with the pod's own token, every launch (`--on self` included) and
+every job it schedules uses the template that pod launched from; the server refuses any other.
+
 ## COMMANDS
 
 ### pipod login
@@ -841,7 +844,8 @@ PI_POD_ACCOUNT_URL     the server pipod login uses with no --server and no
 PI_POD_ISSUER          the OIDC issuer pipod login uses, for a server too old
                        to publish its own
 PI_POD_SERVER_URL      set in every pod: pipod there signs in with the pod's
-PI_POD_SERVER_TOKEN    own token, which reaches only the pods it launched
+PI_POD_SERVER_TOKEN    own token, which reaches only the pods it launched and
+                       launches only from the pod's own template
 VISUAL, EDITOR         the editor for pipod settings edit
 NO_COLOR               plain output without color
 ```
