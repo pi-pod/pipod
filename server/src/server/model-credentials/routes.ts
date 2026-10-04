@@ -380,7 +380,7 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
       if (podDeps) {
         // Not awaited: a slow host must not hold up the removal itself.
         void reapplyCredentialLeaseInStartedPods(podDeps, subject, req.params.providerId).catch(() => {
-          podDeps.log.warn(`removing ${req.params.providerId} from started pods failed; their lease polls will`);
+          podDeps.log.warn(`removing ${req.params.providerId} from started pods failed; they drop it on wake`);
         });
       }
       return reply.code(204).send();

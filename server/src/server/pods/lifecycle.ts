@@ -350,7 +350,8 @@ export async function materializePodCredentialLeaseBestEffort(
 /**
  * Re-apply the lease in the owner's started pods that contract `providerId`, so a removed
  * account credential leaves them now rather than at their next ten-minute lease poll. A pod
- * this misses — asleep, or its host unreachable — drops it at that poll or on wake.
+ * this misses — asleep, or its host unreachable — drops it on wake, or at that poll once the
+ * pod has a lease record (`POD_LEASED_PROVIDERS_PATH`).
  */
 export async function reapplyCredentialLeaseInStartedPods(
   deps: PodServiceDeps,
@@ -365,7 +366,7 @@ export async function reapplyCredentialLeaseInStartedPods(
   );
   for (const pod of pods.rows) {
     await withPodSandbox(deps, pod, (sandbox) => materializePodCredentialLeaseBestEffort(deps, pod, sandbox)).catch(() => {
-      deps.log.warn(`pod ${pod.id} was unreachable to drop a removed ${providerId} credential; its lease poll will`);
+      deps.log.warn(`pod ${pod.id} was unreachable to drop a removed ${providerId} credential; it drops it on wake`);
     });
   }
 }
