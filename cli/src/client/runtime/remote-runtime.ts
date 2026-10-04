@@ -16,6 +16,7 @@ import {
   calculateContextTokens,
   resolveModelScopeWithDiagnostics,
   type AgentSessionEvent,
+  type CacheWarmingMode,
   type ScopedModel,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
@@ -28,6 +29,7 @@ import {
   type LocalExtensionHost,
   type ResolvedLocalCommand,
 } from "./local-extensions.js";
+import { createAppendEntryBridge } from "./append-entry-bridge.js";
 import { HostBridge, type EndingIntent, type HostUiContext } from "./bridge.js";
 import {
   wrapWithPodFiles,
@@ -194,6 +196,7 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
   const { rpc, cwd } = opts;
   const bridge = new HostBridge();
   const cache = new RemoteStateCache(rpc);
+  const appendEntry = createAppendEntryBridge({ rpc, cache, bridge });
   const refreshThinkingLevels = async (): Promise<void> => {
     cache.availableThinkingLevels = null;
     if (!opts.getAvailableThinkingLevels) return;
@@ -802,6 +805,9 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     // (including Mermaid) still compose — InteractiveMode appends these to its own chain.
     // Pod extension transforms remain honestly unavailable; client extensions supply theirs here.
     getMarkdownTransformers: () => localHost?.runner.getMarkdownTransformers() ?? [],
+    // Tool renderers from client extensions wrap the built-in one, as in-process.
+    resolveToolRenderers: (toolName: string, base: () => unknown) =>
+      localHost ? localHost.runner.resolveToolRenderers(toolName, base) : base(),
     getCommandDiagnostics: () => localHost?.runner.getCommandDiagnostics() ?? [],
     getShortcutDiagnostics: () => localHost?.runner.getShortcutDiagnostics() ?? [],
     getModelRegistry: () => (localHost ? extensionModelRegistry : undefined),
@@ -851,6 +857,8 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
   const sessionManager = {
     getCwd: () => cwd,
     getEntries: () => cache.entries,
+    getBranch: () => cache.entries,
+    getEntryCount: () => cache.entries.length,
     getLeafId: () => cache.leafId ?? undefined,
     getSessionDir: () => cwd,
     getSessionFile: () => cache.state.sessionFile,
@@ -860,6 +868,8 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     usesDefaultSessionDir: () => true,
     isPersisted: () => cache.state.sessionFile !== undefined,
     appendLabelChange: (entryId: string, label?: string) => trackLabelMutation(entryId, label),
+    /** pi's `/bug` records the report here; the entry belongs in the pod's session file. */
+    appendCustomEntry: (customType: string, data?: unknown) => appendEntry(customType, data),
     buildContextEntries: () => cache.entries,
   };
 
@@ -945,6 +955,14 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     get hasPendingBashMessages() {
       return false;
     },
+    // RPC reports neither the cache warmer nor where a virtual model routed a request, so the
+    // footer and /settings show what pi shows when they are unavailable.
+    get cacheWarmingStatus() {
+      return undefined;
+    },
+    get routedModel() {
+      return undefined;
+    },
 
     // local-by-nature services
     settingsManager: remoteSettingsManager,
@@ -1005,6 +1023,8 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     // Unreachable: the remote settings facade always skips branch summaries.
     abortBranchSummary: () => {},
     setAutoCompactionEnabled: (enabled: boolean) => mutate(() => rpc.setAutoCompaction(enabled)),
+    /** Persisted like the /transport toggle; the warmer itself runs in the pod. */
+    setCacheWarmingMode: (mode: CacheWarmingMode) => remoteSettingsManager.setCacheWarmingMode(mode),
     setAutoRetryEnabled: (enabled: boolean) => mutate(() => rpc.setAutoRetry(enabled)),
     abortRetry: () => rpc.abortRetry(),
 
@@ -1256,7 +1276,7 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
             hostCwd: cwd,
             cache,
             bridge,
-            rpc,
+            appendEntry,
             getScopedModels: () => scopedModels,
             prompt,
             setModel: (model) => setRemoteModel(() => rpc.setModel(model.provider, model.id)),

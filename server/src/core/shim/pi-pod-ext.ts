@@ -421,19 +421,25 @@ async function authSnapshot(runtime) {
   };
 }
 
-async function mutatePodCredential(runtime, op, providerId, authType, interaction) {
+async function mutatePodCredential(runtime, op, providerId, authType, interaction, cwd) {
+  // pi's /login passes the installation's device ID (Sign in with ChatGPT requires one) from its
+  // global settings, creating it on first use. This pod is the installation, so a bridged login
+  // and \`pi\` run in a pod shell share one ID. The settings manager writes only that field.
+  const loginOptions = {
+    getDeviceId: () => piPodPiCodingAgent.SettingsManager.create(cwd).getOrCreateDeviceId(),
+  };
   // ModelRuntime.login/logout refresh network-backed catalogs using the process-wide setting.
   // A provider extension can make that refresh unbounded after the credential is already on
   // disk. Use the live runtime's credential-owning Models collection, then perform the same
   // recomposition explicitly without network. These are ordinary JS-private fields in the
   // exactly pinned Pi version, like ModelRegistry.runtime above.
   if (runtime.models && typeof runtime.models[op] === "function") {
-    if (op === "login") await runtime.models.login(providerId, authType, interaction);
+    if (op === "login") await runtime.models.login(providerId, authType, interaction, loginOptions);
     else await runtime.models.logout(providerId);
     await runtime.refresh({ allowNetwork: false });
     return;
   }
-  if (op === "login") await runtime.login(providerId, authType, interaction);
+  if (op === "login") await runtime.login(providerId, authType, interaction, loginOptions);
   else await runtime.logout(providerId);
 }
 
@@ -759,7 +765,7 @@ export default function piPodExtension(pi) {
 
         if (request.op === "login") {
           controller = new AbortController();
-          await mutatePodCredential(runtime, "login", request.providerId, request.authType, authInteraction(ctx, id, controller));
+          await mutatePodCredential(runtime, "login", request.providerId, request.authType, authInteraction(ctx, id, controller), ctx.cwd);
         } else if (request.op === "logout") {
           await mutatePodCredential(runtime, "logout", request.providerId);
         }

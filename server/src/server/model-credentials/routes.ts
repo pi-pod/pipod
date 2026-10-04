@@ -111,8 +111,8 @@ function unsupportedLoginError(
   });
 }
 
-function assertLoginCapability(providerId: string, authType: BrokerAuthType): void {
-  const capability = brokerCapability(providerId);
+async function assertLoginCapability(providerId: string, authType: BrokerAuthType): Promise<void> {
+  const capability = await brokerCapability(providerId);
   const methodSupported = authType === "oauth" ? capability.oauth : capability.apiKey;
   if (!methodSupported) throw unsupportedLoginError(providerId, authType, capability);
 }
@@ -300,7 +300,7 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
       const authType = req.body.authType;
       const podId = req.body.podId ?? null;
       try {
-        assertLoginCapability(providerId, authType);
+        await assertLoginCapability(providerId, authType);
         if (podId) {
           const pod = await getPod(req.auth.orgId, podId);
           await assertPodAccess(pod, req.auth);

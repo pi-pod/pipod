@@ -7,11 +7,10 @@
  * Audit details name providers and bounded outcomes only — never entries,
  * refresh tokens, ciphertext, or raw provider errors.
  */
-import { ModelRuntime, type CreateModelRuntimeOptions } from "@earendil-works/pi-coding-agent";
 import { audit } from "../audit.js";
 import { HttpError } from "../httperrors.js";
 import type { KekProvider } from "../secrets/crypto.js";
-import { BROKER_OAUTH_PROVIDERS, brokerCapability } from "./dependencies.js";
+import { capabilityOf, pinnedPiProviders } from "./dependencies.js";
 import { acquireLease } from "./lease.js";
 import {
   classifyCredentialMeta,
@@ -46,76 +45,27 @@ export interface ConnectableProvider {
   brokerSupported: boolean;
 }
 
-function listingCredentialStore(): NonNullable<CreateModelRuntimeOptions["credentials"]> {
-  return {
-    read: async () => undefined,
-    list: async () => [],
-    modify: async (_providerId, fn) => fn(undefined),
-    delete: async () => {},
-  };
-}
-
-let connectableCache: ConnectableProvider[] | undefined;
-let connectableInflight: Promise<ConnectableProvider[]> | undefined;
-
 /**
- * Broker-connectable Pi builtins: names and OAuth loginLabel from ModelRuntime,
- * capabilities from {@link brokerCapability}. Cached after the first successful
- * load. Create options forbid credential files and model-catalog network.
+ * Broker-connectable Pi builtins, sorted by id. Named as pi names them ("OpenAI", "OpenAI Codex
+ * (legacy)"); the OAuth flow's own name or label says what signing in uses, because a provider
+ * may take a subscription sign-in and an API key alike.
  */
 export async function listConnectableProviders(): Promise<ConnectableProvider[]> {
-  if (connectableCache) return connectableCache;
-  if (!connectableInflight) {
-    connectableInflight = loadConnectableProviders().then(
-      (list) => {
-        connectableCache = list;
-        connectableInflight = undefined;
-        return list;
-      },
-      (error) => {
-        connectableInflight = undefined;
-        throw error;
-      },
-    );
+  const connectable: ConnectableProvider[] = [];
+  for (const provider of (await pinnedPiProviders()).values()) {
+    const capability = capabilityOf(provider);
+    if (!capability.supported) continue;
+    connectable.push({
+      id: provider.id,
+      name: provider.name,
+      oauth: capability.oauth
+        ? { loginLabel: provider.oauth?.loginLabel ?? provider.oauth?.name ?? provider.name }
+        : null,
+      apiKey: capability.apiKey,
+      brokerSupported: true,
+    });
   }
-  return connectableInflight;
-}
-
-async function loadConnectableProviders(): Promise<ConnectableProvider[]> {
-  const runtime = await ModelRuntime.create({
-    credentials: listingCredentialStore(),
-    allowModelNetwork: false,
-    modelsPath: null,
-    refreshOnCreate: false,
-  });
-  const byId = new Map<string, ConnectableProvider>();
-  for (const provider of runtime.getProviders()) {
-    const listed = connectableFromRuntime(provider.id, provider.name, provider.auth);
-    if (listed) byId.set(listed.id, listed);
-  }
-  for (const id of BROKER_OAUTH_PROVIDERS) {
-    if (byId.has(id)) continue;
-    const listed = connectableFromRuntime(id, id, undefined);
-    if (listed) byId.set(listed.id, listed);
-  }
-  return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-}
-
-function connectableFromRuntime(
-  id: string,
-  name: string,
-  auth: { oauth?: { name: string; loginLabel?: string }; apiKey?: { name: string } } | undefined,
-): ConnectableProvider | null {
-  const capability = brokerCapability(id);
-  if (!capability.supported) return null;
-  const loginLabel = auth?.oauth?.loginLabel ?? auth?.oauth?.name ?? name;
-  return {
-    id,
-    name: capability.oauth ? (auth?.oauth?.name ?? name) : name,
-    oauth: capability.oauth ? { loginLabel } : null,
-    apiKey: capability.apiKey,
-    brokerSupported: true,
-  };
+  return connectable.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 function classifiedOutcome(error: unknown): string {

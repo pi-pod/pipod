@@ -18,18 +18,11 @@
  * hit the launcher's own copies. The surface canary (scripts/check-runtime-surface.ts)
  * asserts these internals on every lint run, so a pi upgrade that moves them fails loudly.
  */
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { debug } from "../../log.js";
-import {
-  APPEND_ENTRY_COMMAND,
-  APPEND_ENTRY_MAX_CUSTOM_TYPE_LENGTH,
-  APPEND_ENTRY_PROTOCOL_VERSION,
-  TREE_BRIDGE_MAX_ENCODED_REQUEST_BYTES,
-} from "../../shim/pi-pod-ext.js";
-import type { RpcClientBase } from "../rpc.js";
+import type { AppendEntry } from "./append-entry-bridge.js";
 import type { HostBridge } from "./bridge.js";
 import { findTreeNode, type RemoteStateCache } from "./state.js";
 
@@ -86,6 +79,7 @@ export interface LocalExtensionRunner {
   getEntryRenderer(customType: string): unknown;
   getMessageRenderer(customType: string): unknown;
   getMarkdownTransformers(): unknown[];
+  resolveToolRenderers(toolName: string, base: () => unknown): unknown;
   createCommandContext(): unknown;
   hasHandlers(eventType: string): boolean;
   emit(event: unknown): Promise<unknown>;
@@ -156,7 +150,8 @@ export interface LocalExtensionHostOptions {
   hostCwd: string;
   cache: RemoteStateCache;
   bridge: HostBridge;
-  rpc: RpcClientBase;
+  /** Records an extension's `pi.appendEntry` in the pod's session. */
+  appendEntry: AppendEntry;
   /** Live values owned by the remote runtime (scope edits, CLI overrides). */
   getScopedModels(): readonly unknown[];
   /** Session actions that already exist on the runtime's 57-member session surface. */
@@ -275,7 +270,7 @@ export async function createLocalExtensionHost(
   opts: LocalExtensionHostOptions,
 ): Promise<LocalExtensionHost | null> {
   if (opts.paths.length === 0) return null;
-  const { cache, bridge, rpc } = opts;
+  const { cache, bridge } = opts;
   const notifyWhenBound = (message: string, type: "info" | "warning" | "error") => {
     bridge.onUiBound(() => bridge.notify(message, type));
   };
@@ -357,54 +352,6 @@ export async function createLocalExtensionHost(
     modelRegistry: unknown,
   ) => LocalExtensionRunner)(kept, runtime, opts.hostCwd, sessionManagerFacade, opts.modelRegistry);
 
-  // --- appendEntry bridge (phase 4): durable entries land in the pod's JSONL ---
-  let appendEntryWarned = false;
-  const appendEntryUnavailable = (reason: string) => {
-    if (appendEntryWarned) return;
-    appendEntryWarned = true;
-    notifyWhenBound(`pod extension appendEntry: ${reason} — the entry was not recorded`, "warning");
-  };
-  const supportsAppendEntry = () =>
-    cache.commands.some((command) => {
-      const candidate = command as { name?: unknown; source?: unknown };
-      return candidate.name === APPEND_ENTRY_COMMAND && candidate.source === "extension";
-    });
-  const sendAppendEntry = (customType: string, data?: unknown): void => {
-    if (typeof customType !== "string" || customType.length === 0 || customType.length > APPEND_ENTRY_MAX_CUSTOM_TYPE_LENGTH) {
-      appendEntryUnavailable(`invalid custom type ${JSON.stringify(customType).slice(0, 64)}`);
-      return;
-    }
-    if (!supportsAppendEntry()) {
-      appendEntryUnavailable("this pod runs an older pi pod extension (restart Pi in the pod to update it)");
-      return;
-    }
-    const request = {
-      v: APPEND_ENTRY_PROTOCOL_VERSION,
-      id: randomUUID(),
-      op: "append-entry",
-      customType,
-      ...(data !== undefined ? { data } : {}),
-    };
-    let encoded: string;
-    try {
-      encoded = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
-    } catch (error) {
-      appendEntryUnavailable(`entry data is not serializable (${error instanceof Error ? error.message : String(error)})`);
-      return;
-    }
-    if (Buffer.byteLength(encoded, "utf8") > TREE_BRIDGE_MAX_ENCODED_REQUEST_BYTES) {
-      appendEntryUnavailable("entry data exceeds the bridge size limit");
-      return;
-    }
-    void rpc
-      .prompt(`/${APPEND_ENTRY_COMMAND} ${encoded}`)
-      .then(() => cache.refreshTree().then(() => undefined))
-      .catch((error: unknown) => {
-        appendEntryUnavailable(error instanceof Error ? error.message : String(error));
-        debug(`append-entry bridge failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-  };
-
   // --- bindCore: the extension-facing pi.* actions --------------------------
   const actions = {
     sendMessage: unavailable("pi.sendMessage", "conversation context is built in the pod"),
@@ -422,7 +369,7 @@ export async function createLocalExtensionHost(
           ),
         );
     },
-    appendEntry: (customType: string, data?: unknown) => sendAppendEntry(customType, data),
+    appendEntry: opts.appendEntry,
     setSessionName: (name: string) => void opts.setSessionName(name),
     getSessionName: () => cache.state.sessionName,
     setLabel: (entryId: string, label: string | undefined) => opts.setLabel(entryId, label),
