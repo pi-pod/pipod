@@ -30,11 +30,14 @@ interface TemplateRepository {
         initScript: String? = null,
         bakeScript: String? = null,
         config: JsonObject? = null,
+        agentInstructions: String? = null,
     ): PodTemplate
 
     /**
      * @param bakeScript null when the editor never loaded one, which leaves the
      *   stored script untouched instead of overwriting it with an empty string.
+     * @param agentInstructions null when the server never reported any, for the
+     *   same reason.
      * @param expectedVersion the version the editor read; the server refuses
      *   the write with 409 when the environment has changed since.
      */
@@ -45,6 +48,7 @@ interface TemplateRepository {
         initScript: String,
         bakeScript: String?,
         config: JsonObject,
+        agentInstructions: String? = null,
         expectedVersion: Int? = null,
     ): PodTemplate
 
@@ -68,7 +72,8 @@ class ApiTemplateRepository(private val api: ApiClient) : TemplateRepository {
         initScript: String?,
         bakeScript: String?,
         config: JsonObject?,
-    ): PodTemplate = api.createTemplate(name, description, initScript, bakeScript, config)
+        agentInstructions: String?,
+    ): PodTemplate = api.createTemplate(name, description, initScript, bakeScript, config, agentInstructions)
 
     override suspend fun update(
         id: String,
@@ -77,6 +82,7 @@ class ApiTemplateRepository(private val api: ApiClient) : TemplateRepository {
         initScript: String,
         bakeScript: String?,
         config: JsonObject,
+        agentInstructions: String?,
         expectedVersion: Int?,
     ): PodTemplate = api.updateTemplate(
         id = id,
@@ -85,6 +91,7 @@ class ApiTemplateRepository(private val api: ApiClient) : TemplateRepository {
         initScript = initScript,
         bakeScript = bakeScript,
         config = config,
+        agentInstructions = agentInstructions,
         expectedVersion = expectedVersion,
     )
 

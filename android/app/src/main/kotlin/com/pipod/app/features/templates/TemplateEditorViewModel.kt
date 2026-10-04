@@ -29,6 +29,7 @@ data class TemplateEditorFields(
     val description: String = "",
     val script: String = "",
     val bakeScript: String = "",
+    val agentInstructions: String = "",
     val allowedHosts: String = "",
     val egressMode: String = EgressSettings.OPEN,
     val includeBuiltins: Boolean = true,
@@ -48,6 +49,12 @@ data class TemplateEditorState(
      * the reader for someone else's write.
      */
     val hasVersionConflict: Boolean = false,
+    /**
+     * A new environment can always carry agent instructions; an existing one
+     * only when the server reported its own, so a save never erases what it
+     * did not read.
+     */
+    val showsAgentInstructions: Boolean = true,
 ) {
     val isDirty: Boolean get() = fields != initial
 
@@ -78,6 +85,12 @@ data class TemplateEditorState(
         }
 
     companion object {
+        const val AGENT_INSTRUCTIONS_FOOTER: String =
+            "Added to the agent's system prompt in every pod launched from this environment, " +
+                "with the hosts and secrets the pod actually has. Say what access it is meant " +
+                "to have. Nothing enforces them: the secrets and network policy decide what a " +
+                "pod can reach."
+
         const val CONFLICT_MESSAGE: String =
             "This environment changed elsewhere while you were editing it, so nothing was " +
                 "saved. Your text is still here — close and reopen the editor to load the " +
@@ -138,6 +151,7 @@ class TemplateEditorViewModel(
             description = template?.description.orEmpty(),
             script = template?.initScript.orEmpty(),
             bakeScript = editorData?.bakeScript.orEmpty(),
+            agentInstructions = template?.agentInstructions.orEmpty(),
             allowedHosts = egress.allow.joinToString("\n"),
             egressMode = egress.mode,
             includeBuiltins = egress.builtins,
@@ -147,6 +161,7 @@ class TemplateEditorViewModel(
                 fields = opened,
                 initial = opened,
                 isEditing = template != null,
+                showsAgentInstructions = template == null || template.agentInstructions != null,
             ),
         )
         state = _state.asStateFlow()
@@ -159,6 +174,8 @@ class TemplateEditorViewModel(
     fun setScript(value: String) = update { it.copy(script = value) }
 
     fun setBakeScript(value: String) = update { it.copy(bakeScript = value) }
+
+    fun setAgentInstructions(value: String) = update { it.copy(agentInstructions = value) }
 
     fun setAllowedHosts(value: String) = update { it.copy(allowedHosts = value) }
 
@@ -179,6 +196,8 @@ class TemplateEditorViewModel(
                 val description = fields.description.trim()
                 val script = fields.script.trim()
                 val bakeScript = fields.bakeScript.trim()
+                val agentInstructions = fields.agentInstructions.trim()
+                    .takeIf { _state.value.showsAgentInstructions }
                 val config = updatedConfig(fields)
                 val existing = template
                 // A new environment always writes what was typed; an edit only
@@ -192,6 +211,7 @@ class TemplateEditorViewModel(
                         initScript = script,
                         bakeScript = bakeScript.takeIf { bakeScriptLoaded },
                         config = config,
+                        agentInstructions = agentInstructions,
                         expectedVersion = readVersion,
                     )
                 } else {
@@ -201,6 +221,7 @@ class TemplateEditorViewModel(
                         initScript = script.ifEmpty { null },
                         bakeScript = bakeScript.ifEmpty { null },
                         config = config,
+                        agentInstructions = agentInstructions?.ifEmpty { null },
                     )
                 }
                 // A saved editor is no longer dirty, so leaving it must not

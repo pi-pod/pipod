@@ -15,6 +15,11 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
     public let description: String?
     public let status: String
     public let initScript: String?
+    /// What the agent in every pod launched from this environment is told, chiefly
+    /// the access its pods are meant to have. Nil when the server predates the
+    /// field, which is different from "" (none): a save must not send what it
+    /// never read.
+    public let agentInstructions: String?
     public let config: JSONValue
     public let createdFromPod: String?
     /// The optimistic-concurrency token a save sends back as `expectedVersion`.
@@ -34,6 +39,7 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
         description: String? = nil,
         status: String = "active",
         initScript: String? = nil,
+        agentInstructions: String? = nil,
         config: JSONValue = .object([:]),
         createdFromPod: String? = nil,
         version: Int = 0,
@@ -45,6 +51,7 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
         self.description = description
         self.status = status
         self.initScript = initScript
+        self.agentInstructions = agentInstructions
         self.config = config
         self.createdFromPod = createdFromPod
         self.version = version
@@ -59,6 +66,7 @@ public struct PodTemplate: Codable, Hashable, Sendable, Identifiable {
         description = try container.decodeIfPresent(String.self, forKey: .description)
         status = try container.decodeIfPresent(String.self, forKey: .status) ?? "active"
         initScript = try container.decodeIfPresent(String.self, forKey: .initScript)
+        agentInstructions = try container.decodeIfPresent(String.self, forKey: .agentInstructions)
         config = try container.decodeIfPresent(JSONValue.self, forKey: .config) ?? .object([:])
         createdFromPod = try container.decodeIfPresent(String.self, forKey: .createdFromPod)
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 0
@@ -78,6 +86,9 @@ public struct TemplateDraft: Equatable, Sendable {
     public let description: String
     public let initScript: String
     public let bakeScript: String?
+    /// Nil leaves the stored instructions alone, for the same reason as
+    /// `bakeScript`: a server that never reported them must not have them erased.
+    public let agentInstructions: String?
     public let config: JSONValue
     /// The version the editor opened this environment at, when the server
     /// reported one. A save that carries it is refused if someone else wrote
@@ -89,6 +100,7 @@ public struct TemplateDraft: Equatable, Sendable {
         description: String,
         initScript: String,
         bakeScript: String? = nil,
+        agentInstructions: String? = nil,
         config: JSONValue,
         expectedVersion: Int? = nil
     ) {
@@ -96,6 +108,7 @@ public struct TemplateDraft: Equatable, Sendable {
         self.description = description
         self.initScript = initScript
         self.bakeScript = bakeScript
+        self.agentInstructions = agentInstructions
         self.config = config
         self.expectedVersion = expectedVersion
     }

@@ -12,6 +12,13 @@ data class PodTemplate(
     val description: String? = null,
     val status: String,
     val initScript: String? = null,
+    /**
+     * What the agent in every pod launched from this environment is told, chiefly
+     * the access its pods are meant to have. Null when the server predates the
+     * field, which is not the same as "" (none): an editor must not write what it
+     * never read.
+     */
+    val agentInstructions: String? = null,
     val config: JsonObject = JsonObject(emptyMap()),
     /**
      * The optimistic-concurrency counter the server bumps on every write, sent
