@@ -7,8 +7,9 @@
  * due refresh fails transiently and the current access token is still valid, that token
  * ships and no failure is recorded.
  *
- * The aggregate revision is a SHA-256 of sorted `providerId:revision` lines over the
- * included providers only, so every process derives the same unchanged-lease value.
+ * The aggregate revision is a SHA-256 of sorted `providerId:rowId:revision` lines over the
+ * included providers only, so every process derives the same unchanged-lease value. The row
+ * id is there because a removed and reconnected credential starts again at revision 1.
  *
  * Nothing in this file logs, throws, or returns refresh tokens, ciphertext, or raw
  * credential values.
@@ -62,14 +63,14 @@ async function readMeta(subject: CredentialSubject, providerId: string): Promise
 }
 
 /**
- * Deterministic aggregate revision: sha256 hex of sorted `providerId:revision` lines.
- * Order of `pairs` does not matter; a change to any revision does.
+ * Deterministic aggregate revision: sha256 hex of sorted `providerId:rowId:revision` lines.
+ * Order of `rows` does not matter; a change to any revision or row does.
  */
-export function computeAggregateRevision(pairs: Array<[string, number]>): string {
-  const lines = pairs
+export function computeAggregateRevision(rows: Array<[providerId: string, rowId: string, revision: number]>): string {
+  const lines = rows
     .slice()
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([providerId, revision]) => `${providerId}:${revision}`);
+    .map(([providerId, rowId, revision]) => `${providerId}:${rowId}:${revision}`);
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
 
@@ -82,6 +83,7 @@ export async function acquireLease(
 ): Promise<LeaseResult> {
   const providers: CredentialLease["providers"] = {};
   const failures: Record<string, LeaseFailure> = {};
+  const included: Array<[providerId: string, rowId: string, revision: number]> = [];
 
   for (const providerId of providerIds) {
     const meta = await readMeta(subject, providerId);
@@ -114,8 +116,8 @@ export async function acquireLease(
     }
 
     if (isCurrentlyValid(entry)) {
-      const freshMeta = refreshOutcome ? await readMeta(subject, providerId) : meta;
-      const revision = Number((freshMeta ?? meta).revision);
+      const freshMeta = (refreshOutcome ? await readMeta(subject, providerId) : meta) ?? meta;
+      const revision = Number(freshMeta.revision);
       const sanitized = sanitizeCredentialEntry(entry);
       const item: {
         entry: Record<string, unknown>;
@@ -128,6 +130,7 @@ export async function acquireLease(
       const expiresAt = leaseExpiresAt(sanitized);
       if (expiresAt !== undefined) item.expiresAt = expiresAt;
       providers[providerId] = item;
+      included.push([providerId, freshMeta.id, item.providerRevision]);
       continue;
     }
 
@@ -135,11 +138,6 @@ export async function acquireLease(
       failures[providerId] = { state: "temporarily_unavailable" };
     }
   }
-
-  const included: Array<[string, number]> = Object.entries(providers).map(([providerId, item]) => [
-    providerId,
-    item.providerRevision,
-  ]);
 
   return {
     lease: {
