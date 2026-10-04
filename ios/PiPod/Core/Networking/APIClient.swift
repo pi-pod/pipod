@@ -125,12 +125,14 @@ public final class APIClient: @unchecked Sendable {
         description: String? = nil,
         initScript: String? = nil,
         bakeScript: String? = nil,
+        agentInstructions: String? = nil,
         config: JSONValue? = nil
     ) async throws -> PodTemplate {
         var body: [String: JSONValue] = ["name": .string(name)]
         if let description { body["description"] = .string(description) }
         if let initScript { body["initScript"] = .string(initScript) }
         if let bakeScript { body["bakeScript"] = .string(bakeScript) }
+        if let agentInstructions { body["agentInstructions"] = .string(agentInstructions) }
         if let config { body["config"] = config }
         return try await requestDecoded(
             PodTemplate.self, "POST", "templates", body: .object(body)
@@ -152,6 +154,9 @@ public final class APIClient: @unchecked Sendable {
             "config": draft.config,
         ]
         if let bakeScript = draft.bakeScript { body["bakeScript"] = .string(bakeScript) }
+        if let agentInstructions = draft.agentInstructions {
+            body["agentInstructions"] = .string(agentInstructions)
+        }
         if let expectedVersion = draft.expectedVersion {
             body["expectedVersion"] = .number(Double(expectedVersion))
         }

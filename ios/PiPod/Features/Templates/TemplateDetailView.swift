@@ -226,6 +226,7 @@ public struct TemplateDetailView: View {
                 }
             }
             summarySection(template)
+            agentInstructionsSection(template)
             setupScriptSection(template)
             bakeScriptSection
             networkSection
@@ -253,6 +254,28 @@ public struct TemplateDetailView: View {
                 Label("Created by an agent inside a pod", systemImage: "shippingbox")
                     .font(.footnote)
                     .foregroundStyle(AppColors.secondaryLabel)
+            }
+        }
+    }
+
+    /// Absent on a server that predates the field: nothing to show, and nothing
+    /// the editor may write.
+    @ViewBuilder
+    private func agentInstructionsSection(_ template: PodTemplate) -> some View {
+        if let instructions = template.agentInstructions {
+            Section {
+                if instructions.isEmpty {
+                    Text("No agent instructions.").foregroundStyle(AppColors.secondaryLabel)
+                } else {
+                    Text(instructions)
+                        .font(.footnote)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Agent instructions: \(instructions)")
+                }
+            } header: {
+                Text("Agent instructions")
+            } footer: {
+                Text(TemplateEditorView.agentInstructionsFooter)
             }
         }
     }
@@ -488,6 +511,8 @@ public struct TemplateDetailView: View {
                 description: draft.description.isEmpty ? nil : draft.description,
                 initScript: draft.initScript.isEmpty ? nil : draft.initScript,
                 bakeScript: (draft.bakeScript?.isEmpty == false) ? draft.bakeScript : nil,
+                agentInstructions: (draft.agentInstructions?.isEmpty == false)
+                    ? draft.agentInstructions : nil,
                 config: draft.config
             )
             pop()
@@ -543,6 +568,7 @@ private struct TemplateEditorView: View {
     @State private var description: String
     @State private var initScript: String
     @State private var bakeScript: String
+    @State private var agentInstructions: String
     @State private var hostsText: String
     @State private var isRestricted: Bool
     @State private var allowsBuiltins: Bool
@@ -576,6 +602,7 @@ private struct TemplateEditorView: View {
         _description = State(initialValue: snapshot.description)
         _initScript = State(initialValue: snapshot.initScript)
         _bakeScript = State(initialValue: snapshot.bakeScript)
+        _agentInstructions = State(initialValue: snapshot.agentInstructions)
         _hostsText = State(initialValue: snapshot.hostsText)
         _isRestricted = State(initialValue: snapshot.isRestricted)
         _allowsBuiltins = State(initialValue: snapshot.allowsBuiltins)
@@ -596,10 +623,24 @@ private struct TemplateEditorView: View {
             description: description,
             initScript: initScript,
             bakeScript: bakeScript,
+            agentInstructions: agentInstructions,
             hostsText: hostsText,
             isRestricted: isRestricted,
             allowsBuiltins: allowsBuiltins
         )
+    }
+
+    static let agentInstructionsFooter = """
+        Added to the agent's system prompt in every pod launched from this environment, \
+        with the hosts and secrets the pod actually has. Say what access it is meant to \
+        have. Nothing enforces them: the secrets and network policy decide what a pod \
+        can reach.
+        """
+
+    /// A new environment can always carry instructions; an existing one only
+    /// when the server reported its own, so a save never erases what it did not read.
+    private var supportsAgentInstructions: Bool {
+        !isEditingExisting || source.template?.agentInstructions != nil
     }
 
     var body: some View {
@@ -614,6 +655,21 @@ private struct TemplateEditorView: View {
                     .autocorrectionDisabled()
                     .accessibilityLabel("\(subject) description")
                     .accessibilityIdentifier("\(subject) description")
+            }
+
+            if supportsAgentInstructions {
+                Section {
+                    PlainTextEditor(
+                        text: $agentInstructions,
+                        minHeight: 120,
+                        accessibilityLabel: "\(subject) agent instructions",
+                        isEnabled: !isSaving
+                    )
+                } header: {
+                    Text("Agent instructions")
+                } footer: {
+                    Text(Self.agentInstructionsFooter)
+                }
             }
 
             Section {
@@ -759,6 +815,8 @@ private struct TemplateEditorView: View {
             bakeScript: TemplateDraft.bakeScript(
                 typed: bakeScript, isLoaded: hasLoadedBakeScript
             ),
+            agentInstructions: supportsAgentInstructions
+                ? agentInstructions.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
             config: policy.applied(to: baseConfig),
             expectedVersion: source.template?.expectedVersion
         )
@@ -782,6 +840,7 @@ private struct TemplateEditorView: View {
         description = snapshot.description
         initScript = snapshot.initScript
         bakeScript = snapshot.bakeScript
+        agentInstructions = snapshot.agentInstructions
         hostsText = snapshot.hostsText
         isRestricted = snapshot.isRestricted
         allowsBuiltins = snapshot.allowsBuiltins
@@ -796,6 +855,7 @@ struct TemplateSnapshot: Equatable {
     let description: String
     let initScript: String
     let bakeScript: String
+    let agentInstructions: String
     let hostsText: String
     let isRestricted: Bool
     let allowsBuiltins: Bool
@@ -805,6 +865,7 @@ struct TemplateSnapshot: Equatable {
         description: String,
         initScript: String,
         bakeScript: String,
+        agentInstructions: String,
         hostsText: String,
         isRestricted: Bool,
         allowsBuiltins: Bool
@@ -813,6 +874,7 @@ struct TemplateSnapshot: Equatable {
         self.description = description
         self.initScript = initScript
         self.bakeScript = bakeScript
+        self.agentInstructions = agentInstructions
         self.hostsText = hostsText
         self.isRestricted = isRestricted
         self.allowsBuiltins = allowsBuiltins
@@ -826,6 +888,7 @@ struct TemplateSnapshot: Equatable {
             description: source.template?.description ?? "",
             initScript: source.template?.initScript ?? "",
             bakeScript: source.editorData?.bakeScript ?? "",
+            agentInstructions: source.template?.agentInstructions ?? "",
             hostsText: policy.hostsText,
             isRestricted: policy.isRestricted,
             allowsBuiltins: policy.allowsBuiltins

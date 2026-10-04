@@ -80,6 +80,7 @@ fun TemplateEditorScreen(
         onDescriptionChange = viewModel::setDescription,
         onScriptChange = viewModel::setScript,
         onBakeScriptChange = viewModel::setBakeScript,
+        onAgentInstructionsChange = viewModel::setAgentInstructions,
         onAllowedHostsChange = viewModel::setAllowedHosts,
         onEgressModeChange = viewModel::setEgressMode,
         onIncludeBuiltinsChange = viewModel::setIncludeBuiltins,
@@ -98,6 +99,7 @@ fun TemplateEditorScreen(
     onDescriptionChange: (String) -> Unit,
     onScriptChange: (String) -> Unit,
     onBakeScriptChange: (String) -> Unit,
+    onAgentInstructionsChange: (String) -> Unit,
     onAllowedHostsChange: (String) -> Unit,
     onEgressModeChange: (String) -> Unit,
     onIncludeBuiltinsChange: (Boolean) -> Unit,
@@ -203,6 +205,22 @@ fun TemplateEditorScreen(
                     )
                 }
                 Spacer(Modifier.height(12.dp))
+
+                if (state.showsAgentInstructions) {
+                    SectionCard(
+                        title = "Agent instructions",
+                        footer = TemplateEditorState.AGENT_INSTRUCTIONS_FOOTER,
+                        modifier = Modifier.testTag(TemplateEditorTestTags.AGENT_INSTRUCTIONS),
+                    ) {
+                        PlainTextEditor(
+                            value = state.fields.agentInstructions,
+                            onValueChange = onAgentInstructionsChange,
+                            accessibilityLabel = "$subject agent instructions",
+                            minHeight = 120.dp,
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
 
                 SectionCard(
                     title = "Setup script",
@@ -337,6 +355,7 @@ object TemplateEditorTestTags {
     const val CANCEL = "environment-editor-cancel"
     const val SAVE = "environment-editor-save"
     const val NAME_SECTION = "environment-editor-name-section"
+    const val AGENT_INSTRUCTIONS = "environment-editor-agent-instructions"
     const val SETUP_SCRIPT = "environment-editor-setup-script"
     const val BAKE_SCRIPT = "environment-editor-bake-script"
     const val NETWORK = "environment-editor-network"

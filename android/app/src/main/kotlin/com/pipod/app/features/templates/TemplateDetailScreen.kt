@@ -254,6 +254,27 @@ private fun LazyListScope.templateDetailRows(
         Spacer(Modifier.height(12.dp))
     }
 
+    // Absent on a server that predates the field: nothing to show.
+    state.template.agentInstructions?.let { instructions ->
+        item(key = "agent-instructions") {
+            SectionCard(
+                title = "Agent instructions",
+                footer = TemplateEditorState.AGENT_INSTRUCTIONS_FOOTER,
+                modifier = Modifier.testTag(TemplateDetailTestTags.AGENT_INSTRUCTIONS),
+            ) {
+                if (instructions.isEmpty()) {
+                    Text(text = "No agent instructions.", color = appColors.secondaryLabel)
+                } else {
+                    AppSelectableText(
+                        text = instructions,
+                        semanticsLabel = "Agent instructions: $instructions",
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+
     item(key = "setup-script") {
         SectionCard(
             title = "Setup script",
@@ -460,6 +481,7 @@ object TemplateDetailTestTags {
     const val SCREEN = "environment-detail-screen"
     const val EDIT = "environment-detail-edit"
     const val OVERVIEW = "environment-detail-overview"
+    const val AGENT_INSTRUCTIONS = "environment-detail-agent-instructions"
     const val SETUP_SCRIPT = "environment-detail-setup-script"
     const val BAKE_SCRIPT = "environment-detail-bake-script"
     const val NETWORK = "environment-detail-network"

@@ -260,6 +260,7 @@ class ApiClient(
         initScript: String? = null,
         bakeScript: String? = null,
         config: JsonObject? = null,
+        agentInstructions: String? = null,
     ): PodTemplate {
         val body = buildJsonObject {
             put("name", name)
@@ -267,6 +268,7 @@ class ApiClient(
             initScript?.let { put("initScript", it) }
             bakeScript?.let { put("bakeScript", it) }
             config?.let { put("config", it) }
+            agentInstructions?.let { put("agentInstructions", it) }
         }
         return ApiJson.decodeFromJsonElement(
             PodTemplate.serializer(),
@@ -285,7 +287,8 @@ class ApiClient(
      * [bakeScript] is null when the editor never loaded one. The route
      * `COALESCE`s every absent field, so omitting the key leaves the stored
      * script alone — sending `""` would erase it, which is exactly what an
-     * editor that opened before the fetch landed would do.
+     * editor that opened before the fetch landed would do. [agentInstructions]
+     * is null for the same reason when the server never reported any.
      */
     suspend fun updateTemplate(
         id: String,
@@ -294,6 +297,7 @@ class ApiClient(
         initScript: String,
         bakeScript: String?,
         config: JsonObject,
+        agentInstructions: String? = null,
         expectedVersion: Int? = null,
     ): PodTemplate {
         val body = buildJsonObject {
@@ -301,6 +305,7 @@ class ApiClient(
             put("description", description)
             put("initScript", initScript)
             bakeScript?.let { put("bakeScript", it) }
+            agentInstructions?.let { put("agentInstructions", it) }
             put("config", config)
             expectedVersion?.let { put("expectedVersion", it) }
         }
