@@ -6,19 +6,18 @@ struct SessionUsageButton: View {
     let usage: SessionUsage
     let action: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
         Button(action: action) {
-            // The model name beside this keeps priority. When the row runs
-            // short the token counts go first, then the cost; the context
-            // figure, which warns before compaction, goes last.
-            ViewThatFits(in: .horizontal) {
-                line(showsTokens: true, showsCost: true)
-                line(showsTokens: false, showsCost: true)
-                line(showsTokens: false, showsCost: false)
-            }
-            .font(.caption.monospacedDigit())
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
+            line
+                .lineLimit(1)
+                // Cut from the start: the token counts go first, and the context figure,
+                // which warns before compaction, is the last to go.
+                .truncationMode(.head)
+                .font(.caption.monospacedDigit())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(usage.accessibilitySummary)
@@ -26,19 +25,18 @@ struct SessionUsageButton: View {
         .accessibilityIdentifier("composer.usage")
     }
 
-    private func line(showsTokens: Bool, showsCost: Bool) -> some View {
-        HStack(spacing: 6) {
-            if showsTokens, let tokens = usage.tokenSummary { Text(tokens) }
-            if showsCost || usage.contextSummary == nil, let cost = usage.costSummary {
-                Text(cost)
-            }
-            if let context = usage.contextSummary {
-                Text(context).foregroundStyle(usage.contextTone?.color ?? AppColors.secondaryLabel)
-            }
+    /// One `Text`, so truncation treats the line as a whole. At accessibility sizes
+    /// the spend is left to the breakdown: cut to fit, it would only show fragments.
+    private var line: Text {
+        let compact = typeSize.isAccessibilitySize && usage.contextSummary != nil
+        let spend = compact ? "" : [usage.tokenSummary, usage.costSummary].compactMap { $0 }
+            .joined(separator: " ")
+        var line = Text(spend).foregroundStyle(AppColors.secondaryLabel)
+        if let context = usage.contextSummary {
+            line = line + Text(spend.isEmpty ? context : " " + context)
+                .foregroundStyle(usage.contextTone?.color ?? AppColors.secondaryLabel)
         }
-        .lineLimit(1)
-        .fixedSize()
-        .foregroundStyle(AppColors.secondaryLabel)
+        return line
     }
 }
 
