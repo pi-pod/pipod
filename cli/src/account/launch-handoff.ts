@@ -332,10 +332,7 @@ function announceWorkspaceSeed(plan: AccountLaunchPlan): void {
       info(`workspace transport: this directory will be copied into the pod (${seed.reason})`);
       return;
     case "clone":
-      info(
-        `workspace seed: the pod will clone ${seed.url} at ${seed.branch} (${seed.commit.slice(0, 12)})` +
-          (seed.access === "credential" ? ` with forwarded ${seed.host} credentials` : ""),
-      );
+      info(`workspace seed: the pod will ${describeWorkspaceSeed(seed)}`);
       break;
     case "archive":
       info(

@@ -23,20 +23,23 @@ from a subdirectory seeds the whole repository and prints the subdirectory so it
 
 ## Clone or archive
 
-A clone is chosen only when it reproduces the host checkout exactly. Every check below fails
-closed into an archive with a human-readable reason (`pipod --dry-run` prints it):
+A clone is preferred when the pod can fetch the host's exact **committed HEAD**. Local
+staged, unstaged, and untracked changes do not prevent cloning and are **not copied** by a
+successful clone. The local checkout is left untouched. Every check below fails closed into
+an archive with a human-readable reason (`pipod --dry-run` prints it):
 
 1. inside a git work tree
 2. `origin` exists and rewrites to an `https://` URL (`git@host:x/y.git` and `ssh://` are rewritten; local paths cannot be cloned by a pod)
 3. HEAD is on a branch
-4. no modified, staged, or untracked non-ignored files
-5. the branch has an upstream with no unpushed commits
-6. no initialized submodules, no Git LFS attributes
-7. the pod's egress policy admits the remote host
-8. a live `git ls-remote` shows the remote branch at exactly the local HEAD commit
+4. the branch has an upstream with no unpushed commits
+5. no initialized submodules, no Git LFS attributes
+6. the pod's egress policy admits the remote host
+7. a live `git ls-remote` shows the remote branch at exactly the local HEAD commit
 
 The server clones that exact commit into the empty workdir. If the clone fails for any
-reason, the launch automatically falls back to an archive of the local tree.
+reason, the launch automatically falls back to an archive of the local working tree,
+**including uncommitted changes**. The committed-only behavior applies to successful clones,
+not archive or configured-project copy transports.
 
 An **archive** is a gzip-compressed POSIX tar stream written to a temporary file and streamed
 to `PUT /v1/pods/:id/workspace/archive`. It contains tracked and untracked non-ignored files,
@@ -91,10 +94,12 @@ on the sandbox backend:
    the forwarding prompt; approve; `!git remote -v` inside the pod shows the https URL with no
    token, and `!cat .git/config` holds no token.
 3. **Declined forwarding** — answer `n`; expect an archive, and the pod still holds the tree.
-4. **Dirty repository archive** — edit a file, launch; expect `will be archived … (uncommitted
-   changes would be lost by a clone)` and `!git status` in the pod shows the same edit.
+4. **Dirty repository clone** — in a pushed, cloneable repository, stage a change, edit it
+   again, and add an untracked file. Launch; expect `will clone … (local uncommitted changes
+   are not copied)`. Inside the pod, `!git status` is clean, tracked content matches HEAD,
+   and the untracked file is absent. The host's staged, unstaged and untracked changes remain.
 5. **Non-git archive** — a plain directory of files; expect the files without a `.git`.
-6. **100+ MiB streaming archive** — a repository with a large untracked binary; watch the
+6. **100+ MiB streaming archive** — a repository without `origin`, with a large untracked binary; watch the
    `upload 25% …` lines; verify the file's checksum in the pod.
 7. **Interrupted upload** — Ctrl-C during upload; expect the pod deleted and no
    `pi-pod-seed-*.tar.gz` left in the temp directory.

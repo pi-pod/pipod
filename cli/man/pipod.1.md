@@ -254,10 +254,13 @@ The launch uses the template named by `--template`, or else the one pinned in th
 first launch offers to create a template from the project and pin it.
 
 Workspace seeding: launching from a directory with no .pi-pod/config.json seeds the new pod
-from that directory (its git repository root when inside one). A clean, pushed checkout whose
-remote tip matches HEAD is cloned at that exact commit; anything else (dirty trees, unpushed
-commits, private remotes without usable credentials, plain directories) is streamed in as a
-tar archive, without git-ignored paths, node_modules, or .pi-pod/env. Private-remote
+from that directory (its git repository root when inside one). A pushed checkout whose
+remote tip matches HEAD is cloned at that exact committed HEAD, even with local uncommitted
+changes. A successful clone does not copy staged, unstaged, or untracked changes and leaves
+the local checkout untouched. When cloning is unavailable or fails (unpushed commits, private
+remotes without usable credentials, plain directories), the local working tree, including
+uncommitted changes, is streamed in as a tar archive, without git-ignored paths, node_modules,
+or .pi-pod/env. Private-remote
 credentials are forwarded only after a prompt (`--yes` approves it) and are never stored.
 `--dry-run` prints the decision without prompting or creating a pod. Forks, reused pods,
 `--on` co-location, and `--no-seed` never seed. A project with a .pi-pod/config.json gets its

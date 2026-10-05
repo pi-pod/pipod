@@ -1,7 +1,7 @@
 /**
  * src/account/launch-seed.ts — executing a workspace seed plan against a freshly provisioned pod.
  *
- * The plan (see workspace-seed.ts) says *what* faithfully reproduces the launch directory;
+ * The plan (see workspace-seed.ts) prefers committed HEAD, with a local-tree archive fallback;
  * this module is the state machine that carries it out and degrades gracefully:
  *
  *   clone plan   → clone succeeds → done
@@ -191,7 +191,7 @@ async function cloneIntoPod(
     if (isMissingRoute(error)) {
       info("this server predates workspace cloning — sending an archive instead");
     } else {
-      warn(`clone failed: ${reason} — falling back to an archive of the local tree`);
+      warn(`clone failed: ${reason} — falling back to an archive of the local working tree (including uncommitted changes)`);
     }
     return archiveIntoPod(
       opts,

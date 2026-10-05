@@ -2,10 +2,9 @@
  * src/account/workspace-seed.ts — deciding how a source-less launch reaches the pod.
  *
  * A fresh pod workdir starts empty. When the user did not launch from a configured
- * `.pi-pod` project, this module answers "what would faithfully reproduce this working
- * copy inside the pod?" with the cheapest lossless answer: clone the origin remote when
- * the pod can reach the exact commit the user is standing on, and otherwise archive the
- * tree over the wire.
+ * `.pi-pod` project, prefer cloning the origin remote at the user's exact committed HEAD.
+ * Local staged, unstaged and untracked changes are intentionally not part of a clone.
+ * When that commit cannot be cloned, archive the local working tree instead.
  *
  * Clone is the optimization that has to earn its way in. Every failed eligibility check
  * becomes an `archive` with a reason; `copy` exists only as the legacy configured-project
@@ -268,14 +267,7 @@ export async function probeWorkspaceSeed(opts: ProbeWorkspaceSeedOptions): Promi
   const branch = branchOut.stdout.trim();
   if (branchOut.status !== 0 || branch === "") return archive("detached HEAD");
 
-  // A status that fails or times out (a huge tree, a locked index) must read as "unknown",
-  // never as "clean": a clone chosen on empty output would silently drop uncommitted work.
-  const status = git(["status", "--porcelain", "--untracked-files=all"]);
-  if (status.status !== 0) return archive("cannot tell whether the working tree is clean");
-  if (status.stdout.trim() !== "") {
-    return archive("uncommitted changes would be lost by a clone");
-  }
-
+  // Clone committed HEAD, not the working tree; local edits do not affect eligibility.
   const upstream = git(["rev-parse", "--abbrev-ref", "@{u}"]);
   if (upstream.status !== 0) return archive(`${branch} is not pushed`);
   const ahead = git(["rev-list", "@{u}..HEAD"]);
@@ -420,7 +412,8 @@ export function describeWorkspaceSeed(plan: WorkspaceSeedPlan): string {
       return plan.reason;
     case "clone": {
       const base = `clone ${plan.url} at ${plan.branch} (${plan.commit.slice(0, 12)})`;
-      return plan.access === "credential" ? `${base} with forwarded ${plan.host} credentials` : base;
+      const authenticated = plan.access === "credential" ? `${base} with forwarded ${plan.host} credentials` : base;
+      return `${authenticated} (local uncommitted changes are not copied)`;
     }
     case "archive":
       return `archive ${plan.root}${plan.includeGit ? " with .git history" : ""} (${plan.reason})`;
