@@ -1,6 +1,6 @@
 {
   "name": "@pipod/cli",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Run pi coding-agent sessions in server-managed pods",
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -34,7 +34,7 @@
     "build:man": "marked-man --no-breaks man/pipod.1.md -o man/pipod.1 && marked-man --no-breaks man/pipod-config.5.md -o man/pipod-config.5",
     "typecheck": "tsc --noEmit",
     "lint": "node --import tsx scripts/check-runtime-surface.ts",
-    "test:integration": "node --import tsx --test --test-concurrency=1 test/integration/account-cli.test.ts test/integration/account-login-me-http.test.ts test/integration/billing-cli.test.ts test/integration/capacity-wait-http.test.ts test/integration/cli-main.test.ts test/integration/local-extensions.test.ts test/integration/nested-pods.test.ts test/integration/oidc-security.test.ts test/integration/secrets-cli.test.ts test/integration/workspace-seeding.test.ts test/integration/workstation-wake-http.test.ts",
+    "test:integration": "node --import tsx --test --test-concurrency=1 test/integration/account-cli.test.ts test/integration/account-login-me-http.test.ts test/integration/billing-cli.test.ts test/integration/capacity-wait-http.test.ts test/integration/cli-main.test.ts test/integration/local-extensions.test.ts test/integration/nested-pods.test.ts test/integration/oidc-security.test.ts test/integration/secrets-cli.test.ts test/integration/session-websocket-proxy.test.ts test/integration/workspace-seeding.test.ts test/integration/workstation-wake-http.test.ts",
     "check": "npm run lint && npm run typecheck",
     "prepublishOnly": "npm run build"
   },
@@ -42,11 +42,14 @@
     "@earendil-works/pi-coding-agent": "1.0.2",
     "@earendil-works/pi-tui": "1.0.2",
     "cron-parser": "^5.10.0",
+    "https-proxy-agent": "^9.1.0",
     "jose": "^5.10.0",
+    "proxy-from-env": "^1.1.0",
     "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/proxy-from-env": "^1.0.4",
     "@types/ws": "^8.18.1",
     "marked-man": "^2.1.1",
     "tsup": "^8.3.5",
