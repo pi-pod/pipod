@@ -102,7 +102,9 @@ export interface RemoteLayer {
   bundle: ServerBundle;
   version: number | undefined;
   secretNames: string[];
-  /** `template <name> v3`, `user settings v2`, `org settings v0`, `org policy v1` */
+  /** `template <name>`, `user settings`, `org settings`, `org policy` */
+  name: string;
+  /** The name with the version read: `template <name> v3`, `org policy v1` */
   label: string;
   template?: ApiTemplate;
   scope: "template" | "user" | "org" | "policy";
@@ -118,7 +120,7 @@ export async function fetchRemoteLayer(
     const ref = layer.name ?? source.templateRef;
     if (!ref) {
       throw new PiPodError("this project does not pin a template", {
-        hint: "name one: `pipod push template <name>`; a first launch offers to bootstrap and pin one",
+        hint: "name one after `template`, as in `template <name>`; a first launch offers to bootstrap and pin one",
       });
     }
     const template = await findTemplate(client, ref);
@@ -128,6 +130,7 @@ export async function fetchRemoteLayer(
       bundle: templateBundle(template),
       version,
       secretNames: listed.secrets.map((entry) => entry.name),
+      name: `template ${template.name}`,
       label: `template ${template.name}${version !== undefined ? ` v${version}` : ""}`,
       template,
       scope: "template",
@@ -140,6 +143,7 @@ export async function fetchRemoteLayer(
       bundle: settingsBundle(current),
       version: current.version,
       secretNames: [],
+      name: "org policy",
       label: `org policy v${current.version}`,
       scope: "policy",
       scopeId: client.orgId,
@@ -152,10 +156,36 @@ export async function fetchRemoteLayer(
     bundle: settingsBundle(current),
     version: current.version,
     secretNames: listed.secrets.map((entry) => entry.name),
+    name: `${layer.kind} settings`,
     label: `${layer.kind} settings v${current.version}`,
     scope: layer.kind,
     scopeId,
   };
+}
+
+/**
+ * Replace only a layer's config, compare-and-swap against the version `remote` was read at; its
+ * scripts and Pi files stay as stored. Returns the new version, which a template on a server too
+ * old to version templates does not have (and is then written without the check).
+ */
+export async function writeLayerConfig(
+  client: AccountClient,
+  remote: RemoteLayer,
+  config: Record<string, unknown>,
+): Promise<number | undefined> {
+  if (remote.scope === "template") {
+    const updated = await client.updateTemplate(remote.scopeId, {
+      ...(remote.version !== undefined ? { expectedVersion: remote.version } : {}),
+      config,
+    });
+    return updated.version;
+  }
+  if (remote.version === undefined) throw new PiPodError(`${remote.label} has no version to compare-and-swap against`);
+  const body = { config, version: remote.version };
+  const written = remote.scope === "policy"
+    ? await client.putOrgPolicy(body)
+    : remote.scope === "user" ? await client.putUserSettings(body) : await client.putOrgSettings(body);
+  return written.version;
 }
 
 /** How the local side of a layer is named in diff headings and summaries. */

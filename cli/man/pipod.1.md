@@ -140,8 +140,9 @@ pipod push org
 
 Values for secrets the whole organization shares: `pipod secrets set org <NAME>` (person).
 
-Organization policy (limits rather than defaults) needs the policy:write permission. Its source
-is policy.json beside the organization layer's files:
+Organization policy (limits rather than defaults) needs the policy:write permission. Change
+one limit with `pipod settings policy set <key> <value>` (its keys are in pipod-config(5)), or
+the whole policy from its source, policy.json beside the organization layer's files:
 
 ```
 pipod pull policy                # writes ~/.pi-pod/org/policy.json
@@ -229,9 +230,10 @@ org        ~/.pi-pod/org/: config.json, init.sh, bake.sh, pi/, env
 user       ~/.pi-pod/config.json and ~/.pi/agent/
            pipod pull|diff|push user; pipod settings user set
 template   a project: .pi-pod/config.json, init.sh, bake.sh, env, and .pi/
-           pipod pull|diff|push [template [<name>]]; pipod templates
+           pipod pull|diff|push [template [<name>]]; pipod settings template set;
+           pipod templates
 policy     ~/.pi-pod/org/policy.json
-           pipod pull|diff|push policy                           (policy:write)
+           pipod pull|diff|push policy; pipod settings policy set (policy:write)
 ```
 
 What belongs where: the organization layer holds what everyone needs (pod size, network
@@ -580,26 +582,34 @@ or `sync` reads a dotenv file kept at mode 600. op:// references resolve through
 ### pipod settings
 
 ```
-Usage: pipod settings <user|org> [show | edit | set <key> <value> | unset <key>]
+Usage: pipod settings [user | org | policy | template [<name>]]
+                      [show | edit | set <key> <value> | unset <key>]
 
-Show or edit a persistent settings bundle on the server: your own user bundle,
-or the org-wide defaults (org scope needs the org:manage permission). Edits
-change only the config; scripts and Pi files stay as they are — replace the
-whole bundle from local files with `pipod push user` or `pipod push org`.
-Edits use compare-and-swap on the bundle version, so concurrent changes fail
-cleanly instead of overwriting each other.
+Show or edit one server layer's config directly, the same layers `pipod push`
+replaces whole:
+  user               Your own settings (the default)
+  org                The organization's defaults (needs org:manage)
+  policy             The organization's policy (needs policy:write)
+  template [<name>]  A template; without <name>, the one this project pins
+
+Edits change only the config; scripts and Pi files stay as they are — replace
+a whole layer from local files with `pipod push`. Edits use compare-and-swap
+on the layer's version, so concurrent changes fail cleanly instead of
+overwriting each other.
 
 Actions:
-  show                    Print the settings bundle as JSON (default)
+  show                    Print the layer as JSON (default)
   edit                    Edit the config in $VISUAL/$EDITOR, then save
   set <key> <value>       Set one dotted key to a JSON value, or to the text as
                           a string: pipod settings user set pi.model provider/model
   unset <key>             Remove one dotted key, so the layers below decide it
 ```
 
-Keys are those of pipod-config(5). `set` changes the server only: a later `pipod push` of the
-same layer replaces it with the local source, so after a `set`, run `pipod pull` before
-editing that source.
+Keys are those of pipod-config(5): its pod keys for user, org, and template, and its policy
+keys for policy, which the server checks. `set` changes the server only: a later `pipod push`
+of the same layer replaces it with the local source, so after a `set`, run `pipod pull` before
+editing that source. A template named like an action (show, edit, set, unset) is named by its
+id instead.
 
 ### pipod jobs
 
