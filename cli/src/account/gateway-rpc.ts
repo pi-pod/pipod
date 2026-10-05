@@ -54,6 +54,7 @@ import {
   type ServerHello,
 } from "./gateway-rpc-codec.js";
 import { displayRef } from "./ref.js";
+import { createSessionWebSocket } from "./session-websocket.js";
 import {
   isWorkstationCloseReason,
   withWorkstationWait,
@@ -963,7 +964,7 @@ export class GatewayRpcClient extends RpcClientBase {
             ? { fromSeq: this.lastSeq, fromSession: this.lastSessionId }
             : {}),
         });
-        const create = this.opts.createWebSocket ?? ((wsUrl: string) => new WebSocket(wsUrl));
+        const create = this.opts.createWebSocket ?? createSessionWebSocket;
         const ws = create(url);
         this.connectingSockets.add(ws);
         let settled = false;

@@ -20,6 +20,19 @@ file and `pipod settings <layer> set <key> <value>` changes one key on the serve
 A key of the wrong type fails the command that reads it, naming the key. An unknown key is
 ignored with a warning.
 
+## SESSION PROXIES
+
+Session WebSockets honor `WSS_PROXY` (`WS_PROXY` for plain WebSockets), generic
+`ALL_PROXY` settings, and then fall back to `HTTPS_PROXY` (`HTTP_PROXY` for plain
+WebSockets). Lowercase names take precedence over uppercase names; npm proxy
+settings follow `proxy-from-env` conventions. `NO_PROXY` supports hostnames,
+domain suffixes, optional ports, and `*` for direct connections.
+
+Proxy URLs must use HTTP or HTTPS. Session connections use CONNECT tunnels and
+retain TLS certificate verification for both the proxy and the destination.
+These variables apply to initial attachment and reconnection, without requiring
+`NODE_USE_ENV_PROXY`. With no matching proxy setting, sessions connect directly.
+
 ## POD KEYS
 
 These travel to the server and decide what a pod gets. The defaults are the built-in layer's.
