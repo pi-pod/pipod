@@ -1,6 +1,6 @@
 /**
  * Source-less launches through the real `main()`: a directory with no `.pi-pod/config.json`
- * seeds the fresh pod by exact clone when that is lossless and by tar archive otherwise.
+ * seeds the fresh pod by committed-HEAD clone when available and by local-tree archive otherwise.
  * Every case here asks two things of the fake control plane's call log — which workspace
  * route was hit, and with what — because the transport choice is the feature.
  */
@@ -147,6 +147,42 @@ describe("source-less workspace seeding", () => {
     }
   });
 
+  it("clones committed HEAD despite staged, unstaged, and untracked changes without sending those files", async () => {
+    await signIn();
+    const checkout = await publicCheckout();
+    try {
+      const { repo } = checkout;
+      repo.write("src/app.ts", "export const x = 2;\n");
+      repo.git("add", "src/app.ts");
+      repo.write("src/app.ts", "export const x = 3;\n");
+      repo.write("local-only.txt", "keep this on the host\n");
+      const statusBefore = repo.git("status", "--porcelain", "--untracked-files=all");
+      assert.match(statusBefore, /MM src\/app\.ts/);
+      assert.match(statusBefore, /\?\? local-only\.txt/);
+
+      process.chdir(repo.dir);
+      const before = server.calls.length;
+      const result = await capture([]);
+      assert.equal(result.code, 0, result.out);
+      assert.match(result.out, /local uncommitted changes are not copied/);
+      assert.match(result.out, /workspace seeded: cloned main at/);
+      const calls = server.calls.slice(before);
+      assert.deepEqual(calls.find(isClone)?.body, {
+        url: checkout.url,
+        branch: "main",
+        commit: checkout.commit,
+      });
+      assert.equal(calls.some(isArchive), false);
+      assert.equal(calls.some(isFiles), false);
+      assert.equal(repo.git("status", "--porcelain", "--untracked-files=all"), statusBefore);
+      assert.equal(fs.readFileSync(path.join(repo.dir, "src/app.ts"), "utf8"), "export const x = 3;\n");
+      assert.equal(repo.git("show", ":src/app.ts"), "export const x = 2;");
+      assert.equal(fs.readFileSync(path.join(repo.dir, "local-only.txt"), "utf8"), "keep this on the host\n");
+    } finally {
+      await checkout.close();
+    }
+  });
+
   it("falls back to an archive when the server's clone fails", async () => {
     await signIn();
     const checkout = await publicCheckout();
@@ -174,11 +210,12 @@ describe("source-less workspace seeding", () => {
     }
   });
 
-  it("archives a dirty repository with its history and without ignored, vendored, or secret files", async () => {
+  it("archives a repository without origin with its history and without ignored, vendored, or secret files", async () => {
     await signIn();
     const checkout = await publicCheckout();
     try {
       const { repo } = checkout;
+      repo.git("remote", "remove", "origin");
       gitignore(repo.dir, ["build/", "*.log"]);
       repo.write("src/app.ts", "export const x = 2;\n");
       repo.write("build/out.js", "generated\n");
@@ -192,10 +229,10 @@ describe("source-less workspace seeding", () => {
       const before = server.calls.length;
       const result = await capture([]);
       assert.equal(result.code, 0, result.out);
-      assert.match(result.out, /will be archived into the pod with \.git history \(uncommitted changes would be lost by a clone\)/);
+      assert.match(result.out, /will be archived into the pod with \.git history \(no origin remote\)/);
       assert.match(result.out, /skipped 1 entry that cannot travel .*escape/);
       const calls = server.calls.slice(before);
-      assert.equal(calls.some(isClone), false, "a dirty tree never tries the clone route");
+      assert.equal(calls.some(isClone), false, "without origin there is nothing to clone");
       assert.equal(calls.some(isFiles), false);
       const listing = archiveListing(launchedPodId(calls));
       for (const expected of ["src/app.ts", ".gitignore", "safe-link", ".git/HEAD"]) {
@@ -242,9 +279,11 @@ describe("source-less workspace seeding", () => {
       const result = await capture([]);
       assert.equal(result.code, 0, result.out);
       assert.match(result.out, /launched from src\/lib\//);
-      const listing = archiveListing(launchedPodId(server.calls.slice(before)));
-      assert.ok(listing.includes("src/app.ts"), "the whole repository seeds the pod, not the subdirectory");
-      assert.ok(listing.includes("src/lib/util.ts"));
+      const calls = server.calls.slice(before);
+      assert.deepEqual(calls.find(isClone)?.body, { url: checkout.url, branch: "main", commit: checkout.commit });
+      assert.equal(calls.some(isArchive), false);
+      assert.equal(calls.some(isFiles), false);
+      assert.equal(fs.readFileSync(path.join(checkout.repo.dir, "src/lib/util.ts"), "utf8"), "export const y = 1;\n");
     } finally {
       await checkout.close();
     }
