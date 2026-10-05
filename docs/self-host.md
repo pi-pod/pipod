@@ -154,6 +154,20 @@ public) with the `ZITADEL_ADMIN_PASSWORD` from `selfhost/.env`; Zitadel makes yo
 at first sign-in. People are easier to manage with
 `selfhost/add-user`; more organizations, with `server/zitadel/scripts/provision-org.sh`.
 
+New instances issue access and ID tokens valid for 30 days (720 hours). Refresh tokens
+expire after 30 idle days or 90 days total, unchanged. This is instance-wide, including
+Console tokens; a stolen JWT or its embedded role claims can remain usable for that
+long. Signature, issuer, audience, and expiration checks are unchanged.
+
+For an existing instance, the Compose defaults and `selfhost/upgrade --apply-zitadel`
+do not change these lifetimes: the project reconciler does not manage instance settings.
+Apply `server/zitadel/scripts/apply-oidc-settings.mjs --apply` with an IAM_OWNER
+`ZITADEL_PAT` and an explicit `ZITADEL_EXPECTED_ISSUER` matching that instance, then
+run it with `--check`. Use HTTPS except for loopback development; keep the PAT out of
+command arguments and logs. Existing tokens keep their signed expiry until refreshed
+or replaced by signing in again. Reverting the policy does not shorten already-issued
+tokens.
+
 ### Email
 
 Nothing sends mail yet. A fresh instance has no SMTP provider, so an invite or a password

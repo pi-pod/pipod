@@ -1,7 +1,7 @@
 {
   "note": "Instance OIDC token lifetimes. First-boot Compose env (ZITADEL_DEFAULTINSTANCE_OIDCSETTINGS_*) must match these values; existing instances are applied by scripts/apply-oidc-settings.mjs (IAM_OWNER / iam.write). The project reconciler does not manage these settings.",
-  "accessTokenLifetime": "5m",
-  "idTokenLifetime": "5m",
+  "accessTokenLifetime": "720h",
+  "idTokenLifetime": "720h",
   "refreshTokenIdleExpiration": "720h",
   "refreshTokenExpiration": "2160h"
 }
