@@ -35,7 +35,7 @@ drops everything a bundle payload must not contain: the rejected keys
 `envFile`/`initScript`/`bakeScript`; `pi.hostConfig.skills`/`extensions`) plus
 client-only metadata (`$schema`, `secretResolver`, `pi.chords`/`pi.sessionNaming`/`pi.podExtensions`).
 Covered paths: project/user/org-dir compilation, the launch bootstrap preview,
-`templates create/edit --config`, and `settings user|org edit|set` — the settings
+`templates create/edit --config`, and `settings user|org|template edit|set` — the settings
 verbs validate the edited config locally first (types and retired keys fail
 before any write request) and throw on non-bundle keys with the fix, so an
 explicit `set reuse true` fails visibly rather than vanishing.
@@ -126,11 +126,11 @@ ignored, except `--dry-run`/`--on`-with-fork which are usage errors.
   server scripts with no local file warn instead of writing.
 - `diff [layer]`: same sources, secrets by name only; exit 1 on drift (`--dir`
   for org and policy; no `-y` — it never writes).
-- `settings <user|org> [show|edit|set <key> <json-value>]`: config-only
-  compare-and-swap edits (scripts/Pi files untouched — that is `push`).
-  `show` prints JSON; `edit` uses `$VISUAL`/`$EDITOR`; `set` takes a dotted key
-  plus a JSON value. Templates are not a settings scope (hint points at
-  `templates`).
+- `settings [user|org|policy|template [<name>]] [show|edit|set <key> <json-value>|unset <key>]`:
+  config-only compare-and-swap edits of the layers `push` replaces whole
+  (scripts/Pi files untouched — that is `push`). `show` prints JSON; `edit` uses
+  `$VISUAL`/`$EDITOR`; `set` takes a dotted key plus a JSON value. `template`
+  without a name is the project's pin. The policy is checked by the server only.
 - `login`: Zitadel PKCE in the browser; where none can open (SSH, headless), the
   device flow with a code finished on another device. `--server`, `--issuer`
   (self-hosted), `--org` (domain pin), `--device` (force the code), `--token`

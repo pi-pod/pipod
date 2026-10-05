@@ -6,6 +6,7 @@
 .pi-pod/config.json          a project: the source of its template
 ~/.pi-pod/config.json        this machine's preferences, and your user layer
 ~/.pi-pod/org/config.json    the organization layer
+~/.pi-pod/org/policy.json    the organization policy (POLICY KEYS)
 ```
 
 ## DESCRIPTION
@@ -13,8 +14,8 @@
 Each file is one settings layer's config, written as JSON with comments allowed. The server
 merges the layers for each launch (`pipod help layers`), so a file names only what its layer
 must decide; anything left out comes from the layers below it. The keys are the same in every
-file. `pipod push` uploads a file and `pipod settings <user|org> set <key> <value>` changes
-one key on the server.
+file but policy.json, which holds limits on the merged result instead. `pipod push` uploads a
+file and `pipod settings <layer> set <key> <value>` changes one key on the server.
 
 A key of the wrong type fails the command that reads it, naming the key. An unknown key is
 ignored with a warning.
@@ -98,6 +99,36 @@ pi.podExtensions         a pod's Pi extensions run on this machine, as you, to r
 $schema                  ignored
 ```
 
+## POLICY KEYS
+
+policy.json holds the organization's policy: limits the server applies after every other
+layer, whatever a person's settings, template, or launch ask for. Every key is optional, and
+one left out sets no limit. The server checks every change to it and names any key or value it
+refuses.
+
+```
+maxIdleTimeoutMinutes          the longest idleTimeoutMinutes a pod gets; a longer one,
+                               or 0, becomes this
+maxArchiveAfterMinutes         the same for archiveAfterMinutes
+maxConcurrentPods              pods the whole organization may have awake at once; the
+                               server's own limit per person still applies
+allowedProviders               the providers a launch may use; others are refused
+requireTemplate                true: every launch must use a template
+requireEgressMode              "allowlist": a pod set to "open" gets "allowlist" instead
+forbiddenEgressHosts           hosts removed from every egress.allow
+nestedPods.enabled             false: pods may not launch pods or schedule jobs
+                               (default true)
+nestedPods.maxDepth            how deep pods may launch pods, 0 to 8 (default 2)
+nestedPods.maxChildrenPerPod   awake child pods per pod, 0 to 100 (default 5)
+nestedPods.maxPodsPerLineage   awake pods in one family of pods, 1 to 500 (default 10)
+nestedPods.allowFileSend       false: pods may not send files to other pods (default true)
+nestedPods.allowFileReceive    false: pods may not copy files out of other pods
+                               (default true)
+notifications.redacted         true: push notifications leave out pod names and summaries
+```
+
+Each clamp a launch gets is reported by `pipod doctor` and `pipod --dry-run`.
+
 ## SCRIPTS
 
 A layer's two scripts sit beside its config: .pi-pod/init.sh and .pi-pod/bake.sh in a
@@ -138,6 +169,13 @@ Organization defaults, one key at a time:
 ```
 pipod settings org set resources.memoryGB 8
 pipod settings org set idleTimeoutMinutes 30
+```
+
+An organization policy that caps idle time and keeps pods from launching pods:
+
+```
+pipod settings policy set maxIdleTimeoutMinutes 60
+pipod settings policy set nestedPods.enabled false
 ```
 
 ## RETIRED KEYS

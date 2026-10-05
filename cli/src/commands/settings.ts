@@ -2,75 +2,142 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import type { AccountClient, ApiSettingsBundle, PutSettingsBundleBody } from "../account/api.js";
-import { nonBundleKeysFound, validateConfig } from "../config.js";
+import type { AccountClient } from "../account/api.js";
+import { takeClientOnlyKeys } from "../account/launch-overlays.js";
+import { findConfigPath, nonBundleKeysFound, validateConfig } from "../config.js";
 import { PiPodError } from "../errors.js";
 import { parseJsonc } from "../jsonc.js";
 import { info, out, warn } from "../log.js";
+import { fetchRemoteLayer, writeLayerConfig, type Layer, type RemoteLayer } from "./layers.js";
 
 export interface SettingsFlags {
   client: AccountClient;
   editor?: string;
+  cwd?: string | undefined;
+  home?: string | undefined;
 }
 
-type SettingsScope = "user" | "org";
+const USAGE =
+  "usage: pipod settings [user | org | policy | template [<name>]] [show | edit | set <key> <value> | unset <key>]";
+const ACTIONS = ["show", "edit", "set", "unset"];
 
-const USAGE = "usage: pipod settings <user|org> [show | edit | set <key> <value> | unset <key>]";
+type SettingsCommand =
+  | { action: "show" }
+  | { action: "edit" }
+  | { action: "set"; key: string; value: unknown }
+  | { action: "unset"; key: string };
 
-function readBundle(client: AccountClient, scope: SettingsScope): Promise<ApiSettingsBundle> {
-  return scope === "user" ? client.getUserSettings() : client.getOrgSettings();
+/**
+ * `pipod settings [layer] [action]`: show or change one server layer's config directly — the
+ * same layers `pipod push` replaces whole. Writes carry only the config, so the server keeps the
+ * layer's scripts and Pi files, and compare-and-swap on the version read.
+ */
+export async function runSettings(args: string[], flags: SettingsFlags): Promise<number> {
+  const { layer, rest } = parseLayer(args);
+  const command = parseCommand(layer, rest);
+  const remote = await fetchRemoteLayer(flags.client, layer, {
+    templateRef: layer.kind === "template" && layer.name === undefined ? pinnedTemplateRef(flags) : null,
+  });
+  if (command.action === "show") {
+    out(JSON.stringify({ ...remote.bundle, version: remote.version }, null, 2));
+    return 0;
+  }
+  const config = structuredClone(remote.bundle.config);
+  if (command.action === "set") setDotPath(config, command.key, command.value);
+  if (command.action === "unset") unsetDotPath(config, command.key);
+  const next = command.action === "edit" ? editInEditor(config, flags) : config;
+  assertConfigSendable(remote, next);
+  const version = await writeLayerConfig(flags.client, remote, next);
+  const done = command.action === "edit" ? "updated" : command.action;
+  const key = command.action === "edit" ? "" : ` ${command.key}`;
+  info(`${done} ${remote.name}${key}${version === undefined ? "" : ` (v${version})`}`);
+  return 0;
 }
 
-/** Config-only writes omit scripts and Pi files so the server leaves them untouched. */
-function writeBundle(client: AccountClient, scope: SettingsScope, body: PutSettingsBundleBody): Promise<{ version: number }> {
-  return scope === "user" ? client.putUserSettings(body) : client.putOrgSettings(body);
+/**
+ * `[user | org | policy | template [<name>]]`, user when omitted. As with `pipod push`, a
+ * template's name is optional and defaults to the project's pin; a word after `template` that
+ * is an action is the action, so a template named like one is addressed by its id.
+ */
+function parseLayer(args: string[]): { layer: Layer; rest: string[] } {
+  const [scope = "user", ...rest] = args;
+  if (scope === "user" || scope === "org" || scope === "policy") return { layer: { kind: scope }, rest };
+  if (scope === "template") {
+    const [name, ...afterName] = rest;
+    return name === undefined || ACTIONS.includes(name)
+      ? { layer: { kind: "template" }, rest }
+      : { layer: { kind: "template", name }, rest: afterName };
+  }
+  throw new PiPodError(`unknown settings layer "${scope}"`, { hint: USAGE });
 }
 
-/** The bundle-write contract rejects these on the server (400) — fail here with the fix. */
-function assertBundleConfigSendable(config: Record<string, unknown>): void {
+function parseCommand(layer: Layer, args: string[]): SettingsCommand {
+  const words = layer.kind === "template" && layer.name !== undefined ? `template ${layer.name}` : layer.kind;
+  const [action = "show", ...rest] = args;
+  switch (action) {
+    case "show":
+    case "edit":
+      if (rest.length > 0) throw new PiPodError(`usage: pipod settings ${words} ${action}`);
+      return { action };
+    case "set": {
+      const [key, raw, ...extra] = rest;
+      if (!key || raw === undefined || extra.length > 0) throw new PiPodError(`usage: pipod settings ${words} set <key> <value>`);
+      // JSON when it parses (2, true, ["a"]), otherwise the text itself: `set pi.model a/b`.
+      let value: unknown;
+      try {
+        value = JSON.parse(raw);
+      } catch {
+        value = raw;
+      }
+      return { action, key, value };
+    }
+    case "unset": {
+      const [key, ...extra] = rest;
+      if (!key || extra.length > 0) throw new PiPodError(`usage: pipod settings ${words} unset <key>`);
+      return { action, key };
+    }
+    default:
+      throw new PiPodError(`unknown settings action "${action}"`, { hint: "actions: show, edit, set, unset" });
+  }
+}
+
+/** The template this project pins in its .pi-pod/config.json; null outside a project or unpinned. */
+function pinnedTemplateRef(flags: SettingsFlags): string | null {
+  const configPath = findConfigPath(flags.cwd ?? process.cwd(), { home: flags.home });
+  if (!configPath) return null;
+  const raw = readObject(configPath);
+  return takeClientOnlyKeys(raw).template || null;
+}
+
+/**
+ * Check a changed config before it touches the network. Every layer but the policy holds pod
+ * config (pipod-config(5)); the policy's schema lives on the server alone, which names any key
+ * or value it refuses.
+ */
+function assertConfigSendable(remote: RemoteLayer, config: Record<string, unknown>): void {
+  if (remote.scope === "policy") return;
+  // The bundle-write contract rejects these on the server (400) — fail here with the fix.
   const dropped = nonBundleKeysFound(config);
   if (dropped.length > 0) {
     throw new PiPodError(`not sent: the server bundle no longer accepts ${dropped.join(", ")}`, {
       hint: "local-only keys stay in local files (`template`, `secretResolver`, `pi.chords`); pass --reuse at launch; retired keys must be deleted",
     });
   }
-}
-
-/** Validate an edited bundle config locally before it touches the network. */
-function assertBundleConfigValid(config: Record<string, unknown>, scope: SettingsScope): void {
   const report = validateConfig(config);
-  for (const warning of report.warnings) warn(`${scope} settings: ${warning}`);
+  for (const warning of report.warnings) warn(`${remote.name}: ${warning}`);
   if (report.errors.length > 0) {
-    throw new PiPodError(`invalid ${scope} settings config: ${report.errors.join("; ")}`, {
+    throw new PiPodError(`invalid ${remote.name} config: ${report.errors.join("; ")}`, {
       hint: "fix the config or edit it back — nothing was sent",
     });
   }
 }
 
-export async function runSettings(args: string[], flags: SettingsFlags): Promise<number> {
-  const [scope = "user", action = "show", ...rest] = args;
-  if (scope !== "user" && scope !== "org") {
-    throw new PiPodError(`unknown settings scope "${scope}"`, {
-      hint: `${USAGE}; templates are managed with \`pipod templates\`, and org policy with \`pipod pull|diff|push policy\``,
-    });
-  }
-  if (action === "show") {
-    if (rest.length > 0) throw new PiPodError(`usage: pipod settings ${scope}`);
-    out(JSON.stringify(await readBundle(flags.client, scope), null, 2));
-    return 0;
-  }
-  if (action === "edit") return editSettings(scope, flags);
-  if (action === "set") return setSetting(scope, rest, flags.client);
-  if (action === "unset") return unsetSetting(scope, rest, flags.client);
-  throw new PiPodError(`unknown settings action "${action}"`, { hint: "actions: show, edit, set, unset" });
-}
-
-async function editSettings(scope: SettingsScope, flags: SettingsFlags): Promise<number> {
-  const current = await readBundle(flags.client, scope);
+/** Open the config in $VISUAL/$EDITOR and return what was saved. */
+function editInEditor(config: Record<string, unknown>, flags: SettingsFlags): Record<string, unknown> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-pod-settings-"));
   const file = path.join(directory, "config.json");
   try {
-    fs.writeFileSync(file, `${JSON.stringify(current.config, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     const editor = flags.editor ?? process.env["VISUAL"] ?? process.env["EDITOR"];
     if (!editor) throw new PiPodError("$EDITOR is not set");
     const edited = spawnSync("/bin/sh", ["-c", 'exec $EDITOR "$1"', "pi-pod-settings", file], {
@@ -79,55 +146,10 @@ async function editSettings(scope: SettingsScope, flags: SettingsFlags): Promise
     });
     if (edited.error) throw new PiPodError(`could not run editor: ${edited.error.message}`);
     if (edited.status !== 0) throw new PiPodError(`editor exited with status ${edited.status ?? "unknown"}`);
-    const config = readObject(file);
-    assertBundleConfigSendable(config);
-    assertBundleConfigValid(config, scope);
-    const result = await writeBundle(flags.client, scope, { config, version: current.version });
-    info(`updated ${scope} settings v${result.version}`);
-    return 0;
+    return readObject(file);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
-}
-
-async function setSetting(scope: SettingsScope, args: string[], client: AccountClient): Promise<number> {
-  const [dotPath, rawValue, ...extra] = args;
-  if (!dotPath || rawValue === undefined || extra.length > 0) {
-    throw new PiPodError(`usage: pipod settings ${scope} set <key> <value>`);
-  }
-  // JSON when it parses (2, true, ["a"]), otherwise the text itself: `set pi.model a/b`.
-  let value: unknown;
-  try {
-    value = JSON.parse(rawValue);
-  } catch {
-    value = rawValue;
-  }
-  const version = await updateConfig(scope, client, (config) => setDotPath(config, dotPath, value));
-  info(`set ${scope} setting ${dotPath} (v${version})`);
-  return 0;
-}
-
-/** Remove one key, so the layers below decide it again. */
-async function unsetSetting(scope: SettingsScope, args: string[], client: AccountClient): Promise<number> {
-  const [dotPath, ...extra] = args;
-  if (!dotPath || extra.length > 0) throw new PiPodError(`usage: pipod settings ${scope} unset <key>`);
-  const version = await updateConfig(scope, client, (config) => unsetDotPath(config, dotPath));
-  info(`unset ${scope} setting ${dotPath} (v${version})`);
-  return 0;
-}
-
-/** Read the config, change it, check it, and write it back against the version read. */
-async function updateConfig(
-  scope: SettingsScope,
-  client: AccountClient,
-  change: (config: Record<string, unknown>) => void,
-): Promise<number> {
-  const current = await readBundle(client, scope);
-  const config = structuredClone(current.config);
-  change(config);
-  assertBundleConfigSendable(config);
-  assertBundleConfigValid(config, scope);
-  return (await writeBundle(client, scope, { config, version: current.version })).version;
 }
 
 /** Delete a dotted key, and any object it leaves empty. Absent already is fine. */

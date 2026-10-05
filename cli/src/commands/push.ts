@@ -11,6 +11,7 @@ import {
   parseLayerArgs,
   printDiff,
   sourceKindOf,
+  writeLayerConfig,
   type LayerFlags,
 } from "./layers.js";
 
@@ -48,13 +49,13 @@ export async function runPush(args: string[], flags: PushFlags): Promise<number>
     return 0;
   }
 
-  if (remote.version === undefined) throw new PiPodError(`${remote.label} has no version to compare-and-swap against`);
   if (remote.scope === "policy") {
-    // The policy is config alone; the server refuses a policy write that names scripts or Pi files.
-    const written = await flags.client.putOrgPolicy({ config: source.config, version: remote.version });
-    info(`pushed ${local} to org policy v${written.version}`);
+    // The policy is config alone, so its whole replacement is a config write.
+    const version = await writeLayerConfig(flags.client, remote, source.config);
+    info(`pushed ${local} to org policy v${version}`);
     return 0;
   }
+  if (remote.version === undefined) throw new PiPodError(`${remote.label} has no version to compare-and-swap against`);
   const body = {
     config: source.config,
     version: remote.version,
