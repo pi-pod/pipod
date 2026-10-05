@@ -5,6 +5,7 @@
  *   template [<name>]  → this project (.pi-pod/, .pi/)
  *   user               → ~/.pi-pod/config.json + ~/.pi/agent/
  *   org                → ~/.pi-pod/org/ (or --dir <path>)
+ *   policy             → policy.json in that same org directory
  * The verbs move a whole bundle between the two, git-style, after a diff preview.
  */
 import { findConfigPath } from "../config.js";
@@ -15,6 +16,7 @@ import {
   compileBundleSource,
   diffBundle,
   orgSourceDir,
+  policySourcePath,
   settingsBundle,
   templateBundle,
   type BundleSourceKind,
@@ -24,7 +26,7 @@ import {
 import { findTemplate } from "../account/template-ref.js";
 import { displayPath } from "../userconfig.js";
 
-export type Layer = { kind: "template"; name?: string } | { kind: "user" } | { kind: "org" };
+export type Layer = { kind: "template"; name?: string } | { kind: "user" } | { kind: "org" } | { kind: "policy" };
 
 export interface LayerFlags {
   client: AccountClient;
@@ -40,9 +42,9 @@ export interface ParsedLayerArgs {
   withSecrets: boolean;
 }
 
-const LAYER_USAGE = "template [<name>], user, or org";
+const LAYER_USAGE = "template [<name>], user, org, or policy";
 
-/** Parse `[template [<name>] | user | org] [--dir <path>] [--with-secrets] [-y]`. */
+/** Parse `[template [<name>] | user | org | policy] [--dir <path>] [--with-secrets] [-y]`. */
 export function parseLayerArgs(
   verb: "push" | "pull" | "diff",
   args: string[],
@@ -73,19 +75,26 @@ export function parseLayerArgs(
     layer = { kind: "template" };
   } else if (first === "template") {
     layer = second === undefined ? { kind: "template" } : { kind: "template", name: second };
-  } else if (first === "user" || first === "org") {
+  } else if (first === "user" || first === "org" || first === "policy") {
     layer = { kind: first };
     if (second !== undefined) extra.unshift(second);
   } else {
     throw new PiPodError(`unknown layer "${first}"`, { hint: `layers: ${LAYER_USAGE}` });
   }
   if (extra.length > 0) throw new PiPodError(`unexpected \`pipod ${verb}\` argument(s): ${extra.join(" ")}`);
-  if (dir !== undefined && layer.kind !== "org") throw new PiPodError("--dir only applies to the org layer");
+  if (dir !== undefined && layer.kind !== "org" && layer.kind !== "policy") {
+    throw new PiPodError("--dir only applies to the org and policy layers");
+  }
   return { layer, ...(dir !== undefined ? { dir } : {}), yes, withSecrets };
 }
 
 export function sourceKindOf(layer: Layer): BundleSourceKind {
-  return layer.kind === "template" ? "project" : layer.kind === "user" ? "user-dir" : "org-dir";
+  switch (layer.kind) {
+    case "template": return "project";
+    case "user": return "user-dir";
+    case "org": return "org-dir";
+    case "policy": return "policy-file";
+  }
 }
 
 /** The server side of a layer, read fresh so writes can compare-and-swap against it. */
@@ -93,10 +102,10 @@ export interface RemoteLayer {
   bundle: ServerBundle;
   version: number | undefined;
   secretNames: string[];
-  /** `template <name> v3`, `user settings v2`, `org settings v0` */
+  /** `template <name> v3`, `user settings v2`, `org settings v0`, `org policy v1` */
   label: string;
   template?: ApiTemplate;
-  scope: "template" | "user" | "org";
+  scope: "template" | "user" | "org" | "policy";
   scopeId: string;
 }
 
@@ -125,6 +134,17 @@ export async function fetchRemoteLayer(
       scopeId: template.id,
     };
   }
+  if (layer.kind === "policy") {
+    const current = await client.getOrgPolicy();
+    return {
+      bundle: settingsBundle(current),
+      version: current.version,
+      secretNames: [],
+      label: `org policy v${current.version}`,
+      scope: "policy",
+      scopeId: client.orgId,
+    };
+  }
   const current = layer.kind === "user" ? await client.getUserSettings() : await client.getOrgSettings();
   const scopeId = layer.kind === "user" ? client.userId : client.orgId;
   const listed = await client.listSecrets(layer.kind, scopeId).catch(() => ({ secrets: [] }));
@@ -142,6 +162,7 @@ export async function fetchRemoteLayer(
 export function localLabel(layer: Layer, flags: { home?: string | undefined; dir?: string | undefined }): string {
   if (layer.kind === "template") return "project";
   if (layer.kind === "user") return "~/.pi-pod + ~/.pi/agent";
+  if (layer.kind === "policy") return displayPath(policySourcePath({ dir: flags.dir, home: flags.home }), flags.home);
   return displayPath(orgSourceDir({ dir: flags.dir, home: flags.home }), flags.home);
 }
 

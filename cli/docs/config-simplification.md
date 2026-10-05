@@ -115,15 +115,17 @@ ignored, except `--dry-run`/`--on`-with-fork which are usage errors.
   `--from-here`), `edit` (`--name/--description/--config/--init-script/--bake-script`;
   `--org` rejected — org-wide goes through `share`; whole-snapshot replace goes through `push`), `share` (one-way),
   `rm|delete [-y]`. A global `--yes` is honored (no false scope warning).
-- `push [template [<name>]|user|org]`: whole-bundle replace from the layer's
-  local source (project `.pi-pod/`+`.pi/`, user `~/.pi-pod`+`~/.pi/agent`, org
-  `~/.pi-pod/org/` or `--dir`), after a diff preview. `--with-secrets` uploads
-  env values (else a prompt per bundle); `-y` applies without confirming.
-- `pull [layer]`: reverse of push (same sources; `--dir` for org; `-y`).
+- `push [template [<name>]|user|org|policy]`: whole-bundle replace from the
+  layer's local source (project `.pi-pod/`+`.pi/`, user `~/.pi-pod`+`~/.pi/agent`,
+  org `~/.pi-pod/org/` or `--dir`, policy `policy.json` in that org directory),
+  after a diff preview. The policy is config only and validated by the server.
+  `--with-secrets` uploads env values (else a prompt per bundle); `-y` applies
+  without confirming.
+- `pull [layer]`: reverse of push (same sources; `--dir` for org and policy; `-y`).
   Client-only keys, host-coupled settings, and model credential values survive;
   server scripts with no local file warn instead of writing.
 - `diff [layer]`: same sources, secrets by name only; exit 1 on drift (`--dir`
-  for org; no `-y` — it never writes).
+  for org and policy; no `-y` — it never writes).
 - `settings <user|org> [show|edit|set <key> <json-value>]`: config-only
   compare-and-swap edits (scripts/Pi files untouched — that is `push`).
   `show` prints JSON; `edit` uses `$VISUAL`/`$EDITOR`; `set` takes a dotted key

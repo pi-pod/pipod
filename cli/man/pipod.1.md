@@ -89,9 +89,9 @@ bake script that is built into the pod image once, and Pi files. Secrets are sto
 the layers and reach pods as environment variables. `pipod help layers` explains how they
 combine.
 
-Every server layer has a local source of truth: a directory you edit with any editor, then
-upload with `pipod push`. `pipod pull` writes the server's copy back, and `pipod diff`
-compares the two.
+Every server layer, organization policy included, has a local source of truth: files you edit
+with any editor, then upload with `pipod push`. `pipod pull` writes the server's copy back, and
+`pipod diff` compares the two.
 
 ## SETUP
 
@@ -139,8 +139,19 @@ pipod push org
 ```
 
 Values for secrets the whole organization shares: `pipod secrets set org <NAME>` (person).
-Organization policy (limits rather than defaults) is set in the web dashboard,
-`<server>/dashboard/`.
+
+Organization policy (limits rather than defaults) needs the policy:write permission. Its source
+is policy.json beside the organization layer's files:
+
+```
+pipod pull policy                # writes ~/.pi-pod/org/policy.json
+                                 # edit it
+pipod diff policy
+pipod push policy
+```
+
+To keep the organization's source in a repository instead, give each of these commands
+`--dir <path>`.
 
 ### 5. Your own defaults
 
@@ -207,8 +218,8 @@ project's .pi-pod/config.json. Within the layers:
 
 Organization policy holds limits rather than defaults: maximum idle and archive times,
 allowed providers, a required template, network rules, concurrency. It clamps the merged
-result, and `pipod doctor` and `pipod --dry-run` report every clamp. It is set in the web
-dashboard by someone with the policy:write permission.
+result, and `pipod doctor` and `pipod --dry-run` report every clamp. Someone with the
+policy:write permission changes it with `pipod push policy` or in the web dashboard.
 
 Where each layer's source lives, and the commands that change it:
 
@@ -219,6 +230,8 @@ user       ~/.pi-pod/config.json and ~/.pi/agent/
            pipod pull|diff|push user; pipod settings user set
 template   a project: .pi-pod/config.json, init.sh, bake.sh, env, and .pi/
            pipod pull|diff|push [template [<name>]]; pipod templates
+policy     ~/.pi-pod/org/policy.json
+           pipod pull|diff|push policy                           (policy:write)
 ```
 
 What belongs where: the organization layer holds what everyone needs (pod size, network
@@ -451,7 +464,7 @@ A personal template sits above your user layer and an org-wide one below it
 ### pipod push
 
 ```
-Usage: pipod push [template [<name>] | user | org] [--dir <path>]
+Usage: pipod push [template [<name>] | user | org | policy] [--dir <path>]
                   [--with-secrets] [--yes]
 
 Replace a server config bundle with its local source, whole. The layer names
@@ -467,13 +480,16 @@ Layers and their local source:
                      models.json, mcporter.json, subagents.json, agents/)
   org                ~/.pi-pod/org/: config.json, init.sh, bake.sh, pi/…, and
                      an optional env file whose values become org secrets
+  policy             ~/.pi-pod/org/policy.json: the organization policy, one
+                     JSON object of limits, checked by the server
 
 Inside a project the layer defaults to template; elsewhere it is required.
 Provider credentials, hooks, mcpServers, and model credential values never
 leave this machine.
 
 Options:
-  --dir <path>     org only: read the org source from <path> instead
+  --dir <path>     org and policy: read the org source directory from <path>
+                   instead
   --with-secrets   Also upload the layer's env values as secrets
   -y, --yes        Apply the replacement without the confirmation prompt
 ```
@@ -485,7 +501,8 @@ confirm on, push declines unless `--yes` is given.
 ### pipod pull
 
 ```
-Usage: pipod pull [template [<name>] | user | org] [--dir <path>] [--yes]
+Usage: pipod pull [template [<name>] | user | org | policy] [--dir <path>]
+                  [--yes]
 
 Write a server config bundle into its local source files (see
 `pipod push --help` for the layer → directory table). A diff preview
@@ -503,21 +520,23 @@ Secrets stay on the server; their names are listed. The user layer has no
 local script files, so user bundle scripts are shown but not written.
 
 Options:
-  --dir <path>   org only: write the org source to <path> instead
+  --dir <path>   org and policy: write the org source directory at <path>
+                 instead
   -y, --yes      Apply the local changes without the confirmation prompt
 ```
 
 ### pipod diff
 
 ```
-Usage: pipod diff [template [<name>] | user | org] [--dir <path>]
+Usage: pipod diff [template [<name>] | user | org | policy] [--dir <path>]
 
 Compare a config layer's local source with its server bundle (see
 `pipod push --help` for the layer → directory table). Secrets compare by
 name only. Exits 1 when they differ, 0 when they match.
 
 Options:
-  --dir <path>   org only: read the org source from <path> instead
+  --dir <path>   org and policy: read the org source directory from <path>
+                 instead
 ```
 
 ### pipod secrets
