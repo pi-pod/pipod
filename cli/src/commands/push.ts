@@ -49,6 +49,12 @@ export async function runPush(args: string[], flags: PushFlags): Promise<number>
   }
 
   if (remote.version === undefined) throw new PiPodError(`${remote.label} has no version to compare-and-swap against`);
+  if (remote.scope === "policy") {
+    // The policy is config alone; the server refuses a policy write that names scripts or Pi files.
+    const written = await flags.client.putOrgPolicy({ config: source.config, version: remote.version });
+    info(`pushed ${local} to org policy v${written.version}`);
+    return 0;
+  }
   const body = {
     config: source.config,
     version: remote.version,

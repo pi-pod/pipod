@@ -5,6 +5,7 @@ import {
   compileBundleSource,
   diffBundle,
   orgSourceDir,
+  policySourcePath,
   writeBundleSource,
   type CompiledBundleSource,
 } from "../account/bundle-source.js";
@@ -25,16 +26,16 @@ export async function runPull(args: string[], flags: PullFlags): Promise<number>
   const cwd = flags.cwd ?? process.cwd();
   const parsed = parseLayerArgs("pull", args, { cwd, home: flags.home });
   const kind = sourceKindOf(parsed.layer);
-  let source: CompiledBundleSource;
+  let source: Pick<CompiledBundleSource, "config" | "initScript" | "bakeScript" | "piFiles" | "env" | "warnings" | "templateRef">;
   let firstPull = false;
-  if (kind === "org-dir" && !fs.existsSync(orgSourceDir({ dir: parsed.dir, home: flags.home }))) {
-    // A first `pull org` has nothing local yet; diff against an empty source and create the dir.
+  const localPath = kind === "org-dir"
+    ? orgSourceDir({ dir: parsed.dir, home: flags.home })
+    : kind === "policy-file" ? policySourcePath({ dir: parsed.dir, home: flags.home }) : null;
+  if (localPath !== null && !fs.existsSync(localPath)) {
+    // A first `pull org` or `pull policy` has nothing local yet; diff against an empty source
+    // and create it.
     firstPull = true;
-    source = {
-      kind, config: {}, initScript: "", bakeScript: "", piFiles: {}, env: {}, warnings: [],
-      name: "org settings", templateRef: null, projectRoot: null,
-      root: orgSourceDir({ dir: parsed.dir, home: flags.home }), configPath: "",
-    };
+    source = { config: {}, initScript: "", bakeScript: "", piFiles: {}, env: {}, warnings: [], templateRef: null };
   } else {
     source = await compileBundleSource({ source: kind, cwd, home: flags.home, includeEnv: false, dir: parsed.dir });
   }

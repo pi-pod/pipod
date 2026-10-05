@@ -15,11 +15,13 @@ import {
   takeClientOnlyKeys,
 } from "./launch-overlays.js";
 
-export type BundleSourceKind = "project" | "user-dir" | "org-dir";
+/** `policy-file` is the org policy: one JSON object of limits, with no scripts, Pi files, or env. */
+export type BundleSourceKind = "project" | "user-dir" | "org-dir" | "policy-file";
+type SettingsSourceKind = Exclude<BundleSourceKind, "policy-file">;
 export type EnvSnapshot = Record<string, { value: string; source: string }>;
 
 /** Where each source kind keeps its Pi files, relative to the source root. */
-const PI_SUBPATH: Record<BundleSourceKind, string> = {
+const PI_SUBPATH: Record<SettingsSourceKind, string> = {
   // Project scope is `<repo>/.pi/` (Pi's project tree). User-directory scope is
   // `~/.pi/agent/` (Pi's global tree). `$HOME/.pi/settings.json` is not a path Pi reads.
   project: ".pi",
@@ -60,6 +62,11 @@ export function orgSourceDir(args: { dir?: string | undefined; home?: string | u
   const home = hostHome(args.home);
   if (!home) throw new PiPodError("cannot locate ~/.pi-pod/org: HOME is unset", { hint: "pass --dir <path>" });
   return path.join(home, ORG_SOURCE_SUBDIR);
+}
+
+/** The org policy sits in the org source directory, so one repository can hold both. */
+export function policySourcePath(args: { dir?: string | undefined; home?: string | undefined }): string {
+  return path.join(orgSourceDir(args), ORG_POLICY_FILE);
 }
 
 function safePiDir(root: string, subpath: string): string | null {
@@ -197,11 +204,35 @@ export async function compileBundleSource(args: {
   home?: string;
   /** `false` skips env files entirely; `"names"` reads keys without resolving values. */
   includeEnv?: boolean | "names";
-  /** org-dir only: where the org source lives instead of ~/.pi-pod/org. */
+  /** org-dir and policy-file only: where the org source lives instead of ~/.pi-pod/org. */
   dir?: string;
 }): Promise<CompiledBundleSource> {
   const cwd = args.cwd ?? process.cwd();
   const envMode = args.includeEnv === false ? false : args.includeEnv === "names" ? "names" : true;
+  if (args.source === "policy-file") {
+    const configPath = policySourcePath({ dir: args.dir, home: args.home });
+    // Pushing a missing file would clear every limit, so its absence is an error, not `{}`.
+    if (!fs.existsSync(configPath)) {
+      throw new PiPodError(`no org policy file at ${configPath}`, {
+        hint: "run `pipod pull policy` to create it from the server's policy, or pass --dir <path>",
+      });
+    }
+    // Sent as written: the policy keys are the server's to validate, and it names any it rejects.
+    return {
+      kind: "policy-file",
+      config: parseConfig(configPath),
+      initScript: "",
+      bakeScript: "",
+      piFiles: {},
+      env: {},
+      warnings: [],
+      name: "org policy",
+      templateRef: null,
+      projectRoot: null,
+      root: path.dirname(configPath),
+      configPath,
+    };
+  }
   if (args.source === "project") {
     const configPath = findConfigPath(cwd, { home: args.home });
     if (!configPath) {
@@ -303,15 +334,16 @@ export async function compileBundleSource(args: {
   };
 }
 
-/** The org source dir is flat: scripts and env sit next to config.json. */
+/** The org source dir is flat: scripts, env, and the policy sit next to config.json. */
 const ORG_SCRIPTS = { init: "init.sh", bake: "bake.sh" } as const;
 const ORG_ENV_FILE = "env";
+const ORG_POLICY_FILE = "policy.json";
 
 /** Push-time-only Pi source compilation and sanitization. Launches never call this. */
 function readPiFiles(
   root: string,
   config: ReturnType<typeof validateConfig>["config"],
-  kind: BundleSourceKind,
+  kind: SettingsSourceKind,
 ): { files: PiSettingsFilesBody; warnings: string[] } {
   const files: PiSettingsFilesBody = {};
   const warnings: string[] = [];
@@ -628,6 +660,16 @@ export function writeBundleSource(args: {
   dir?: string;
 }): BundleWriteResult {
   const { kind, bundle } = args;
+  if (kind === "policy-file") {
+    const policyPath = policySourcePath({ dir: args.dir, home: args.home });
+    const writer = new LayerWriter(path.dirname(policyPath));
+    // As with config.json below, a commented file is rewritten only when the policy changed.
+    if (!fs.existsSync(policyPath) || stable(parseConfig(policyPath)) !== stable(bundle.config)) {
+      writer.noteComments(policyPath);
+      writer.json(policyPath, bundle.config);
+    }
+    return { written: writer.written, removed: writer.removed, warnings: writer.warnings, root: writer.root };
+  }
   let root: string;
   let configPath: string;
   if (kind === "project") {

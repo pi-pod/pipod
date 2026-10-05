@@ -51,7 +51,7 @@ export async function runSettings(args: string[], flags: SettingsFlags): Promise
   const [scope = "user", action = "show", ...rest] = args;
   if (scope !== "user" && scope !== "org") {
     throw new PiPodError(`unknown settings scope "${scope}"`, {
-      hint: `${USAGE}; templates are managed with \`pipod templates\``,
+      hint: `${USAGE}; templates are managed with \`pipod templates\`, and org policy with \`pipod pull|diff|push policy\``,
     });
   }
   if (action === "show") {

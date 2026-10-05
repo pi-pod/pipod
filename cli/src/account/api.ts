@@ -802,6 +802,16 @@ export class AccountClient {
     return this.request(`/orgs/${encodeURIComponent(this.orgId)}/settings`, { method: "PUT", body });
   }
 
+  /** The organization's policy: its `config` holds the limits; the scripts and Pi files are always empty. */
+  getOrgPolicy(): Promise<ApiSettingsBundle> {
+    return this.request(`/orgs/${encodeURIComponent(this.orgId)}/policy`);
+  }
+
+  /** Replaces the whole policy, compare-and-swap on `version`. The server validates it. */
+  putOrgPolicy(body: { config: Record<string, unknown>; version: number }): Promise<{ version: number }> {
+    return this.request(`/orgs/${encodeURIComponent(this.orgId)}/policy`, { method: "PUT", body });
+  }
+
 
   launch(body: {
     templateId?: string;
@@ -1252,10 +1262,16 @@ async function responseError(res: Response, method: string, apiPath: string): Pr
       hint: "an owner of your organization can grant it (`pipod org-admin` opens the console)",
     });
   }
+  // A 400 that lists strings is the server's validation report (`path: problem`) for a
+  // settings, policy, or template write; it names what to fix. Bounded like the message.
+  const issues = res.status === 400 && Array.isArray(body.detail)
+    ? body.detail.filter((issue): issue is string => typeof issue === "string").slice(0, 10).map((issue) => issue.slice(0, 240))
+    : [];
   return new PiPodError(`the pi pod server refused ${method} ${apiPath}: ${message}`, {
     status: res.status,
     ...(code ? { code } : {}),
     ...(safeDetail !== undefined ? { detail: safeDetail } : {}),
+    ...(issues.length > 0 ? { hint: issues.join("\n") } : {}),
   });
 }
 
