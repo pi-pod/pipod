@@ -1,6 +1,6 @@
 {
   "name": "@pipod/cli",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Run pi coding-agent sessions in server-managed pods",
   "type": "module",
   "license": "AGPL-3.0-only",
