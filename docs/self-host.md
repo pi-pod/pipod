@@ -398,24 +398,29 @@ holds its share until it stops (on its own after 15 idle minutes; `pipod stop` o
 pod anyone may launch is yours to set in `.env`:
 
 - `POD_MAX_CPU` / `POD_MAX_MEMORY_GB` / `POD_MAX_DISK_GB` — the per-pod ceiling,
-  default 2 vCPU / 4 GiB / 20 GiB. Compose hands the same values to the server, which
+  default 8 vCPU / 24 GiB / 20 GiB. Compose hands the same values to the server, which
   bounds each launch, and to the sandbox, which writes them into each sandbox's
   cgroup and disk quota. A larger CPU or disk request is lowered to the ceiling
   with a warning. Memory up to the standard 4 GiB is lowered the same way, so the
   default shape still launches under a smaller ceiling; a request for more memory
   than the ceiling is refused, never shrunk.
 
+The ceiling bounds what a launch may ask for; the standard pod stays 2 vCPU / 4 GiB. A
+pod's CPU is a cap, not a reservation, so the 8 vCPU ceiling suits any host. Its memory is
+reserved in full, so the 24 GiB ceiling needs a host of 32 GB or more. On a smaller host,
+set `POD_MAX_MEMORY_GB` to what one pod can get, as below: a request above the budget can
+never be admitted, and it is refused as a full server rather than as too large.
+
 | Host | `.env` | Admission budget | Pods |
 | --- | --- | --- | --- |
-| 16 GB / 8 vCPU | the defaults | 12.1 GiB, 7.5 cores (measured on a 15.1 GiB host) | three at 2 vCPU / 4 GiB |
-| 8 GB / 4 vCPU | the defaults | about 4.7 GiB, 3.5 cores | one at 2 vCPU / 4 GiB |
+| 16 GB / 8 vCPU | `POD_MAX_MEMORY_GB=12` | 12.1 GiB, 7.5 cores (measured on a 15.1 GiB host) | three at 2 vCPU / 4 GiB |
+| 8 GB / 4 vCPU | `POD_MAX_MEMORY_GB=4` | about 4.7 GiB, 3.5 cores | one at 2 vCPU / 4 GiB |
 | 4 GB / 2 vCPU | `PI_POD_SANDBOX_RESERVE_MEMORY_GB=1.5`, `POD_MAX_CPU=1`, `POD_MAX_MEMORY_GB=2` | about 2.3 GiB, 1.5 cores | one at 1 vCPU / 2 GiB |
 
-A bigger machine takes bigger pods the same way: on a 32 GB / 8 vCPU host, for example,
-`POD_MAX_CPU=4` and `POD_MAX_MEMORY_GB=16` (the fleet ceiling grows with the host on its
-own). Each launch then asks for the org or template shape, up to that ceiling. To run more,
-smaller pods — or to make a larger shape the default — set it once in the org defaults. They
-apply to every project; a project's own `.pi-pod/config.json` reaches the server only through
+A bigger machine takes bigger pods the same way: raise the ceiling in `.env` (the fleet
+ceiling grows with the host on its own). Each launch asks for the org or template shape, up
+to that ceiling. To run more, smaller pods — or to make a larger shape the default — set it
+once in the org defaults. They apply to every project; a project's own `.pi-pod/config.json` reaches the server only through
 a template, which the launcher offers to create:
 
 ```bash
@@ -558,7 +563,7 @@ brings your existing pods' workspaces up under the new sandbox.
 | `pipod login --device` says the identity provider *"does not allow this CLI to sign in with a code"* | The install predates sign-in with a code: `selfhost/upgrade --apply-zitadel`. |
 | `pipod login` signs in to pipod.dev, or Zitadel says the client is unknown | The CLI is pointed at another server: `pipod login --server <this server>`. A server that predates sign-in discovery needs `--issuer` and `PI_POD_OIDC_CLIENT_ID`. |
 | `the image mirror is private` on launch | The base image was not published — the server was started without `selfhost/upgrade`. Run it. A failed pull is remembered for ten minutes. |
-| A launch fails with *"the server is full"*, or the server log says `provisioning failed: … (507)` | Running pods hold the whole budget. Stop one (`pipod stop`), lower the default shape, or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |
+| A launch fails with *"the server is full"*, or the server log says `provisioning failed: … (507)` | Running pods hold the whole budget, or the launch asked for more memory than the whole budget holds. Stop a pod (`pipod stop`), lower the default shape or `POD_MAX_MEMORY_GB`, or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |
 | A launch fails with `memoryGB … exceeds this deployment's … per-sandbox limit` | The org, template or launch asked for more memory than `POD_MAX_MEMORY_GB`. Ask for less, or raise it in `.env` and run `selfhost/upgrade` — [Sizing](#sizing-the-host-and-the-pod-shape). |
 | A `.pi-pod/config.json` `resources` block changes nothing | A project layer only reaches the server through a template. Answer `y` to the launcher's *create template* prompt, or set the shape once in the org defaults: `pipod settings org set resources.memoryGB 2`. |
 | `pod transport supervisor stayed alive but did not connect` | A pod cannot reach the server: `PUBLIC_URL` (if you set one) is wrong, or `10.79.0.0/24` collides with a network of this host's — see the `pods` network in `compose.yml`. |
