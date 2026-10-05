@@ -420,8 +420,8 @@ never be admitted, and it is refused as a full server rather than as too large.
 A bigger machine takes bigger pods the same way: raise the ceiling in `.env` (the fleet
 ceiling grows with the host on its own). Each launch asks for the org or template shape, up
 to that ceiling. To run more, smaller pods — or to make a larger shape the default — set it
-once in the org defaults. They apply to every project; a project's own `.pi-pod/config.json` reaches the server only through
-a template, which the launcher offers to create:
+once in the org defaults. They apply to every project; a project's own `.pi-pod/config.json`
+reaches the server only through a template, which the launcher offers to create:
 
 ```bash
 pipod settings org set resources.memoryGB 2
