@@ -20,6 +20,10 @@
         "w": "switch"
       }
     },
-    "sessionNaming": "auto"
+    "sessionNaming": "auto",
+
+    // A pod's Pi extensions run on this machine, as you, to render in your terminal. "ask"
+    // confirms each new extension version; "run" runs them all without asking.
+    "podExtensions": "ask"
   }
 }

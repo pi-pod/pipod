@@ -32,6 +32,12 @@ export interface AttestedPackage {
 }
 
 /**
+ * `pi.podExtensions` in ~/.pi-pod/config.json: "ask" before running each new exact package,
+ * or "run" every attested package without asking.
+ */
+export type PodExtensionsPolicy = "ask" | "run";
+
+/**
  * The attested set from a pod row's launch report, guardrails applied. Entries that fail a
  * shape check are dropped (fail closed) and named in `refused` so the session can say why
  * rendering stays generic.
@@ -70,12 +76,16 @@ export function attestedPackages(
  * The attested set says which packages the server recorded, not that this person agreed to
  * run them: a template someone else edits, or one a pod wrote, chooses them. Each exact
  * package runs locally only once its user has said yes to it on this machine; without a
- * terminal to ask, rendering stays generic.
+ * terminal to ask, rendering stays generic. The "run" policy is that yes given once for
+ * every package, so it must only ever come from this machine's own config.
  */
 export async function trustAttestedPackages(
   specs: AttestedPackage[],
-  opts: { cacheRoot: string; ask: (question: string) => Promise<boolean> },
+  opts: { cacheRoot: string; policy: PodExtensionsPolicy; ask: (question: string) => Promise<boolean> },
 ): Promise<{ trusted: AttestedPackage[]; declined: AttestedPackage[] }> {
+  // Recorded answers are left alone, so switching back to "ask" asks only about packages
+  // this machine never said yes to.
+  if (opts.policy === "run") return { trusted: specs, declined: [] };
   const file = path.join(opts.cacheRoot, "trusted-extensions.json");
   const key = (spec: AttestedPackage) => `${spec.name}@${spec.version}`;
   let known: string[] = [];

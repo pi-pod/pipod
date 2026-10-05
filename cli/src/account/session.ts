@@ -569,6 +569,7 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
     }
     const { trusted, declined } = await trustAttestedPackages(attested.specs, {
       cacheRoot,
+      policy: context.config.pi.podExtensions,
       ask: (question) => confirm(question, { nonInteractiveDefault: false }),
     });
     if (declined.length > 0) {

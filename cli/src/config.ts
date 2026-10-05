@@ -12,6 +12,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { PodExtensionsPolicy } from "./client/runtime/attested-extensions.js";
 import type { ChordConfig } from "./client/runtime/chords.js";
 import { POD_SUBCOMMANDS } from "./client/runtime/pod-commands.js";
 import { DEFAULT_HOST_CONFIG, type HostConfigSelection } from "./hostconfig.js";
@@ -125,7 +126,8 @@ export function retiredLocalKeysFound(raw: Record<string, unknown>): RetiredKeyF
  * by the outgoing list; these are the rest.
  */
 const CLIENT_ONLY_TOP_KEYS = ["$schema", "secretResolver"] as const;
-const CLIENT_ONLY_PI_KEYS = ["chords", "sessionNaming"] as const;
+/** The `pi` keys read only from ~/.pi-pod/config.json and never from a server layer. */
+export const CLIENT_ONLY_PI_KEYS = ["chords", "sessionNaming", "podExtensions"] as const;
 
 /** Every dotted name a bundle payload must not contain: rejected keys plus client-only ones. */
 export function nonBundleKeysFound(config: Record<string, unknown>): string[] {
@@ -260,6 +262,12 @@ export interface PiConfig {
    * and `pipod list` mirrors — so "off" costs the automatic naming, not the feature.
    */
   sessionNaming: SessionNaming;
+  /**
+   * Whether a pod's Pi extensions run on this machine without asking first. Client-only, and
+   * only this machine's config sets it: any other layer would let whoever edits it choose
+   * code that runs here.
+   */
+  podExtensions: PodExtensionsPolicy;
 }
 
 export interface ResourcesConfig {
@@ -322,6 +330,7 @@ export const DEFAULT_CONFIG: Omit<PiPodConfig, "image"> = {
     hostConfig: DEFAULT_HOST_CONFIG,
     chords: { enabled: true, prefix: DEFAULT_CHORD_PREFIX, bindings: DEFAULT_CHORD_BINDINGS },
     sessionNaming: "auto",
+    podExtensions: "ask",
   },
   idleTimeoutMinutes: 15,
   archiveAfterMinutes: 60,
@@ -683,6 +692,7 @@ export function validateConfig(raw: unknown): ParsedConfigResult {
     "hostConfig",
     "chords",
     "sessionNaming",
+    "podExtensions",
   ]);
 
   const hostConfigRaw = v.object("pi.hostConfig", piRaw["hostConfig"]);
@@ -749,6 +759,12 @@ export function validateConfig(raw: unknown): ParsedConfigResult {
         piRaw["sessionNaming"],
         ["auto", "off"],
         d.pi.sessionNaming,
+      ),
+      podExtensions: v.enumValue<PodExtensionsPolicy>(
+        "pi.podExtensions",
+        piRaw["podExtensions"],
+        ["ask", "run"],
+        d.pi.podExtensions,
       ),
     },
     // 0 is meaningful here (auto-stop off), so the floor is 0 rather than 1.
