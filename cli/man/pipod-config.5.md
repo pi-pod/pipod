@@ -91,6 +91,10 @@ pi.chords                keystrokes for /pod commands while attached:
                            "bindings": { "d": "detach", "a": "archive", "s": "status",
                                          "l": "list", "w": "switch" } }
 pi.sessionNaming         "auto" (default) names a session from its first prompt; "off"
+pi.podExtensions         a pod's Pi extensions run on this machine, as you, to render in
+                         the terminal: "ask" (default) confirms each new extension
+                         version; "run" runs them without asking (read only from
+                         ~/.pi-pod/config.json)
 $schema                  ignored
 ```
 

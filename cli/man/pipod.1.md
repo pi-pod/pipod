@@ -493,7 +493,7 @@ precedes the confirmation; nothing is written when the two already match.
 
 What pull keeps from the local files:
   config.json    client-only keys: $schema, template, secretResolver,
-                 pi.chords, pi.sessionNaming
+                 pi.chords, pi.sessionNaming, pi.podExtensions
   settings.json  hooks and mcpServers (and packages when hostConfig.packages
                  is off)
   models.json    credential values the push had dropped

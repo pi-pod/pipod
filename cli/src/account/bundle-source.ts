@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { CONFIG_DIR, findConfigPath, PROJECT_BAKE_SCRIPT, PROJECT_ENV_FILE, PROJECT_INIT_SCRIPT, nonBundleKeysFound, stripNonBundleKeys, validateConfig } from "../config.js";
+import { CLIENT_ONLY_PI_KEYS, CONFIG_DIR, findConfigPath, PROJECT_BAKE_SCRIPT, PROJECT_ENV_FILE, PROJECT_INIT_SCRIPT, nonBundleKeysFound, stripNonBundleKeys, validateConfig } from "../config.js";
 import { parseDotenv } from "../dotenv.js";
 import { PiPodError } from "../errors.js";
 import { HOST_PI_AGENT_SUBPATH, filterSettings, hostHome, sanitizeModelsForTransport } from "../hostconfig.js";
@@ -141,7 +141,7 @@ function readPiAgentsDirectory(
 
 /**
  * The single deep boundary for every outgoing server-bundle config: client-only
- * metadata (template pin, secretResolver, $schema, chords/sessionNaming) and every
+ * metadata (template pin, secretResolver, $schema, client-only `pi` keys) and every
  * key the bundle-write contract rejects never reach the server.
  */
 export function toOutgoingBundleConfig(raw: Record<string, unknown>): Record<string, unknown> {
@@ -467,9 +467,8 @@ export interface BundleWriteResult {
   root: string;
 }
 
-/** Keys the launcher owns locally; a pulled config never replaces them. */
+/** Keys the launcher owns locally, with CLIENT_ONLY_PI_KEYS; a pulled config never replaces them. */
 const CLIENT_ONLY_TOP_KEYS = ["$schema", "template", "secretResolver"] as const;
-const CLIENT_ONLY_PI_KEYS = ["chords", "sessionNaming"] as const;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

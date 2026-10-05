@@ -1,6 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { findConfigPath, retiredLocalKeysFound, stripNonBundleKeys, validateConfig, type PiPodConfig } from "../config.js";
+import {
+  CLIENT_ONLY_PI_KEYS,
+  findConfigPath,
+  retiredLocalKeysFound,
+  stripNonBundleKeys,
+  validateConfig,
+  type PiPodConfig,
+} from "../config.js";
 import { PiPodError } from "../errors.js";
 import { parseJsonc } from "../jsonc.js";
 import {
@@ -26,7 +33,7 @@ export function readHostConfig(home?: string | undefined): Record<string, unknow
 }
 
 /**
- * Fail closed on retired keys in the machine layer. Only chords/sessionNaming (plus the
+ * Fail closed on retired keys in the machine layer. Only the client-only `pi` keys (plus the
  * template pin and secretResolver) are ever read from `~/.pi-pod/config.json`, so a
  * stale path pointer or name list there would otherwise vanish without a word.
  */
@@ -90,7 +97,7 @@ export function resolveLaunchTemplateRef(
 export function machineClientConfig(raw: Record<string, unknown>): Record<string, unknown> {
   const pi = isPlainObjectValue(raw["pi"]) ? raw["pi"] : {};
   const clientPi = Object.fromEntries(
-    Object.entries(pi).filter(([key]) => ["chords", "sessionNaming"].includes(key)),
+    Object.entries(pi).filter(([key]) => (CLIENT_ONLY_PI_KEYS as readonly string[]).includes(key)),
   );
   return Object.keys(clientPi).length > 0 ? { pi: clientPi } : {};
 }

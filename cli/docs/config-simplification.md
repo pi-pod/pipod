@@ -18,7 +18,7 @@
 Retired config keys fail closed in `validateConfig` (and in `planAccountLaunch`
 before resolve — covering nested `pi.hostConfig` lists and the machine layer
 `~/.pi-pod/config.json`, whose only ever-read keys are the template pin,
-`secretResolver`, and `pi.chords`/`pi.sessionNaming`) because silently ignoring a
+`secretResolver`, and `pi.chords`/`pi.sessionNaming`/`pi.podExtensions`) because silently ignoring a
 custom script path would read the wrong file. Server-resident bundles carrying
 retired keys (old templates) are stripped with a warning on pull and
 launch-preview — `push` clears them; `diff` strips silently by design (it is
@@ -33,7 +33,7 @@ One deep boundary, `stripNonBundleKeys` (`toOutgoingBundleConfig` for raw files)
 drops everything a bundle payload must not contain: the rejected keys
 (`template` — the local pin, a template id travels instead; `reuse`;
 `envFile`/`initScript`/`bakeScript`; `pi.hostConfig.skills`/`extensions`) plus
-client-only metadata (`$schema`, `secretResolver`, `pi.chords`/`pi.sessionNaming`).
+client-only metadata (`$schema`, `secretResolver`, `pi.chords`/`pi.sessionNaming`/`pi.podExtensions`).
 Covered paths: project/user/org-dir compilation, the launch bootstrap preview,
 `templates create/edit --config`, and `settings user|org edit|set` — the settings
 verbs validate the edited config locally first (types and retired keys fail
@@ -58,6 +58,7 @@ explicit `set reuse true` fails visibly rather than vanishing.
   server-side; `packages` is enforced on both sides (local sanitize/filter plus
   the server install gate).
 - `pi.chords` / `pi.sessionNaming` — client-only UI preferences, stripped before anything travels.
+- `pi.podExtensions` — client-only: whether a pod's attested Pi extensions run on this machine without asking (`"ask"` or `"run"`). Read only from `~/.pi-pod/config.json`, so no server layer can choose to run code on someone's machine.
 - `secretResolver` / `$schema` — client-only op:// resolution config / schema hint; never travel.
 
 ## Retained: CLI surface (complete inventory)
