@@ -163,6 +163,9 @@ export class SandboxDisks {
     try {
       const source = (await runOk("findmnt", ["-n", "-o", "SOURCE", "--target", layout.mountpoint])).trim();
       if (!source) throw new Error(`could not find loop device for ${layout.mountpoint}`);
+      // A loop device keeps the size its image had when attached; without this, resize2fs
+      // sees the old size, changes nothing, and the sandbox stays full under a larger quota.
+      await runOk("losetup", ["--set-capacity", source]);
       await runOk("resize2fs", [source]);
     } finally {
       if (!wasMounted) await this.unmount(id);
