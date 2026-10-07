@@ -3,13 +3,13 @@ import { query, tx, type Queryable } from "../db/index.js";
 import { conflict, serviceUnavailable } from "../httperrors.js";
 import {
   assertLaunchAllowed,
+  launchRecoveryHoldSql,
   LAUNCH_RECOVERY_PROTOCOL_VERSION,
 } from "./launch-control.js";
 import { SERVER_PROCESS_INCARNATION } from "./process-incarnation.js";
 import { acquireQuotaLocks } from "./concurrency.js";
 
 const OWNER_LEASE_SECONDS = 60;
-const ALWAYS_HELD_PHASES = ["unknown", "initialization_interrupted", "legacy_unresolved", "delete_pending"];
 const OPERATION_KEY = /^[A-Za-z0-9._:-]{8,128}$/;
 
 export interface CreateAttemptRow {
@@ -173,12 +173,7 @@ export async function markCreateAttemptDispatchingTx(
         AND NOT EXISTS (SELECT 1 FROM pod_create_attempts AS other
                          WHERE other.user_id = pod_create_attempts.user_id
                            AND other.id <> pod_create_attempts.id
-                           AND (other.phase = ANY($6::text[]) OR
-                             (other.phase IN ('dispatching','sandbox_known') AND (
-                               other.owner_token IS NULL OR other.owner_instance_id IS NULL
-                               OR other.owner_lease_until IS NULL
-                               OR other.owner_lease_until <= clock_timestamp()
-                               OR other.recovery_token IS NOT NULL))))
+                           AND ${launchRecoveryHoldSql("other")})
         AND EXISTS (SELECT 1 FROM pods AS p WHERE p.id = pod_create_attempts.pod_id
                      AND p.state = 'active' AND p.provider_state IN ('preparing_image','provisioning')
                      AND p.provider_sandbox_id IS NULL)
@@ -189,7 +184,6 @@ export async function markCreateAttemptDispatchingTx(
       args.ownerInstanceId ?? SERVER_PROCESS_INCARNATION,
       OWNER_LEASE_SECONDS,
       LAUNCH_RECOVERY_PROTOCOL_VERSION,
-      ALWAYS_HELD_PHASES,
     ],
   );
   if ((result.rowCount ?? 0) !== 1) {

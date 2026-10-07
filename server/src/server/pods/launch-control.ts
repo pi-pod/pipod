@@ -15,12 +15,31 @@ export interface LaunchControlRow {
   reason_code: string;
 }
 
-const ALWAYS_HELD_PHASES = [
-  "unknown",
-  "initialization_interrupted",
-  "legacy_unresolved",
-  "delete_pending",
-] as const;
+/**
+ * Account-wide fencing is for unaccounted creates, not pod-local initialization errors.
+ * A failed initializer retains its original sandbox and quota charge. Once the trusted
+ * journal and pod agree on that sandbox, another launch cannot duplicate its allocation.
+ * Share this predicate with the final dispatch fence so admission and dispatch agree.
+ */
+export function launchRecoveryHoldSql(alias: "a" | "other"): string {
+  return `(
+    ${alias}.phase IN ('unknown','legacy_unresolved','delete_pending')
+    OR (${alias}.phase = 'initialization_interrupted' AND NOT EXISTS (
+      SELECT 1 FROM pods AS accounted
+       WHERE accounted.id = ${alias}.pod_id
+         AND accounted.org_id = ${alias}.org_id
+         AND accounted.user_id = ${alias}.user_id
+         AND accounted.provider = ${alias}.provider
+         AND accounted.provider_sandbox_id = ${alias}.sandbox_id
+    ))
+    OR (${alias}.phase IN ('dispatching','sandbox_known') AND (
+      ${alias}.owner_token IS NULL OR ${alias}.owner_instance_id IS NULL
+      OR ${alias}.owner_lease_until IS NULL
+      OR ${alias}.owner_lease_until <= clock_timestamp()
+      OR ${alias}.recovery_token IS NOT NULL
+    ))
+  )`;
+}
 
 async function select<R extends pg.QueryResultRow>(db: Queryable | undefined, text: string, params: unknown[] = []) {
   return db ? db.query<R>(text, params) : query<R>(text, params);
@@ -58,7 +77,7 @@ export async function assertLaunchGateOpen(db?: Queryable): Promise<LaunchContro
   return row;
 }
 
-/** A user's unresolved create holds the owner across orgs and client operation ids. */
+/** An unaccounted create holds its owner across orgs and client operation ids. */
 export async function assertNoLaunchRecoveryHold(
   db: Queryable | undefined,
   userId: string,
@@ -66,20 +85,14 @@ export async function assertNoLaunchRecoveryHold(
 ): Promise<void> {
   const result = await select<{ pod_id: string; phase: string }>(
     db,
-    `SELECT pod_id, phase
-       FROM pod_create_attempts
-      WHERE user_id = $1
-        AND ($2::uuid IS NULL OR id <> $2::uuid)
-        AND (
-          phase = ANY($3::text[])
-          OR (phase IN ('dispatching','sandbox_known') AND (
-            owner_token IS NULL OR owner_instance_id IS NULL OR owner_lease_until IS NULL
-            OR owner_lease_until <= clock_timestamp() OR recovery_token IS NOT NULL
-          ))
-        )
-      ORDER BY created_at ASC
+    `SELECT a.pod_id, a.phase
+       FROM pod_create_attempts AS a
+      WHERE a.user_id = $1
+        AND ($2::uuid IS NULL OR a.id <> $2::uuid)
+        AND ${launchRecoveryHoldSql("a")}
+      ORDER BY a.created_at ASC
       LIMIT 1`,
-    [userId, ignoreAttemptId ?? null, [...ALWAYS_HELD_PHASES]],
+    [userId, ignoreAttemptId ?? null],
   );
   if (result.rows[0]) {
     throw conflict("an earlier launch still needs recovery before this account can launch again", {
