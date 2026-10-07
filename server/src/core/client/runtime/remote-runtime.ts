@@ -591,7 +591,16 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     get isStreaming() {
       return cache.state.isStreaming;
     },
+    /**
+     * Once an ending is recorded (§6.2) the client has no turn left to wait for, so it reads
+     * as idle. InteractiveMode's extension shutdown requester only shuts down when the session
+     * is idle and otherwise waits for `agent_settled`; without this a `/pod detach` or its
+     * chord would sit until the pod's turn ended, though a leave never touches pod-side pi, and
+     * a dropped transport or a pod-side pi exit may never settle the stream at all. A local
+     * extension's `ctx.shutdown()` records no ending, so it still waits for the turn as in pi.
+     */
     get isIdle() {
+      if (bridge.intent) return true;
       return !cache.state.isStreaming && !cache.state.isCompacting;
     },
     get isCompacting() {
