@@ -185,12 +185,13 @@ export async function recordProvisioningFailure(args: {
     await acquireQuotaLocks(client, args.orgId, args.userId);
     const attempts = await client.query<{
       id: string;
+      provider: string;
       phase: string;
       sandbox_id: string | null;
       owner_token: string | null;
       recovery_token: string | null;
     }>(
-      `SELECT id, phase, sandbox_id, owner_token, recovery_token
+      `SELECT id, provider, phase, sandbox_id, owner_token, recovery_token
          FROM pod_create_attempts WHERE pod_id=$1
         ORDER BY attempt_no DESC LIMIT 1 FOR UPDATE`,
       [args.podId],
@@ -222,7 +223,13 @@ export async function recordProvisioningFailure(args: {
       } else if (attempt.phase === "ready") {
         return null;
       } else {
-        unresolved = true;
+        // An initializer can fail after allocation succeeded. Keep its sandbox and quota,
+        // but report a pod-local failure rather than an ambiguous create/account hold.
+        unresolved = !(
+          (attempt.phase === "sandbox_known" || attempt.phase === "initialization_interrupted") &&
+          attempt.provider === pod.provider &&
+          attempt.sandbox_id !== null && pod.provider_sandbox_id === attempt.sandbox_id
+        );
         sandboxId = sandboxId ?? attempt.sandbox_id;
         if (attempt.phase === "sandbox_known") {
           await client.query(
