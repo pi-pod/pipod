@@ -20,7 +20,8 @@ import {
   payloadTooLarge,
   tooManyRequests,
 } from "../httperrors.js";
-import type { ResolvedConfigReport } from "./types.js";
+import type { Sandbox } from "../../core/providers/types.js";
+import type { ResolvedConfigReport, WorkspaceSeedReport } from "./types.js";
 
 export interface WorkspaceArchiveLimits {
   maxCompressedBytes: number;
@@ -358,6 +359,40 @@ export function decodeWorkspaceEmptyCheck(output: string): { empty: boolean; ent
     empty: object.empty,
     entries: object.entries as string[],
     missing: object.missing === true,
+  };
+}
+
+/** Lists what the pod's workdir holds, judged exactly as the seed routes judge it. */
+export async function inspectWorkdir(
+  sandbox: Pick<Sandbox, "exec">,
+  workdir: string,
+): Promise<{ empty: boolean; entries: string[] }> {
+  const checked = await sandbox.exec(["python3", "-c", workspaceEmptyCheckSource(), workdir], {
+    timeoutMs: 60_000,
+  });
+  if (checked.exitCode !== 0) {
+    throw badRequest(checked.output?.trim() || "workspace inspection failed");
+  }
+  const state = decodeWorkspaceEmptyCheck(checked.output ?? "");
+  return { empty: state.empty, entries: state.entries };
+}
+
+/**
+ * Seeds only fill an empty workdir, so one that init (or the image) already populated can never
+ * take a seed. Settling that before the pod starts opens the gate with the pod, and the client
+ * reads the outcome instead of building and uploading a seed the routes would refuse.
+ */
+export async function skipSeedIntoPopulatedWorkdir(
+  sandbox: Pick<Sandbox, "exec">,
+  workdir: string,
+  seed: WorkspaceSeedReport,
+): Promise<WorkspaceSeedReport> {
+  if ((await inspectWorkdir(sandbox, workdir)).empty) return seed;
+  return {
+    requestedAt: seed.requestedAt,
+    status: "skipped",
+    finishedAt: new Date().toISOString(),
+    reason: "the workspace was already populated when the pod started",
   };
 }
 
