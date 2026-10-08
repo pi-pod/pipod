@@ -5,8 +5,15 @@
  * writer. Production keeps this off; its deploy pipeline migrates with an owner role and opens
  * the launch gate as separate, verified steps.
  */
-import { closePool, initPool, query } from "./index.js";
-import { knownMigration, migrate, MigrationPathError, shippedMigrations, type MigrationSet } from "./migrate.js";
+import { closePool, initPool } from "./index.js";
+import {
+  appliedMigrations,
+  knownMigration,
+  migrate,
+  MigrationPathError,
+  shippedMigrations,
+  type MigrationSet,
+} from "./migrate.js";
 import {
   LAUNCH_RECOVERY_PROTOCOL_VERSION,
   readLaunchControl,
@@ -33,16 +40,14 @@ interface Log {
 /** Needs an initialized pool. A database that was never migrated has every migration pending. */
 export async function readSchemaStatus(set: MigrationSet): Promise<SchemaStatus> {
   const shipped = shippedMigrations(set);
-  const exists = await query<{ relation: string | null }>(
-    `SELECT to_regclass('public.schema_migrations')::text AS relation`,
-  );
-  const applied = exists.rows[0]?.relation
-    ? (await query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((row) => row.name)
-    : [];
-  const appliedSet = new Set(applied);
+  const applied = await appliedMigrations();
+  const appliedSet = new Set(applied.map((migration) => migration.name));
   const shippedSet = new Set(shipped);
   const pending = shipped.filter((name) => !appliedSet.has(name)).sort();
-  const unknown = applied.filter((name) => !knownMigration(name, shippedSet)).sort();
+  const unknown = applied
+    .filter((migration) => !knownMigration(migration, shippedSet))
+    .map((migration) => migration.name)
+    .sort();
   return {
     state: unknown.length > 0 ? "ahead" : pending.length > 0 ? "behind" : "current",
     pending,
