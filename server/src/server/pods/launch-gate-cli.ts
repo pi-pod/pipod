@@ -23,13 +23,12 @@ export async function runLaunchGateCommand(rest: string[], extraStatus?: () => P
         `SELECT phase, count(*)::text AS count FROM pod_create_attempts GROUP BY phase ORDER BY phase`,
       ),
       extraStatus?.() ?? Promise.resolve([]),
+      // The rows that make set_launch_recovery_mode refuse to open (migration 006).
       query<{ count: string }>(
         `SELECT count(*)::text AS count FROM pods AS p
           WHERE p.state='active' AND p.provider IN ('sandbox','host') AND p.provider_sandbox_id IS NULL
             AND p.provider_state IN ('preparing_image','provisioning','starting','error','gone')
-            AND NOT EXISTS (SELECT 1 FROM pod_create_attempts AS a WHERE a.pod_id=p.id
-              AND a.phase IN ('prepared','dispatching','unknown','sandbox_known',
-                'initialization_interrupted','legacy_unresolved','delete_pending'))`,
+            AND NOT EXISTS (SELECT 1 FROM pod_create_attempts AS a WHERE a.pod_id=p.id)`,
       ),
     ]);
     console.log(`mode=${control.mode} epoch=${control.epoch} requiredProtocol=${control.required_protocol}`);
