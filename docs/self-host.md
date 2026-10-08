@@ -211,7 +211,9 @@ migration it needs. In order, `upgrade`:
    keep serving;
 2. recreates the sandbox when its image changed — **this ends live sessions.**
    Workspaces are on the `sandbox_state` volume, so attaching again resumes each pod
-   with its files; finish or detach long-running work before you upgrade;
+   with its files; finish or detach long-running work before you upgrade. The sandbox
+   re-verifies every [pod image](#pod-images) it holds before it serves again, so a
+   host with several large ones takes a minute or more to come back;
 3. publishes the pod base image the new server launches from;
 4. runs `backup`, which dumps both databases into `selfhost/backups/` while the old
    server is still serving, and keeps the newest seven (`PIPOD_BACKUP_KEEP`). If the
@@ -383,6 +385,20 @@ settings.
 Serve every public endpoint over HTTPS. Never copy `SECRETS_KEK` or database
 credentials to another machine — sandboxes receive plaintext secret *values* at
 launch, never the keys that protect them at rest.
+
+## Pod images
+
+`selfhost/upgrade` publishes one pod base image. A launch whose Pi packages or bake script
+(org, personal or template) are not in it starts on that base and installs the packages and
+runs the bake script live, before its init script — minutes, for a large bake script. Behind
+that first launch, the sandbox builds the variant with both baked in and publishes it to the
+bundled registry, and every later launch with the same packages and bake script boots from it
+with nothing left to install. Editing either makes a new variant the same way.
+
+The variant is built in a disposable sandbox, as an image build: as root in `/root`, with no
+secrets, no workspace, and open egress to public addresses whatever the template's egress
+says. Each variant takes a few gigabytes of the `sandbox_state` and `registry_data` volumes
+for a large bake script. The server log says `derived image … is ready`, or why it failed.
 
 ## Sizing the host and the pod shape
 
@@ -577,6 +593,7 @@ brings your existing pods' workspaces up under the new sandbox.
 | Invites and password resets never arrive | No SMTP provider, or one whose credential was dropped — [Email](#email). `selfhost/add-user <email> --new-password` lets someone in meanwhile. |
 | `pipod login --device` says the identity provider *"does not allow this CLI to sign in with a code"* | The install predates sign-in with a code: `selfhost/upgrade --apply-zitadel`. |
 | `pipod login` signs in to pipod.dev, or Zitadel says the client is unknown | The CLI is pointed at another server: `pipod login --server <this server>`. A server that predates sign-in discovery needs `--issuer` and `PI_POD_OIDC_CLIENT_ID`. |
+| Every launch of a template still runs its bake script live | The variant failed to build: the server log says why (`derived image … build failed`). A bake script that needs a secret or the workspace fails in the build; move that step to the init script. After three failures the next attempt waits ten minutes. |
 | `the image mirror is private` on launch | The base image was not published — the server was started without `selfhost/upgrade`. Run it. A failed pull is remembered for ten minutes. |
 | A launch fails with *"the server is full"*, or the server log says `provisioning failed: … (507)` | Running pods hold the whole budget, or the launch asked for more memory than the whole budget holds. Stop a pod (`pipod stop`), lower the default shape or `POD_MAX_MEMORY_GB`, or grow the host — [Sizing](#sizing-the-host-and-the-pod-shape). |
 | A launch fails with `memoryGB … exceeds this deployment's … per-sandbox limit` | The org, template or launch asked for more memory than `POD_MAX_MEMORY_GB`. Ask for less, or raise it in `.env` and run `selfhost/upgrade` — [Sizing](#sizing-the-host-and-the-pod-shape). |
