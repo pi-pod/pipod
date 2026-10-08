@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { initPool, closePool, tx } from "./index.js";
+import { initPool, closePool, query, tx } from "./index.js";
 
 /** Prefer the process working directory so the Docker image path stays stable. */
 export function defaultMigrationsDir(): string {
@@ -63,12 +63,37 @@ export function shippedMigrations(set: MigrationSet): string[] {
   return [...migrationPaths(set.dirs, new Set(set.omit ?? [])).keys()].sort();
 }
 
+/** A row of `schema_migrations`, as release compatibility needs it. */
+export interface AppliedMigration {
+  name: string;
+  /** Recorded before the baseline: part of the pre-split chain the baseline folded in. */
+  beforeBaseline: boolean;
+}
+
+/** Needs an initialized pool. A database that was never migrated has applied nothing. */
+export async function appliedMigrations(): Promise<AppliedMigration[]> {
+  const exists = await query<{ relation: string | null }>(
+    `SELECT to_regclass('public.schema_migrations')::text AS relation`,
+  );
+  if (!exists.rows[0]?.relation) return [];
+  const rows = await query<{ name: string; before_baseline: boolean }>(
+    `SELECT name,
+            (applied_at < (SELECT applied_at FROM schema_migrations WHERE name = $1)) IS TRUE AS before_baseline
+       FROM schema_migrations`,
+    [BASELINE],
+  );
+  return rows.rows.map((row) => ({ name: row.name, beforeBaseline: row.before_baseline }));
+}
+
 /**
- * Whether a migration recorded in `schema_migrations` belongs to a release that ships
- * `shipped`: it ships the file, or ships the baseline that folded the pre-split chain in.
+ * Whether an applied migration belongs to a release that ships `shipped`: it ships the file, or
+ * ships the baseline and the row is one of the pre-split chain's. Those are told apart by when
+ * they were recorded, not by name: `adoptLegacyLedger` records the baseline after the whole
+ * chain, a fresh database records it first, and later core migrations reuse the chain's
+ * numbers (`006_…` sorts below `123_…`), so a name test would pass a newer release's work.
  */
-export function knownMigration(name: string, shipped: ReadonlySet<string>): boolean {
-  return shipped.has(name) || (shipped.has(BASELINE) && name <= LEGACY_LAST);
+export function knownMigration(migration: AppliedMigration, shipped: ReadonlySet<string>): boolean {
+  return shipped.has(migration.name) || (shipped.has(BASELINE) && migration.beforeBaseline);
 }
 
 function migrationPaths(dirs: readonly string[], omit: ReadonlySet<string>): Map<string, string> {
