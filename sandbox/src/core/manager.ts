@@ -25,6 +25,7 @@ import type { Logger } from "../log.js";
 import { Metrics, type AdmissionResource, type MetricsSnapshot, type OpResult } from "../metrics.js";
 import { Store, type SandboxRow, type Tier } from "../db/index.js";
 import type { ImageStore } from "../images/types.js";
+import { isImageBuild } from "../images/derive.js";
 import type { ListedObject, ObjectStore } from "../archive/types.js";
 import { packDir, unpackDir } from "../archive/pack.js";
 import { CgroupTree, type Cgroup, type ExtendedCgroupStats, type TenantCgroup } from "../runtime/cgroup.js";
@@ -1614,6 +1615,7 @@ export class Manager {
         upper: disk.upper,
         work: disk.work,
         lowers: image.layers.map((d) => this.images.layerDir(d)),
+        portableUpper: isImageBuild(row.labels),
       },
       this.log,
     );

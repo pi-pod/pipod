@@ -18,9 +18,16 @@ import {
 } from "./registry.js";
 import type { ResolvedImage } from "./types.js";
 
-/** Marks the disposable sandboxes derivations run in, so a restart can find and remove them. */
-export const IMAGE_BUILD_LABEL = "pi-pod-sandbox/purpose";
+/**
+ * Marks the disposable sandboxes derivations run in: they mount a portable upper (see
+ * OverlayLayout), and a restart finds and removes them.
+ */
+const IMAGE_BUILD_LABEL = "pi-pod-sandbox/purpose";
 const IMAGE_BUILD_VALUE = "image-build";
+
+export function isImageBuild(labels: Record<string, string>): boolean {
+  return labels[IMAGE_BUILD_LABEL] === IMAGE_BUILD_VALUE;
+}
 const SCRIPT_TIMEOUT_MS = 30 * 60_000;
 /** Keeps the build sandbox's activity clock current while a quiet download runs. */
 const TOUCH_INTERVAL_MS = 30_000;
