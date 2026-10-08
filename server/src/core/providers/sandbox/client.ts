@@ -343,6 +343,41 @@ export class SandboxClient {
     return await this.readJson<T>(response);
   }
 
+  /**
+   * POST to a route that answers in newline-delimited JSON, handing each value to `onEvent` as
+   * it arrives. For operations that run for minutes: the host sends headers at once and
+   * heartbeats after, so only `timeoutMs` bounds the whole exchange.
+   */
+  async ndjson(path: string, body: unknown, onEvent: (event: unknown) => void, timeoutMs: number): Promise<void> {
+    const response = await this.request(
+      "POST",
+      path,
+      JSON.stringify(body),
+      { "content-type": "application/json" },
+      timeoutMs,
+    );
+    const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+    if (type !== "application/x-ndjson" || !response.body) {
+      await response.body?.cancel();
+      throw new SandboxTransportError("host_asleep_or_unknown");
+    }
+    const decoder = new TextDecoder();
+    let buffered = "";
+    try {
+      for await (const chunk of response.body) {
+        buffered += decoder.decode(chunk, { stream: true });
+        for (let newline = buffered.indexOf("\n"); newline >= 0; newline = buffered.indexOf("\n")) {
+          const line = buffered.slice(0, newline).trim();
+          buffered = buffered.slice(newline + 1);
+          if (line) onEvent(JSON.parse(line));
+        }
+      }
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new SandboxTransportError("host_asleep_or_unknown");
+      throw this.transportError(error);
+    }
+  }
+
   /** Authenticated create-operation status lookup (§6.5). Unknown key → 404 not_found. */
   async getOperation(key: string): Promise<OperationStatusWire> {
     return await this.json<OperationStatusWire>("GET", `/v1/operations/${encodeURIComponent(key)}`);

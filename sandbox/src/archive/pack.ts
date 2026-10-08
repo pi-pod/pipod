@@ -2,36 +2,11 @@ import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { childError, waitForChild } from "../runtime/exec.js";
 import type { PackResult } from "./types.js";
-
-interface ChildResult {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stderr: string;
-}
-
-function waitForChild(child: ChildProcess): Promise<ChildResult> {
-  let stderr = "";
-  if (child.stderr === null) throw new Error("child process stderr is not piped");
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolve({ code, signal, stderr }));
-  });
-}
-
-function childError(command: string, result: ChildResult): Error | null {
-  if (result.code === 0) return null;
-  const status = result.signal === null ? `exit code ${String(result.code)}` : `signal ${result.signal}`;
-  const detail = result.stderr.trim();
-  return new Error(`${command} failed with ${status}${detail === "" ? "" : `: ${detail}`}`);
-}
 
 function settledError(result: PromiseSettledResult<unknown>): unknown {
   return result.status === "rejected" ? result.reason : undefined;

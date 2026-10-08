@@ -657,6 +657,21 @@ export interface ImageInfoWire {
   createdAt?: string;
 }
 
+/** Mirrors sandbox/src/wire.ts: run `script` on `base` and publish the result as `ref`. */
+export interface DeriveImageRequest {
+  base: string;
+  ref: string;
+  script: string;
+  resources?: ResourceSpec;
+}
+
+/** One line of a derive's newline-delimited JSON response; the last is `done` or `error`. */
+export type DeriveImageEvent =
+  | { log: string }
+  | { heartbeat: true }
+  | { done: ImageInfoWire }
+  | { error: { code: string; message: string; hint?: string; outputTail?: string } };
+
 export interface ListResponse {
   sandboxes: SandboxInfoWire[];
 }
@@ -827,3 +842,5 @@ export const ERR_STALE_REVISION = "stale_revision";
 export const ERR_OWNER_CONFLICT = "owner_conflict";
 /** 400: launches of unowned sandboxes are refused on this host (`PI_POD_SANDBOX_REQUIRE_OWNER`). */
 export const ERR_OWNER_REQUIRED = "owner_required";
+/** 409: this host cannot publish a derived image for that base (it is not in a loopback registry). */
+export const ERR_DERIVE_UNAVAILABLE = "derive_unavailable";

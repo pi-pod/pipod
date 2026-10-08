@@ -25,6 +25,7 @@ import type { Logger } from "../log.js";
 import { Metrics, type AdmissionResource, type MetricsSnapshot, type OpResult } from "../metrics.js";
 import { Store, type SandboxRow, type Tier } from "../db/index.js";
 import type { ImageStore } from "../images/types.js";
+import { isImageBuild } from "../images/derive.js";
 import type { ListedObject, ObjectStore } from "../archive/types.js";
 import { packDir, unpackDir } from "../archive/pack.js";
 import { CgroupTree, type Cgroup, type ExtendedCgroupStats, type TenantCgroup } from "../runtime/cgroup.js";
@@ -1614,6 +1615,7 @@ export class Manager {
         upper: disk.upper,
         work: disk.work,
         lowers: image.layers.map((d) => this.images.layerDir(d)),
+        portableUpper: isImageBuild(row.labels),
       },
       this.log,
     );
@@ -2144,6 +2146,26 @@ export class Manager {
       fs.rmSync(download, { force: true });
       fs.rmSync(staging, { recursive: true, force: true });
     }
+  }
+
+  /**
+   * Lend a stopped sandbox's writable layer — its overlay upper directory — to `use`, with the
+   * disk mounted for the duration. Serialized with the sandbox's own transitions, so it can
+   * neither start, archive nor be deleted meanwhile.
+   */
+  async withStoppedUpper<T>(id: string, use: (upperDir: string) => Promise<T>): Promise<T> {
+    return await this.serialize(id, async () => {
+      const row = this.mustGet(id);
+      if (row.tier !== "stopped" || this.transitioning.has(id)) {
+        throw conflict(`sandbox ${id} is ${row.tier}, not stopped`);
+      }
+      await this.disks.ensureMounted(id, row.ceiling.diskGB ?? resolveGuarantee(this.cfg, row.resources).diskGB);
+      try {
+        return await use(this.upperDir(id));
+      } finally {
+        await this.disks.unmount(id).catch(() => undefined);
+      }
+    });
   }
 
   /* ---------------------------------------------------------------- delete */

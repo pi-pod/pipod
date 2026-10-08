@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { loadConfig, unknownSandboxEnv } from "./config.js";
 import { createLogger } from "./log.js";
 import { Store } from "./db/index.js";
+import { removeAbandonedImageBuilds } from "./images/derive.js";
 import { OciImageStore } from "./images/store.js";
 import { createObjectStore } from "./archive/objectstore.js";
 import { CgroupTree } from "./runtime/cgroup.js";
@@ -65,6 +66,7 @@ export async function main(): Promise<void> {
     observations: observations ?? undefined,
   });
   await manager.init();
+  await removeAbandonedImageBuilds(manager, log);
 
   const reaper = new Reaper(cfg, store, manager, cgroups, objects, log, metrics);
   reaper.start();

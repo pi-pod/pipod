@@ -38,6 +38,7 @@ fairness, and the usage feed. All control-plane routes below need the master tok
 | [`docs/tenancy-cpu.md`](docs/tenancy-cpu.md) | owner identity, tenant cgroups, `PUT /v1/tenants/:userKey/cpu-grant` |
 | [`docs/operations-idempotency.md`](docs/operations-idempotency.md) | `operationKey`, fingerprint, `GET`/`DELETE /v1/operations/:key` |
 | [`docs/manual-tests-cost-controls.md`](docs/manual-tests-cost-controls.md) | privileged manual test plan (disposable host only) |
+| [`docs/derived-images.md`](docs/derived-images.md) | `POST /v1/images/derive`: base + script layer, published to a loopback registry |
 
 New env knobs:
 

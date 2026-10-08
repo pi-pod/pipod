@@ -8,6 +8,12 @@ export interface OverlayLayout {
   work: string;
   /** Image layer dirs, lowest first — the order the mount option must reverse. */
   lowers: string[];
+  /**
+   * Keep the upper expressible as an OCI layer: no directory redirects, which have no OCI
+   * form. Renaming a directory from the image then fails with EXDEV and tools copy it
+   * instead, as across filesystems. Otherwise the kernel's default applies.
+   */
+  portableUpper?: boolean;
 }
 
 export function isMounted(target: string): boolean {
@@ -29,7 +35,8 @@ export async function mountOverlay(layout: OverlayLayout, log: Pick<Logger, "err
     "overlay",
     "overlay",
     "-o",
-    `lowerdir=${lowerdir},upperdir=${layout.upper},workdir=${layout.work},index=off,metacopy=off`,
+    `lowerdir=${lowerdir},upperdir=${layout.upper},workdir=${layout.work},index=off,metacopy=off` +
+      (layout.portableUpper ? ",redirect_dir=off" : ""),
     layout.merged,
   ];
 

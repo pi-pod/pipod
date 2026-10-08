@@ -16,6 +16,7 @@ import {
   httpStatusLabel,
   isMetricsPath,
 } from "../metrics.js";
+import { DeriveScriptFailure, ImageDeriver, planDerive } from "../images/derive.js";
 import { registerExecRoute } from "./ws-exec.js";
 import { registerPtyRoute } from "./ws-pty.js";
 import {
@@ -25,6 +26,7 @@ import {
   type AuthzResponse,
   type CpuGrantRequest,
   type CreateSandboxRequest,
+  type DeriveImageEvent,
   type HealthResponse,
   type HoldRequest,
   type ReleaseHoldRequest,
@@ -576,6 +578,36 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       onProgress: (line) => log.info({ pull: line }, "image pull"),
     });
     return { ref: image.ref, state: "active", createdAt: image.pulledAt };
+  });
+
+  // A build takes minutes, longer than a client should wait for headers, so the outcome is
+  // streamed (see DeriveImageEvent) with a heartbeat. A refusal is still a plain 4xx. The
+  // build runs to completion even if the client goes away, and a later call for the same
+  // ref joins it or finds the result.
+  const deriver = new ImageDeriver(manager, cfg.paths.spool, log);
+  app.post("/v1/images/derive", async (req, reply) => {
+    const plan = planDerive(req.body);
+    reply.hijack();
+    reply.raw.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
+    // The client may leave mid-build; its socket's errors must not escape as unhandled.
+    reply.raw.on("error", () => undefined);
+    const send = (event: DeriveImageEvent): void => {
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.write(`${JSON.stringify(event)}\n`);
+    };
+    const heartbeat = setInterval(() => send({ heartbeat: true }), 30_000);
+    try {
+      const image = await deriver.derive(plan, (line) => send({ log: line }));
+      send({ done: { ref: image.ref, state: "active", createdAt: image.pulledAt } });
+    } catch (err) {
+      log.warn({ err, image: plan.ref.ref }, "image derivation failed");
+      const error = err instanceof ServiceError
+        ? err.toWire()
+        : { code: "internal", message: err instanceof Error ? err.message : String(err) };
+      send({ error: { ...error, ...(err instanceof DeriveScriptFailure ? { outputTail: err.outputTail } : {}) } });
+    } finally {
+      clearInterval(heartbeat);
+      reply.raw.end();
+    }
   });
 
   registerExecRoute(app, manager, log, metrics);

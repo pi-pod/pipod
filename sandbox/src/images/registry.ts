@@ -190,6 +190,75 @@ function registryProtocol(apiHost: string): "http" | "https" {
     : "https";
 }
 
+/** Whether a registry is reached over plain HTTP on this host's loopback (see registryProtocol). */
+export function isLoopbackRegistry(apiHost: string): boolean {
+  return registryProtocol(apiHost) === "http";
+}
+
+/**
+ * Writes images into one repository of a loopback registry: in a self-hosted deployment, the
+ * bundled registry the sandbox shares a network namespace with. Writing is confined there by
+ * construction — no credential is ever sent, and nothing lands in a registry another
+ * deployment reads.
+ */
+export class LoopbackRegistryWriter {
+  readonly #repositoryUrl: string;
+
+  constructor(reference: NormalizedReference) {
+    if (!isLoopbackRegistry(reference.apiHost)) {
+      throw new Error(`${reference.registry} is not a loopback registry, the only kind images are written to`);
+    }
+    const repository = reference.repository.split("/").map(encodeURIComponent).join("/");
+    this.#repositoryUrl = `http://${reference.apiHost}/v2/${repository}`;
+  }
+
+  async hasManifest(tag: string): Promise<boolean> {
+    return await this.#exists(`manifests/${encodeURIComponent(tag)}`, { Accept: MANIFEST_ACCEPT });
+  }
+
+  /** Monolithic upload; a blob the repository already holds is not sent again. */
+  async putBlob(digest: string, content: Blob): Promise<void> {
+    if (!DIGEST_PATTERN.test(digest)) throw new Error(`invalid blob digest: ${digest}`);
+    if (await this.#exists(`blobs/${encodeURIComponent(digest)}`)) return;
+    const started = await this.#send("POST", new URL(`${this.#repositoryUrl}/blobs/uploads/`), 202);
+    const location = started.headers.get("location");
+    if (!location) throw new Error("registry did not return a blob upload location");
+    const target = new URL(location, `${this.#repositoryUrl}/`);
+    if (target.origin !== new URL(this.#repositoryUrl).origin) {
+      throw new Error(`registry moved a blob upload to ${target.origin}`);
+    }
+    target.searchParams.set("digest", digest);
+    await this.#send("PUT", target, 201, { "content-type": "application/octet-stream" }, content);
+  }
+
+  async putManifest(tag: string, manifest: Uint8Array, mediaType: string): Promise<void> {
+    await this.#send(
+      "PUT",
+      new URL(`${this.#repositoryUrl}/manifests/${encodeURIComponent(tag)}`),
+      201,
+      { "content-type": mediaType },
+      new Blob([manifest]),
+    );
+  }
+
+  async #exists(resource: string, headers: Record<string, string> = {}): Promise<boolean> {
+    const response = await fetch(`${this.#repositoryUrl}/${resource}`, { method: "HEAD", headers, redirect: "error" });
+    if (response.status === 404) return false;
+    if (response.ok) return true;
+    throw new Error(`registry HEAD ${resource} failed: HTTP ${response.status}`);
+  }
+
+  async #send(method: string, url: URL, expected: number, headers: Record<string, string> = {}, body?: Blob): Promise<Response> {
+    const response = await fetch(url, { method, headers, ...(body === undefined ? {} : { body }), redirect: "error" });
+    if (response.status !== expected) {
+      const detail = (await response.text().catch(() => "")).trim().slice(0, 500);
+      throw new Error(`registry ${method} ${url.pathname} failed: HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
+    await response.body?.cancel();
+    return response;
+  }
+}
+
 /** A host-wide credential and the one registry it belongs to. */
 export interface HostRegistryAuth extends RegistryAuth {
   registry: string;
