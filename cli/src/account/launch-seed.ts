@@ -92,6 +92,13 @@ async function runSeed(opts: SeedWorkspaceOptions): Promise<SeedOutcome> {
     info("reusing this pod's warm workspace — nothing copied");
     return { kind: "skipped", reason: "reused pod" };
   }
+  // A server that found the workdir already populated settled the seed before the pod started;
+  // the routes would refuse anything sent now.
+  const settled = opts.pod.resolvedConfig.workspaceSeed;
+  if (settled?.status === "skipped") {
+    info("workspace already populated (an init script filled it) — nothing sent");
+    return { kind: "skipped", reason: "workspace not empty" };
+  }
   switch (plan.kind) {
     case "copy":
       return copyWorkspaceIntoPod(opts, plan.root);

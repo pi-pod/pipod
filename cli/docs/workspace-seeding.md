@@ -74,6 +74,12 @@ starts at once; the server also opens the gate on its own after a timeout, so a 
 dies mid-seed never strands the pod. Configured projects keep their post-start copy and do not
 arm the gate.
 
+A seed only ever fills an empty workdir. When init scripts (or the image) have already
+populated it by the time provisioning finishes, as a template whose init clones its
+repositories does, the server records the seed as `skipped` and starts Pi with the pod. The
+client then sends nothing: no clone request, no archive. Older servers leave the gate armed,
+and the client sends the seed for the routes to refuse.
+
 ## Older servers
 
 A server with a strict launch schema rejects the `workspaceSeed` flag; the client retries the
@@ -106,6 +112,7 @@ on the sandbox backend:
 8. **Nested pod launch** — from inside a pod, launch a child from a source-less directory;
    symlinks are skipped with a warning, files arrive.
 9. **Template/init-script collision** — `--template <one whose init script clones>`; expect
-   `workspace already populated … leaving it in place`.
+   `workspace already populated … nothing sent`, no archive build or upload, and the
+   pod's `workspaceSeed` reported `skipped`.
 10. **`--no-seed`, `--dry-run`, `fork`, `--on`** — none create a transfer; `--dry-run` prints
     the decision and creates no pod.
