@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { HttpError, badRequest } from "../httperrors.js";
+import { HttpError, LAUNCH_ADMISSION_HELD_CODE, LAUNCH_ADMISSION_HELD_MESSAGE, badRequest } from "../httperrors.js";
+import { launchAdmissionHeldDetail } from "../safe-errors.js";
 import type { GatewayService, ClientMessage, ServerMessage } from "./service.js";
 import { superviseClientSocket } from "./client-supervision.js";
 import { consumeTicket, refundTicket } from "./tickets.js";
@@ -12,11 +13,21 @@ import { assertPersonalPodAccess } from "../edition.js";
  * ticket on 4001, surface "pod not found" on 4404, offer a Start button on 4409, retry
  * later on 4500. 4400 is the client's own request being malformed. 4410 tells an agentd
  * supervisor the pod is archived: a permanent rejection, so the daemon must exit.
+ * 4500 covers several retryable refusals; the close reason (errCode) is what tells them
+ * apart, and a held launch gate is one: retry, but say why rather than "internal_error".
  */
 export function wsCloseForError(e: unknown): { code: number; errCode: string; message: string; detail?: unknown } {
   const message = e instanceof Error ? e.message : "connection refused";
   if (e instanceof AgentdTransportUnavailableError) {
     return { code: 4500, errCode: "pod_transport_unavailable", message };
+  }
+  // An operator paused launch admission. Retrying later is right, so the code stays 4500; the
+  // errCode is what tells the person why their pod will not attach. The recognizer is the one
+  // the HTTP boundary uses — a forged lookalike stays an internal error here too — and the
+  // text is fixed copy rather than the throw's own message.
+  const held = launchAdmissionHeldDetail(e);
+  if (held) {
+    return { code: 4500, errCode: LAUNCH_ADMISSION_HELD_CODE, message: LAUNCH_ADMISSION_HELD_MESSAGE, detail: held };
   }
   if (e instanceof HttpError) {
     const detail = e.detail as { reason?: string } | undefined;
