@@ -1,6 +1,7 @@
-import { buildImage, type ImageRecipe } from "../../core/image.js";
+import { buildImage, managedImageDerivation, type ImageRecipe } from "../../core/image.js";
 import {
   supportsImageBuild,
+  supportsImageDerive,
   supportsImageMirror,
   type SandboxProvider,
 } from "../../core/providers/types.js";
@@ -139,10 +140,11 @@ export interface EnsureHostedImageOptions {
 }
 
 /**
- * Resolve or prepare one managed image. Build-capable providers publish it; mirror-capable
- * providers materialize the exact canonical ref into their runtime cache. In-process callers
- * share a Promise, while PostgreSQL leases deduplicate work across API replicas and recover
- * abandoned preparation after a restart.
+ * Resolve or prepare one managed image. Build-capable providers publish it; a host that can
+ * derive it from its base does that; mirror-capable providers otherwise materialize the exact
+ * canonical ref into their runtime cache. In-process callers share a Promise, while
+ * PostgreSQL leases deduplicate work across API replicas and recover abandoned preparation
+ * after a restart.
  */
 export function ensureHostedImage(options: EnsureHostedImageOptions): Promise<void> {
   const key = `${options.credentialScope}\0${options.provider.name}\0${options.recipe.ref}`;
@@ -202,10 +204,16 @@ async function ensureHostedImageInner(options: EnsureHostedImageOptions): Promis
         allowOutdatedPi: true,
       });
     } else if (supportsImageMirror(options.provider)) {
+      // A self-hosted deployment publishes only the base to its bundled registry, so its host
+      // derives the package and bake variants itself; a host that cannot (it refuses for a
+      // remote mirror) leaves the mirror as the only source.
+      const derivation = managedImageDerivation(options.recipe);
+      const derived = derivation !== null && supportsImageDerive(options.provider) &&
+        await options.provider.deriveImage({ ...derivation, ref, resources: options.resources });
       // Public mirrors can populate themselves here. Production's GHCR package is private, so
       // the deploy workflow normally makes this a cache hit before the worker starts; an auth
       // failure carries an operator-directed preload message from the adapter.
-      await options.provider.fetchMirroredImage(ref);
+      if (!derived) await options.provider.fetchMirroredImage(ref);
     } else {
       throw new Error(
         `provider ${providerName} can neither build managed image ${ref} nor fetch it from an image mirror`,

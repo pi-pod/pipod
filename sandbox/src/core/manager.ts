@@ -2146,6 +2146,26 @@ export class Manager {
     }
   }
 
+  /**
+   * Lend a stopped sandbox's writable layer — its overlay upper directory — to `use`, with the
+   * disk mounted for the duration. Serialized with the sandbox's own transitions, so it can
+   * neither start, archive nor be deleted meanwhile.
+   */
+  async withStoppedUpper<T>(id: string, use: (upperDir: string) => Promise<T>): Promise<T> {
+    return await this.serialize(id, async () => {
+      const row = this.mustGet(id);
+      if (row.tier !== "stopped" || this.transitioning.has(id)) {
+        throw conflict(`sandbox ${id} is ${row.tier}, not stopped`);
+      }
+      await this.disks.ensureMounted(id, row.ceiling.diskGB ?? resolveGuarantee(this.cfg, row.resources).diskGB);
+      try {
+        return await use(this.upperDir(id));
+      } finally {
+        await this.disks.unmount(id).catch(() => undefined);
+      }
+    });
+  }
+
   /* ---------------------------------------------------------------- delete */
 
   async delete(id: string): Promise<void> {

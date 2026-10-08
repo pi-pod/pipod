@@ -771,6 +771,31 @@ export interface ImageInfoWire {
   createdAt?: string;
 }
 
+/**
+ * Make `ref` available as `base` plus one layer: whatever `script` leaves on disk after it runs
+ * as root in /root of a disposable sandbox with no secrets, no workspace and open public egress.
+ * Both refs must name the same repository of a loopback registry, where the result is published
+ * so that it re-pulls like any other image; anywhere else is refused with `derive_unavailable`.
+ * An image already present locally or in that registry is returned without building.
+ */
+export interface DeriveImageRequest {
+  base: string;
+  ref: string;
+  script: string;
+  /** The build sandbox's ceiling; admission applies to it as to any sandbox. */
+  resources?: ResourceSpec;
+}
+
+/**
+ * One line of the newline-delimited JSON a derive streams, since a build outlasts any sensible
+ * response deadline. The last line is `done` or `error`; a response without one was cut off.
+ */
+export type DeriveImageEvent =
+  | { log: string }
+  | { heartbeat: true }
+  | { done: ImageInfoWire }
+  | { error: { code: string; message: string; hint?: string; outputTail?: string } };
+
 export interface ListResponse {
   sandboxes: SandboxInfoWire[];
 }
@@ -901,3 +926,5 @@ export const ERR_SANDBOX_HELD = "sandbox_held";
 export const ERR_ARCHIVE_MISMATCH = "archive_mismatch";
 /** 409: the target resolved the image to a different manifest digest than the source recorded. */
 export const ERR_IMAGE_MISMATCH = "image_mismatch";
+/** 409: this host cannot publish a derived image for that base (it is not in a loopback registry). */
+export const ERR_DERIVE_UNAVAILABLE = "derive_unavailable";

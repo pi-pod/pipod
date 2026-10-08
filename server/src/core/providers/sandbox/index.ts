@@ -20,11 +20,14 @@ import type {
 } from "../types.js";
 import { SandboxApiError, SandboxClient, SandboxWsError, isNotFound } from "./client.js";
 import {
+  ERR_DERIVE_UNAVAILABLE,
   ERR_NO_SESSION,
   STREAM_STDERR,
   STREAM_STDOUT,
   type AuthzResponse,
   type CreateSandboxRequest,
+  type DeriveImageEvent,
+  type DeriveImageRequest,
   type ExecClientFrame,
   type ExecServerFrame,
   type ImageInfoWire,
@@ -150,6 +153,9 @@ export function deriveSandboxActivityToken(masterToken: string, sandboxId: strin
     .update(`pi-pod-sandbox:activity:${sandboxId}`)
     .digest("hex");
 }
+
+/** Bounds a whole derivation; the host's own limit on the script is 30 minutes. */
+const DERIVE_TIMEOUT_MS = 45 * 60_000;
 
 const MANAGED_MIRROR_REF = new RegExp(
   `^${IMAGE_NAME}:([A-Za-z0-9_][A-Za-z0-9._-]{0,127})$`,
@@ -317,6 +323,53 @@ export class SandboxServiceProvider implements SandboxProvider {
       }
       mapApiError(error, `fetching mirrored sandbox image "${ref}"`);
     }
+  }
+
+  /**
+   * Have the host build `ref` from `base` by running `script` (see ImageDeriver). Hosts
+   * publish only into a loopback registry, so this works where the image mirror is the
+   * deployment's own bundled registry, as in a self-hosted install, and is refused elsewhere.
+   */
+  async deriveImage(opts: {
+    base: string;
+    ref: string;
+    script: string;
+    resources?: { cpu?: number; memoryGB?: number; diskGB?: number };
+    onLog?: (line: string) => void;
+  }): Promise<boolean> {
+    // A hosted host's mirror is a private remote registry it would refuse to publish into,
+    // and through the hosted edge an older host's missing route reads as an asleep host.
+    if (this.hostAuth?.hostedToken !== undefined) return false;
+    const request: DeriveImageRequest = {
+      base: this.imageRef(opts.base),
+      ref: this.imageRef(opts.ref),
+      script: opts.script,
+      ...(opts.resources === undefined ? {} : { resources: opts.resources }),
+    };
+    let outcome: Extract<DeriveImageEvent, { done: unknown } | { error: unknown }> | undefined;
+    try {
+      await this.client().ndjson("/v1/images/derive", request, (raw) => {
+        const event = raw as DeriveImageEvent;
+        if ("log" in event) opts.onLog?.(event.log);
+        else if ("done" in event || "error" in event) outcome = event;
+      }, DERIVE_TIMEOUT_MS);
+    } catch (error) {
+      // Refused for this base, or a host that predates derivation (404/405 from its router).
+      if (error instanceof SandboxApiError &&
+        (error.code === ERR_DERIVE_UNAVAILABLE || error.status === 404 || error.status === 405)) {
+        return false;
+      }
+      return mapApiError(error, `deriving sandbox image "${opts.ref}"`);
+    }
+    if (outcome && "done" in outcome) return true;
+    if (outcome && "error" in outcome) {
+      const tail = (outcome.error.outputTail ?? "").trimEnd().split("\n").slice(-5).join("\n").slice(-600);
+      throw new PiPodError(
+        `deriving sandbox image "${opts.ref}" failed: ${outcome.error.message}${tail ? `\n${tail}` : ""}`,
+        { ...(outcome.error.hint ? { hint: outcome.error.hint } : {}) },
+      );
+    }
+    throw new PiPodError(`deriving sandbox image "${opts.ref}" ended without an outcome`);
   }
 
   async resolveImage(ref: string): Promise<ImageInfo | null> {

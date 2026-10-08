@@ -1,4 +1,4 @@
-import { spawn, type SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 
 export interface RunResult {
   code: number;
@@ -23,6 +23,33 @@ export async function run(
     if (opts.input !== undefined) child.stdin?.end(opts.input);
     else child.stdin?.end();
   });
+}
+
+export interface ChildResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}
+
+/** Exit status and stderr of a child whose stdout the caller streams elsewhere. */
+export function waitForChild(child: ChildProcess): Promise<ChildResult> {
+  let stderr = "";
+  if (child.stderr === null) throw new Error("child process stderr is not piped");
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal, stderr }));
+  });
+}
+
+export function childError(command: string, result: ChildResult): Error | null {
+  if (result.code === 0) return null;
+  const status = result.signal === null ? `exit code ${String(result.code)}` : `signal ${result.signal}`;
+  const detail = result.stderr.trim();
+  return new Error(`${command} failed with ${status}${detail === "" ? "" : `: ${detail}`}`);
 }
 
 export async function runOk(

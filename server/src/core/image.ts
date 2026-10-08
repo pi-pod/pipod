@@ -12,6 +12,7 @@ import {
   normalizeImagePackages,
   packagesDigest,
   type ImageResources,
+  type ManagedImageRecipe,
 } from "./image-recipe.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -86,6 +87,54 @@ export const PACKAGES_FILE = "pi-packages.txt";
 export const NPM_PACKAGES_FILE = "pi-packages-npm.txt";
 /** Composed bake script inside the build context; the Dockerfile runs it by this name. */
 export const BAKE_SCRIPT_FILE = "bake.sh";
+/** Where image/Dockerfile copies the files above inside the image. */
+const IMAGE_SHARE_DIR = "/usr/local/share/pi-pod";
+
+/**
+ * The package lists and bake script an image carries, by file name. Always all three, even
+ * when empty: the Dockerfile COPYs them unconditionally and skips the steps they feed.
+ */
+function imageInputFiles(packages: string[], bakeScript: string): Record<string, string> {
+  const normalized = normalizeImagePackages(packages);
+  const npmSpecs = normalized.map(npmSpecOf).filter((s): s is string => s !== null);
+  return {
+    [PACKAGES_FILE]: normalized.map((p) => `${p}\n`).join(""),
+    [NPM_PACKAGES_FILE]: npmSpecs.map((s) => `${s}\n`).join(""),
+    [BAKE_SCRIPT_FILE]: bakeScript,
+  };
+}
+
+/**
+ * How to make a managed image without an image builder: run `script` as root in /root on the
+ * `base` image — the same recipe without packages or bake script — and keep what it leaves on
+ * disk. The script is the shell form of the Dockerfile's last steps, which install the
+ * packages and run the bake script, so a derived image holds what a built one would. Null
+ * for a recipe that is its own base.
+ */
+export function managedImageDerivation(recipe: ManagedImageRecipe): { base: string; script: string } | null {
+  if (recipe.packages.length === 0 && !recipe.bakeScript) return null;
+  const base = derivedImageRef({
+    launcherVersion: recipe.launcherVersion,
+    piVersion: recipe.piVersion,
+    assetDigest: recipe.assetDigest,
+    resources: recipe.effectiveResources,
+  });
+  const lines = ["set -e", `mkdir -p ${IMAGE_SHARE_DIR}`];
+  for (const [name, content] of Object.entries(imageInputFiles(recipe.packages, recipe.bakeScript))) {
+    lines.push(`echo '${Buffer.from(content).toString("base64")}' | base64 -d > ${IMAGE_SHARE_DIR}/${name}`);
+  }
+  // Keep these two steps in step with the RUN steps of image/Dockerfile.
+  lines.push(
+    `if [ -s ${IMAGE_SHARE_DIR}/${NPM_PACKAGES_FILE} ]; then`,
+    "  mkdir -p /root/.pi/agent/npm",
+    `  xargs --no-run-if-empty npm install --prefix /root/.pi/agent/npm --legacy-peer-deps < ${IMAGE_SHARE_DIR}/${NPM_PACKAGES_FILE}`,
+    "fi",
+    `if [ -s ${IMAGE_SHARE_DIR}/${BAKE_SCRIPT_FILE} ]; then`,
+    `  cd /root && CI=1 DEBIAN_FRONTEND=noninteractive bash ${IMAGE_SHARE_DIR}/${BAKE_SCRIPT_FILE}`,
+    "fi",
+  );
+  return { base, script: `${lines.join("\n")}\n` };
+}
 
 /** Version of the installed launcher, read from its own package.json. */
 export function launcherVersion(): string {
@@ -227,17 +276,14 @@ export async function buildImage(opts: ImageBuildOptions): Promise<void> {
     fs.writeFileSync(path.join(context, "Dockerfile"), pinned);
 
 
-    // Always written, even when empty: the Dockerfile COPYs it unconditionally, and a COPY of
-    // a file that is not there fails the build rather than skipping the step.
     const packages = normalizeImagePackages(opts.packages ?? []);
-    fs.writeFileSync(path.join(context, PACKAGES_FILE), packages.map((p) => `${p}\n`).join(""));
-    const npmSpecs = packages.map(npmSpecOf).filter((s): s is string => s !== null);
-    fs.writeFileSync(path.join(context, NPM_PACKAGES_FILE), npmSpecs.map((s) => `${s}\n`).join(""));
+    const bakeScript = opts.bakeScript ?? "";
+    for (const [name, content] of Object.entries(imageInputFiles(packages, bakeScript))) {
+      fs.writeFileSync(path.join(context, name), content);
+    }
     if (packages.length > 0) {
       info(`baking ${packages.length} pi extension package(s) into the image`);
     }
-    const bakeScript = opts.bakeScript ?? "";
-    fs.writeFileSync(path.join(context, BAKE_SCRIPT_FILE), bakeScript);
     if (bakeScript.length > 0) {
       info("baking the bake script into the image");
     }

@@ -512,5 +512,26 @@ export function supportsImageMirror(p: SandboxProvider): p is SandboxProvider & 
   return typeof (p as Partial<ImageMirror>).fetchMirroredImage === "function";
 }
 
+/**
+ * Optional: adapters whose host can make an image itself — run a script on a base image and
+ * publish what it leaves behind as a new tag — implement this. Where it may publish is the
+ * host's decision: `false` means it cannot for this base, and the caller prepares the image
+ * another way. A script that fails rejects.
+ */
+export interface ImageDeriver {
+  deriveImage(opts: {
+    base: string;
+    ref: string;
+    script: string;
+    /** The ceiling of the sandbox the script runs in. */
+    resources?: { cpu?: number; memoryGB?: number; diskGB?: number };
+    onLog?: (line: string) => void;
+  }): Promise<boolean>;
+}
+
+export function supportsImageDerive(p: SandboxProvider): p is SandboxProvider & ImageDeriver {
+  return typeof (p as Partial<ImageDeriver>).deriveImage === "function";
+}
+
 /** A provider adapter factory. `providerConfig` is the `providers.<name>` config block (§4.1). */
 export type ProviderFactory = (providerConfig: Record<string, unknown>) => SandboxProvider;
