@@ -97,14 +97,13 @@ import {
   cloneAuditDetail,
   decodeWorkspaceArchiveResult,
   decodeWorkspaceCloneResult,
-  decodeWorkspaceEmptyCheck,
+  inspectWorkdir,
   parseCloneUrl,
   redactCredential,
   spoolArchiveToTempFile,
   workspaceArchiveExtractSource,
   workspaceArchiveLimits,
   workspaceCloneSource,
-  workspaceEmptyCheckSource,
   workspaceNotEmptyError,
   workspaceSeedGateOpen,
   type WorkspaceCloneCredential,
@@ -1579,13 +1578,7 @@ export function registerPodRoutes(
   }
 
   async function assertWorkdirEmpty(sandbox: Sandbox, workdir: string): Promise<void> {
-    const checked = await sandbox.exec(["python3", "-c", workspaceEmptyCheckSource(), workdir], {
-      timeoutMs: 60_000,
-    });
-    if (checked.exitCode !== 0) {
-      throw badRequest(checked.output?.trim() || "workspace inspection failed");
-    }
-    const state = decodeWorkspaceEmptyCheck(checked.output ?? "");
+    const state = await inspectWorkdir(sandbox, workdir);
     if (!state.empty) throw workspaceNotEmptyError(state.entries);
   }
 
