@@ -266,7 +266,8 @@ or .pi-pod/env. Private-remote
 credentials are forwarded only after a prompt (`--yes` approves it) and are never stored.
 `--dry-run` prints the decision without prompting or creating a pod. Forks, reused pods,
 `--on` co-location, and `--no-seed` never seed. A project with a .pi-pod/config.json gets its
-workspace from its init scripts instead.
+workspace from its init scripts instead. When a template's init scripts have already
+populated the workspace, nothing is sent.
 
 Arguments after `--` go to pi: prompt words start the session, and `--model`, `--thinking`,
 and `--tui-mode` apply to this launch. Per-launch Pi resources (`--extension`, `--skill`,

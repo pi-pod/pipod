@@ -115,7 +115,7 @@ import {
   type LineagePlacement,
 } from "./lineage.js";
 import { fetchForkSeedFromPod, START_TIMEOUT_MS, STOP_TIMEOUT_MS } from "./lifecycle.js";
-import { workspaceSeedGateOpen } from "./workspace-seed.js";
+import { skipSeedIntoPopulatedWorkdir, workspaceSeedGateOpen } from "./workspace-seed.js";
 import {
   hostedImageInitialState,
   hostedProviderIdleTimeoutMinutes,
@@ -1754,6 +1754,17 @@ async function provision(
 
       if (args.piSettings?.projectUploads.length) {
         await phase("project-pi", () => installProjectPiSettings(sandbox, args.piSettings!.projectUploads));
+      }
+
+      const pendingSeed = report.workspaceSeed?.status === "pending" ? report.workspaceSeed : null;
+      if (pendingSeed) {
+        // A failed inspection leaves the gate armed: the seed routes check the workdir again.
+        report.workspaceSeed = await phase("seed-check", () =>
+          skipSeedIntoPopulatedWorkdir(sandbox, config.workdir, pendingSeed).catch((error: unknown) => {
+            deps.log.warn(sanitizeFailureMessage(error, { prefix: `pod ${args.podId} workspace seed check failed` }));
+            return pendingSeed;
+          }),
+        );
       }
 
       if (!args.deferSupervisor) {
