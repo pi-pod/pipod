@@ -44,7 +44,7 @@ export async function packUpperLayer(upperDir: string, outFile: string, exclude:
     await writeFile(path.join(directory, ".wh..wh..opq"), "", { mode: 0o644 });
   }
   const devices = await run("find", [upperDir, "-type", "c", "-print0"]);
-  if (devices.code !== 0) throw new Error(`find failed (${devices.code}): ${devices.stderr.trim()}`);
+  if (devices.code !== 0) throw new Error(`find failed (${devices.code}): ${firstLines(devices.stderr)}`);
   for (const device of devices.stdout.split("\0").filter(Boolean)) {
     if ((await lstat(device)).rdev !== 0) continue; // a real device node, not a whiteout
     await rm(device);
@@ -105,15 +105,18 @@ function digesting(hash: Hash, count?: (bytes: number) => void): Transform {
 
 /** Directories overlayfs marked opaque, after refusing any upper that cannot be expressed in OCI. */
 async function opaqueDirectories(upperDir: string): Promise<string[]> {
+  // --no-dereference: a symlink in an upper usually points into a lower layer, so following it
+  // finds nothing; its own xattrs are what matter.
   const dump = await run("getfattr", [
     "--recursive",
     "--physical",
+    "--no-dereference",
     "--absolute-names",
     "--dump",
     "--match=^trusted\\.overlay\\.",
     upperDir,
   ]);
-  if (dump.code !== 0) throw new Error(`getfattr failed (${dump.code}): ${dump.stderr.trim()}`);
+  if (dump.code !== 0) throw new Error(`getfattr failed (${dump.code}): ${firstLines(dump.stderr)}`);
   const opaque: string[] = [];
   let file: string | null = null;
   for (const line of dump.stdout.split("\n")) {
@@ -130,6 +133,12 @@ async function opaqueDirectories(upperDir: string): Promise<string[]> {
     if (name === "trusted.overlay.opaque" && line.slice(separator + 1) === '"y"') opaque.push(file);
   }
   return opaque;
+}
+
+/** A tool's complaints about a whole tree can run to thousands of lines; an error needs a few. */
+function firstLines(stderr: string, count = 5): string {
+  const lines = stderr.trim().split("\n");
+  return lines.slice(0, count).join("\n") + (lines.length > count ? `\n… and ${lines.length - count} more` : "");
 }
 
 /** getfattr prints a path with backslash and non-printable bytes as `\\` and `\ooo` escapes. */
