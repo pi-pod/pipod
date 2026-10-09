@@ -874,12 +874,14 @@ export class AccountClient {
       mine?: boolean;
       limit?: number;
       templateId?: string;
-      /** Pods less recently active than this timestamp: the cursor for the next page. */
+      /** Legacy timestamp-only boundary, for servers without nextCursor. */
       before?: string;
+      /** Opaque nextCursor from the previous page; keep all other filters unchanged. */
+      cursor?: string;
       /** Include provider_state 'gone' rows (failed launches that never acquired compute). */
       includeGone?: boolean;
     } = {},
-  ): Promise<{ pods: ApiPod[] }> {
+  ): Promise<{ pods: ApiPod[]; nextCursor?: string | null }> {
     return this.request("/pods", { query });
   }
 

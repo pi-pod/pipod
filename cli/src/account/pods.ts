@@ -45,24 +45,43 @@ export interface AccountPodFlags {
 const PAGE_LIMIT = 200;
 
 /**
- * Every pod the query matches, not just the newest page. The server answers newest activity
- * first and caps a page at 200, so the pods that fall off a single page are exactly the ones
- * a stale ref or an idle sweep is after. `before` walks back by activity time; a full page
- * whose cursor stops moving ends the walk instead of looping on it.
+ * Every matching pod, once. Server-issued cursors preserve tied timestamps and database
+ * precision; timestamp-only paging remains a fallback for older servers. A live pod can
+ * move between pages, so deduplicate by id. A stalled server is an error, not a complete
+ * roster that a caller might trust for a bulk operation.
  */
 async function listAllPods(
   client: AccountClient,
   query: { project?: string | undefined; templateId?: string | undefined; includeGone?: boolean | undefined },
 ): Promise<{ pods: ApiPod[] }> {
   const pods: ApiPod[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
   let before: string | undefined;
   for (;;) {
-    const page = await client.listPods({ mine: true, limit: PAGE_LIMIT, before, ...query });
-    pods.push(...page.pods);
-    if (page.pods.length < PAGE_LIMIT) return { pods };
-    const cursor = activityStamp(page.pods.at(-1)!);
-    if (cursor === before) return { pods };
-    before = cursor;
+    const page = await client.listPods({ mine: true, limit: PAGE_LIMIT, cursor, before, ...query });
+    for (const pod of page.pods) {
+      if (!seenIds.has(pod.id)) pods.push(pod);
+      seenIds.add(pod.id);
+    }
+    const next = page.nextCursor !== undefined
+      ? page.nextCursor
+      : page.pods.length < PAGE_LIMIT ? null : activityStamp(page.pods.at(-1)!);
+    if (next === null) return { pods };
+    if (seenCursors.has(next)) {
+      throw new PiPodError("the server repeated a pod-list cursor", {
+        hint: "the listing is incomplete; upgrade the server and try again",
+      });
+    }
+    seenCursors.add(next);
+    if (page.nextCursor !== undefined) {
+      cursor = next;
+      before = undefined;
+    } else {
+      before = next;
+      cursor = undefined;
+    }
   }
 }
 
