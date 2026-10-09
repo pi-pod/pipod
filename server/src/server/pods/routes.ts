@@ -943,11 +943,17 @@ export function registerPodRoutes(
           limit: z.coerce.number().int().min(1).max(200).default(100),
           /** Legacy timestamp-only boundary. Prefer the opaque nextCursor returned by this route. */
           before: z.string().datetime({ offset: true }).optional(),
-          cursor: z.string().max(128)
-            .transform((value) => value.split("/"))
-            .pipe(z.tuple([z.string().datetime({ offset: true }), z.string().uuid()]))
-            .transform(([activityAt, id]) => ({ activityAt, id }))
-            .optional(),
+          cursor: z.string().max(128).transform((value, ctx) => {
+            // Validate the parts without describing the wire string as an array in OpenAPI.
+            const parsed = z.tuple([z.string().datetime({ offset: true }), z.string().uuid()])
+              .safeParse(value.split("/"));
+            if (!parsed.success) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid pod-list cursor" });
+              return z.NEVER;
+            }
+            const [activityAt, id] = parsed.data;
+            return { activityAt, id };
+          }).optional(),
           /**
            * Include provider_state 'gone' rows (default false). Failed
            * launches that never acquired compute converge to
