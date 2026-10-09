@@ -941,8 +941,13 @@ export function registerPodRoutes(
           /** Pods launched from one template — an org's "who is using this environment?". */
           templateId: z.string().uuid().optional(),
           limit: z.coerce.number().int().min(1).max(200).default(100),
-          /** Cursor: pods less recently active than this timestamp (see lastActivityAt/createdAt). */
+          /** Legacy timestamp-only boundary. Prefer the opaque nextCursor returned by this route. */
           before: z.string().datetime({ offset: true }).optional(),
+          cursor: z.string().max(128)
+            .transform((value) => value.split("/"))
+            .pipe(z.tuple([z.string().datetime({ offset: true }), z.string().uuid()]))
+            .transform(([activityAt, id]) => ({ activityAt, id }))
+            .optional(),
           /**
            * Include provider_state 'gone' rows (default false). Failed
            * launches that never acquired compute converge to
@@ -957,18 +962,28 @@ export function registerPodRoutes(
       if (req.query.lineage && !req.auth.podId) {
         throw badRequest("lineage=self is meaningful only for a pod token — a user session has no self pod");
       }
+      if (req.query.cursor && req.query.before) {
+        throw badRequest("use cursor or before, not both");
+      }
       const rows = await listPods({
         orgId: req.auth.orgId,
         state: req.query.state ?? null,
         userId: req.query.mine ? req.auth.userId : null,
         before: req.query.before ?? null,
-        limit: req.query.limit,
+        cursor: req.query.cursor ?? null,
+        limit: req.query.limit + 1,
         project: req.query.project ?? null,
         templateId: req.query.templateId ?? null,
         lineageRootPodId: req.auth.podId ?? null,
         includeGone: req.query.includeGone,
       });
-      return { pods: rows.map((row) => viewFor(toApi(row, gateway), req.auth)) };
+      const page = rows.slice(0, req.query.limit);
+      const last = page.at(-1);
+      return {
+        pods: page.map((row) => viewFor(toApi(row, gateway), req.auth)),
+        // The cursor captures the boundary itself, so deletion of that pod cannot break paging.
+        nextCursor: rows.length > page.length && last ? `${last.list_activity_at}/${last.id}` : null,
+      };
     },
   );
 

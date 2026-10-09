@@ -29,8 +29,10 @@ export interface PodListFilters {
   state?: "active" | "archived" | null;
   /** One person's pods (the CLI's `mine`); null is the whole org. */
   userId?: string | null;
-  /** Cursor: pods less recently active than this timestamp. */
+  /** Legacy timestamp-only boundary; new clients use the server-issued cursor. */
   before?: string | null;
+  /** Exact database activity timestamp and UUID, ordered together newest-first. */
+  cursor?: { activityAt: string; id: string } | null;
   limit: number;
   project?: string | null;
   /** Pods launched from one template — the environment's own roster. */
@@ -46,8 +48,8 @@ export interface PodListFilters {
  * filters are testable against a real database — every one of them is a WHERE clause whose
  * null case has to keep meaning "everything".
  */
-export async function listPods(filters: PodListFilters): Promise<PodRow[]> {
-  const rows = await query<PodRow>(
+export async function listPods(filters: PodListFilters): Promise<Array<PodRow & { list_activity_at: string }>> {
+  const rows = await query<PodRow & { list_activity_at: string }>(
     `WITH RECURSIVE subtree AS (
        SELECT id, 0 AS steps FROM pods WHERE id = $7::uuid AND org_id = $1
        UNION ALL
@@ -55,17 +57,21 @@ export async function listPods(filters: PodListFilters): Promise<PodRow[]> {
          JOIN subtree ON p.parent_pod_id = subtree.id OR p.host_pod_id = subtree.id
         WHERE subtree.steps < $8
      )
-     SELECT p.*, h.name AS host_pod_name FROM pods p
-       LEFT JOIN pods h ON h.id = p.host_pod_id
+     SELECT p.*, h.name AS host_pod_name,
+       -- Keep microseconds out of pg's JavaScript Date conversion for the next-page cursor.
+       to_char(COALESCE(p.last_activity_at, p.created_at) AT TIME ZONE 'UTC',
+               'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS list_activity_at
+       FROM pods p LEFT JOIN pods h ON h.id = p.host_pod_id
      WHERE p.org_id = $1
        AND ($10::boolean IS TRUE OR p.provider_state <> 'gone')
        AND ($2::text IS NULL OR p.state = $2)
        AND ($3::text IS NULL OR p.user_id = $3)
        AND ($4::timestamptz IS NULL OR COALESCE(p.last_activity_at, p.created_at) < $4)
+       AND ($11::timestamptz IS NULL OR (COALESCE(p.last_activity_at, p.created_at), p.id) < ($11, $12::uuid))
        AND ($6::text IS NULL OR p.project = $6)
        AND ($7::uuid IS NULL OR p.id IN (SELECT DISTINCT id FROM subtree))
        AND ($9::uuid IS NULL OR p.template_id = $9)
-     ORDER BY COALESCE(p.last_activity_at, p.created_at) DESC LIMIT $5`,
+     ORDER BY COALESCE(p.last_activity_at, p.created_at) DESC, p.id DESC LIMIT $5`,
     [
       filters.orgId,
       filters.state ?? null,
@@ -77,6 +83,8 @@ export async function listPods(filters: PodListFilters): Promise<PodRow[]> {
       MAX_LINEAGE_DEPTH,
       filters.templateId ?? null,
       filters.includeGone ?? false,
+      filters.cursor?.activityAt ?? null,
+      filters.cursor?.id ?? null,
     ],
   );
   return rows.rows;
