@@ -822,7 +822,8 @@ function readAgentSettings(diagnostics) {
   return {};
 }
 function agentDirDigest() {
-  const lines = [];
+  // Invalidate cached pre-model-scope manifests even when the pod's files are unchanged.
+  const lines = ["projection:model-scope-v1"];
   for (const rel of DIGEST_TOP_FILES) statLine(rel, lines);
   statDir("themes", 0, lines);
   statDir("agents", 0, lines);
@@ -836,7 +837,9 @@ function agentDirDigest() {
 function buildTuiManifest() {
   const diagnostics = [];
   const settings = readAgentSettings(diagnostics);
-  const uiSettings = {};
+  // An absent scope means all models in this pod, not the attaching workstation's scope.
+  // Always send the empty list too, so removals cannot fall back to stale host selections.
+  const uiSettings = { enabledModels: settings.enabledModels === undefined ? [] : settings.enabledModels };
   for (const key of UI_SETTINGS_KEYS) if (settings[key] !== undefined) uiSettings[key] = settings[key];
   const themes = [];
   let themeFiles = [];

@@ -115,9 +115,10 @@ function readHostSettings(hostAgentDir: string | null): Record<string, unknown> 
 /**
  * Create the per-launcher derived agent dir. The settings file is the host's global
  * settings with the pod's validated `uiSettings` projection layered on top: host-only
- * concerns (externalEditor and friends — the *user's* own values) survive, pod display
- * preferences win, and hostile pod values can never reach the host-only keys because the
- * projection schema has no such fields.
+ * concerns (externalEditor and friends — the *user's* own values) survive. Pod display
+ * preferences and enabledModels replace the host's, including an empty model scope; the
+ * server sends [] when the pod has no scope. Hostile pod values cannot reach host-only keys
+ * because the projection schema has no such fields.
  */
 export function createDerivedPodConfig(opts: {
   cacheRoot: string;

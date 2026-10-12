@@ -32,7 +32,7 @@ export interface PodTuiManifest {
   digest: string;
   bootDigest: string | null;
   launchArgv: string[];
-  /** The validated display-key projection, ready to overlay on host settings. */
+  /** Validated display preferences and model scope, ready to overlay on host settings. */
   uiSettings: Record<string, unknown>;
   themes: PodThemeFile[];
   /** Direct package identities used to detect extension-rendering drift. */
@@ -87,11 +87,21 @@ function subObject(fields: Record<string, FieldValidator>): FieldValidator {
   };
 }
 
+/** Model patterns are data, not executable configuration. Reject the whole malformed list
+ * rather than partially accepting a scope; an empty list deliberately clears the host scope. */
+function modelPatterns(value: unknown): string[] | undefined {
+  const pattern = cleanString(2048);
+  return Array.isArray(value) && value.length <= 256 && value.every((entry) => pattern(entry) !== undefined)
+    ? [...value] as string[]
+    : undefined;
+}
+
 /**
- * The display-safe projection of pi's Settings, field by field. Every value shape is pinned:
+ * The TUI-safe projection of pi's Settings, field by field. Every value shape is pinned:
  * a pod cannot smuggle an object where a boolean belongs or an unbounded string anywhere.
  */
 const UI_SETTINGS_SCHEMA: Record<string, FieldValidator> = {
+  enabledModels: modelPatterns,
   // May be a plain name or pi's "light/dark" auto pair.
   theme: cleanString(128),
   hideThinkingBlock: bool,
