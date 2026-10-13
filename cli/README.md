@@ -21,6 +21,25 @@ The npm release works with any server at least as new as it; a CLI newer than it
 refused, so upgrade the server first. Building the CLI from the server's own checkout always
 matches.
 
+## Release dependencies
+
+The CLI is an application package: its committed `npm-shrinkwrap.json` ships in
+npm releases so fresh installs and `pipod update` use the same dependency graph
+validated by `npm ci`. A plain `package-lock.json` is not published and would let
+Pi's transitive semver ranges drift, even with Pi itself pinned exactly. For
+example, pi-coding-agent 1.0.2 imports exports removed by pi-codemode 1.2.0.
+
+Keep the shrinkwrap when updating dependencies (`make bump-pi VERSION=x.y.z` for
+Pi). Do not replace it with package-level `overrides`: npm ignores those when this
+package is installed as a dependency.
+
+Install releases from the registry (`npm install -g @pipod/cli` or `pipod update`).
+Direct `.tgz` installs with npm 10/11 lack the registry's shrinkwrap metadata and
+can still resolve newer transitive dependencies. To verify a packed release
+before publishing, extract it into a clean directory, run `npm ci --omit=dev`
+there, and run `node dist/cli.js --version`; after publishing, verify a fresh
+registry install as well.
+
 ## Secrets
 
 ```bash

@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: 22.19.0
           cache: npm
-          cache-dependency-path: cli/package-lock.json
+          cache-dependency-path: cli/npm-shrinkwrap.json
 
       - name: Tag matches the CLI version
         run: |
@@ -51,13 +51,24 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install, check, build and pack
+      - name: Install, check, build, pack and verify locked package startup
         if: steps.released.outputs.skip != 'true'
         run: |
           npm ci --no-audit --no-fund
           npm run check
           npm run build
           npm pack
+          tar -xOzf ./*.tgz package/npm-shrinkwrap.json >/dev/null
+          # Exercise the shipped lock, not the checkout's node_modules. Direct .tgz
+          # installs lack the registry's _hasShrinkwrap metadata, so extract and ci.
+          prefix="$(mktemp -d)"
+          trap 'rm -rf "$prefix"' EXIT
+          tar -xzf ./*.tgz -C "$prefix"
+          npm ci --prefix "$prefix/package" --omit=dev --no-audit --no-fund
+          version="$(node -p 'require("./package.json").version')"
+          actual="$(node "$prefix/package/dist/cli.js" --version)"
+          printf '%s\n' "$actual"
+          test "${actual%%$'\n'*}" = "pipod $version"
 
       - name: Create the GitHub release
         if: steps.released.outputs.skip != 'true'

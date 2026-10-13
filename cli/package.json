@@ -1,6 +1,6 @@
 {
   "name": "@pipod/cli",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Run pi coding-agent sessions in server-managed pods",
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -16,6 +16,7 @@
     "pp": "dist/cli.js"
   },
   "files": [
+    "npm-shrinkwrap.json",
     "dist",
     "image",
     "docs",
