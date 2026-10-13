@@ -32,7 +32,7 @@ jobs:
         with:
           node-version: 22.19.0
           cache: npm
-          cache-dependency-path: cli/package-lock.json
+          cache-dependency-path: cli/npm-shrinkwrap.json
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund

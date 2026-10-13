@@ -8,7 +8,7 @@
  *   node scripts/pi-pins.mjs bump <x.y.z|latest> --dry-run
  *   node scripts/pi-pins.mjs bump <x.y.z|latest> --skip-checks
  *
- * `check` reads package.json + package-lock.json only (no node_modules). `bump`
+ * `check` reads package.json + the npm lockfile only (no node_modules). `bump`
  * exact-pins both checkouts, sets pi-tui to the copy that pi loads, and runs the
  * canaries. Image tags are derived from the pin — do not edit image/Dockerfile.
  */
@@ -65,7 +65,9 @@ export function workspaceRepos(root = WORKSPACE_ROOT) {
 export function inspectRepo(dir) {
   const issues = [];
   const pkgPath = path.join(dir, "package.json");
-  const lockPath = path.join(dir, "package-lock.json");
+  // Match npm's precedence: published CLI shrinkwrap, otherwise the server's lock.
+  const shrinkwrapPath = path.join(dir, "npm-shrinkwrap.json");
+  const lockPath = fs.existsSync(shrinkwrapPath) ? shrinkwrapPath : path.join(dir, "package-lock.json");
   if (!fs.existsSync(pkgPath) || !fs.existsSync(lockPath)) {
     return {
       dir,
@@ -74,7 +76,7 @@ export function inspectRepo(dir) {
       tuiPin: undefined,
       piLocked: undefined,
       tuiNested: undefined,
-      issues: [`${dir} is missing package.json or package-lock.json`],
+      issues: [`${dir} is missing package.json or an npm lockfile`],
     };
   }
   const pkg = readJson(pkgPath);
@@ -89,7 +91,7 @@ export function inspectRepo(dir) {
   if (!isExactVersion(piPin)) {
     issues.push(`${name}: ${PI_PACKAGE} is ${piPin === undefined ? "missing" : `"${piPin}"`} — pin the exact version`);
   } else if (piLocked === undefined) {
-    issues.push(`${name}: ${PI_PACKAGE} is not in package-lock.json`);
+    issues.push(`${name}: ${PI_PACKAGE} is not in ${path.basename(lockPath)}`);
   } else if (piPin !== piLocked) {
     issues.push(`${name}: ${PI_PACKAGE} package.json has ${piPin} but the lockfile has ${piLocked}`);
   }
@@ -99,7 +101,7 @@ export function inspectRepo(dir) {
       `${name}: ${TUI_PACKAGE} is ${tuiPin === undefined ? "missing" : `"${tuiPin}"`} — pin the exact version, as pi itself is`,
     );
   } else if (tuiNested === undefined) {
-    issues.push(`${name}: ${TUI_PACKAGE} is not in package-lock.json beside ${PI_PACKAGE}`);
+    issues.push(`${name}: ${TUI_PACKAGE} is not in ${path.basename(lockPath)} beside ${PI_PACKAGE}`);
   } else if (tuiPin !== tuiNested) {
     issues.push(`${name}: ${TUI_PACKAGE} pinned ${tuiPin}, but pi ${piLocked ?? piPin} loads ${tuiNested}`);
   }
