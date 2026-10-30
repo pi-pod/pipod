@@ -104,3 +104,15 @@ Only these modules may monkey-patch a live `InteractiveMode` instance:
 
 - `client/pod-title.ts`
 - `client/runtime/pod-command-overrides.ts`
+
+## pi-tui patch sites
+
+Only this module may patch a pi-tui class. Both pins are exact and must stay that way: the
+launcher and pi load the same copy (enforced by `npm run lint`), so a patch here is a patch to
+the TUI pi itself runs.
+
+- `client/runtime/stdin-fragment-guard.ts` — `StdinBuffer.prototype.flush`/`process`, so a
+  sequence fragment that timed out is never typed as input (see
+  [keyboard input](keyboard-input.md)). Narrow by construction: only the timeout flush, only
+  ESC-led remainders that do not parse as a key, feature-detected, applied once. Re-check it
+  on every pi-tui bump — the guard is written against 1.0.2's `buffer`/`flush` contract.

@@ -703,6 +703,9 @@ Quitting detaches: the pod keeps running until the server's idle policy reaps
 it or `pipod stop` stops it. Raw pod shells are not available.
 Attaching to an archived pod offers to restore it first.
 
+Holding a character key types it once: key repeat stays available for
+Backspace, Tab and the arrow keys, where it is useful while editing.
+
 After --:
   <prompt…>              Words are sent to the session as a startup prompt
   --tui-mode <mode>      Local TUI layout for this attach: regular or fullscreen

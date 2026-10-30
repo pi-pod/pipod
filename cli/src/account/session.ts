@@ -857,6 +857,7 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
 
   let unwireChords: () => void = () => {};
   let unwireDisconnectedQuit: () => void = () => {};
+  let unwireKeyRepeat: () => void = () => {};
   let mode: InstanceType<typeof import("@earendil-works/pi-coding-agent").InteractiveMode>;
   // Seeding and building the TUI is the one stretch with a live socket and nothing to close
   // it: no UI has bound, so no ending can fire, and an unreported failure here would leave
@@ -866,16 +867,24 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
 
     const { InteractiveMode } = await import("@earendil-works/pi-coding-agent");
     const { wirePodChords } = await import("../client/runtime/chords.js");
+    const { wireKeyRepeatGuard } = await import("../client/runtime/key-repeat-guard.js");
+    const { guardStdinFragments } = await import("../client/runtime/stdin-fragment-guard.js");
+    // Before the TUI reads a byte: an escape fragment that never completes must not be typed.
+    guardStdinFragments();
 
     const chords = context.config.pi.chords;
     runtime.bridge.setOnUiBound(() => {
       unwireChords();
       unwireDisconnectedQuit();
+      unwireKeyRepeat();
       unwireChords = wirePodChords(runtime.bridge, runtime.router, chords);
       unwireDisconnectedQuit = wireDisconnectedQuit(
         runtime.bridge,
         () => connectionAllowsQuit(latestConnectionState),
       );
+      // Last: a held key must not reach the editor, and the explicit quit keys above
+      // get first refusal while the connection is down.
+      unwireKeyRepeat = wireKeyRepeatGuard(runtime.bridge.ui);
     });
 
     const tuiMode = opts.tuiMode ?? tuiModeFromArgv(context.config.pi.args);
@@ -911,6 +920,7 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
     runtime.bridge.setOnUiBound(null);
     unwireChords();
     unwireDisconnectedQuit();
+    unwireKeyRepeat();
     rpc.close();
     derived?.dispose();
     throw error;
@@ -941,6 +951,7 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
     runtime.bridge.setOnUiBound(null);
     unwireChords();
     unwireDisconnectedQuit();
+    unwireKeyRepeat();
     process.off("SIGHUP", onHangUp);
     process.off("SIGTERM", onHangUp);
   }
