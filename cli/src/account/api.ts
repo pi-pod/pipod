@@ -885,6 +885,15 @@ export class AccountClient {
     return this.request("/pods", { query });
   }
 
+  /** Null means an older server lacks lookup, not that the ref had no matches. */
+  lookupPodRef(ref: string): Promise<{
+    pod: ApiPod | null;
+    matches: Array<Pick<ApiPod, "id" | "name" | "state">>;
+    total: number;
+  } | null> {
+    return this.request(`/pods/by-ref/${encodeURIComponent(ref)}`, { allow404: true });
+  }
+
   /** `waitMs` long-polls: a supporting server answers on the next pod change; older servers ignore it. */
   getPod(id: string, opts: { waitMs?: number; timeoutMs?: number } = {}): Promise<ApiPod> {
     const waitMs = opts.waitMs != null && opts.waitMs > 0 ? Math.floor(opts.waitMs) : undefined;

@@ -243,6 +243,7 @@ export class GatewayRpcClient extends RpcClientBase {
   /** False between adopting a skewed hello and readiness replacing it; ordinary RPC is gated. */
   private piVersionReady = false;
   private readonly idPrefix = `cli-${randomBytes(4).toString("hex")}-`;
+  private availableModelsRequest: Promise<unknown[]> | null = null;
   private modelsRequest: {
     promise: Promise<GatewayModelsSnapshot>;
     resolve: (snapshot: GatewayModelsSnapshot) => void;
@@ -425,6 +426,24 @@ export class GatewayRpcClient extends RpcClientBase {
       this.rejectModelsRequest(error instanceof Error ? error : new Error(String(error)));
     }
     return promise;
+  }
+
+  /** Model and thinking consumers share one semantic catalog, not two large replies. */
+  override getAvailableModels(): Promise<unknown[]> {
+    if (this.availableModelsRequest) return this.availableModelsRequest;
+    const task = this.getModels().then((snapshot) => snapshot.models).catch((error: unknown) => {
+      // Compatibility only: do not replay a request across a disconnect, switch,
+      // version refusal or other failure. Old gateways simply ignore get_models.
+      if (error instanceof Error && error.message === "timed out waiting for the gateway model catalog" &&
+          !this.userClosed && this.piVersionReady) return super.getAvailableModels();
+      throw error;
+    });
+    this.availableModelsRequest = task;
+    const clear = () => {
+      if (this.availableModelsRequest === task) this.availableModelsRequest = null;
+    };
+    void task.then(clear, clear);
+    return task;
   }
 
   /** List pod-side sessions. A timeout or unsupported marker is an absent capability. */
@@ -819,6 +838,7 @@ export class GatewayRpcClient extends RpcClientBase {
   }
 
   private resetHandshakeState(podId: string): void {
+    this.availableModelsRequest = null;
     this.currentPodId = podId;
     this.hello = null;
     this.piExitCode = undefined;

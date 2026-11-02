@@ -38,6 +38,7 @@ import {
 import { platformCredentialsOf, withProviderCredential } from "./providercred.js";
 import { edition } from "../edition.js";
 import { assertPodAccess } from "./access.js";
+import { lookupPodRef } from "./ref-lookup.js";
 import {
   assertPodTokenReach,
   liveChildren,
@@ -990,6 +991,44 @@ export function registerPodRoutes(
         // The cursor captures the boundary itself, so deletion of that pod cannot break paging.
         nextCursor: rows.length > page.length && last ? `${last.list_activity_at}/${last.id}` : null,
       };
+    },
+  );
+
+  // Same visibility as the CLI's mine-list, including archived pods and pod-token
+  // lineage. Only a unique match receives its full launch report; ambiguity stays
+  // bounded metadata. The distinct path lets old servers return an unambiguous 404.
+  r.get(
+    "/pods/by-ref/:ref",
+    {
+      preHandler: [app.authenticate],
+      config: { allowPodToken: true },
+      schema: { params: z.object({ ref: z.string().min(1).max(512) }) },
+    },
+    async (req) => {
+      const found = await lookupPodRef({
+        orgId: req.auth.orgId,
+        userId: req.auth.userId,
+        lineageRootPodId: req.auth.podId ?? null,
+        ref: req.params.ref,
+      });
+      let pod = null;
+      if (found.total === 1) {
+        let row: PodRow;
+        try {
+          row = await getPod(req.auth.orgId, found.matches[0]!.id);
+        } catch (error) {
+          if (error instanceof HttpError && error.statusCode === 404) {
+            return { pod: null, matches: [], total: 0 };
+          }
+          throw error;
+        }
+        // Recheck ownership and lineage after hydration, not just in the lookup.
+        // Missing matches stay 200 so 404 remains an old-server capability signal.
+        if (row.user_id !== req.auth.userId) return { pod: null, matches: [], total: 0 };
+        await assertPodTokenScope(row, req.auth, "inspect", { allowSelf: true });
+        pod = viewFor(toApi(row, gateway), req.auth);
+      }
+      return { pod, ...found };
     },
   );
 

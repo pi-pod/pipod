@@ -16,22 +16,32 @@ export function displayRef(id: string, kind: "pod" | "job"): string {
   return `${kind === "pod" ? "p" : "j"}-${tail}`;
 }
 
+export type RefPattern =
+  | { kind: "uuid"; value: string }
+  | { kind: "tail" | "hex"; value: string };
+
+/** Shared by in-memory matching and server lookup; names return null. */
+export function parseRef(ref: string): RefPattern | null {
+  const normalized = ref.toLowerCase();
+  if (FULL_UUID.test(normalized)) return { kind: "uuid", value: normalized };
+  const prefixed = /^[pj]-(.*)$/i.exec(normalized);
+  if (prefixed) {
+    assertUsableHexRef(ref, prefixed[1]!);
+    return { kind: "tail", value: prefixed[1]! };
+  }
+  if (!HEX.test(normalized)) return null;
+  assertUsableHexRef(ref, normalized);
+  return { kind: "hex", value: normalized };
+}
+
 /** Match full UUIDs, prefixed tail refs, and legacy bare leading prefixes. */
 export function matchesRef(id: string, ref: string): boolean {
+  const pattern = parseRef(ref);
+  if (!pattern) return false;
   const normalizedId = id.toLowerCase();
-  const normalizedRef = ref.toLowerCase();
-  if (FULL_UUID.test(normalizedRef)) return normalizedId === normalizedRef;
-
-  const prefixed = /^[pj]-(.*)$/i.exec(normalizedRef);
-  if (prefixed) {
-    const tail = prefixed[1]!;
-    assertUsableHexRef(ref, tail);
-    return normalizedId.replaceAll("-", "").endsWith(tail);
-  }
-
-  if (!HEX.test(normalizedRef)) return false;
-  assertUsableHexRef(ref, normalizedRef);
-  return normalizedId.startsWith(normalizedRef) || normalizedId.replaceAll("-", "").endsWith(normalizedRef);
+  if (pattern.kind === "uuid") return normalizedId === pattern.value;
+  return normalizedId.replaceAll("-", "").endsWith(pattern.value) ||
+    (pattern.kind === "hex" && normalizedId.startsWith(pattern.value));
 }
 
 function assertUsableHexRef(ref: string, hex: string): void {

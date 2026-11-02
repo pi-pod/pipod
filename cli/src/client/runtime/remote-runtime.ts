@@ -1275,8 +1275,9 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     treeBridge,
     init: async () => {
       await cache.init();
-      await refreshThinkingLevels();
-      await authBridge.refresh();
+      // Capabilities/commands are now known. These independent reads can overlap;
+      // the model catalog must settle before resolving the synchronous model scope.
+      await Promise.all([refreshThinkingLevels(), authBridge.refresh(), cache.refreshModels()]);
       await seedScopedModels();
       if (opts.attestedExtensionPaths?.length) {
         try {
