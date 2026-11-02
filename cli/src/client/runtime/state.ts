@@ -112,6 +112,7 @@ export class RemoteStateCache {
   private sessionRefreshRequested = false;
   private expectedRefreshLeaf: ExpectedLeaf = NO_EXPECTED_LEAF;
   private cacheGeneration = 0;
+  private modelsRefresh: { generation: number; promise: Promise<void> } | null = null;
   private replacementInProgress = false;
   private readonly labelStates = new Map<string, LabelState>();
   private seedBridge: SessionSeedBridge | null = null;
@@ -378,12 +379,23 @@ export class RemoteStateCache {
     throw lastError ?? new Error("pod session refresh could not be reconciled");
   }
 
-  async refreshModels(): Promise<void> {
-    try {
-      this.availableModels = await this.rpc.getAvailableModels();
-    } catch {
-      // Catalog stays stale.
-    }
+  refreshModels(): Promise<void> {
+    const generation = this.cacheGeneration;
+    if (this.modelsRefresh?.generation === generation) return this.modelsRefresh.promise;
+    const promise = (async () => {
+      try {
+        const models = await this.rpc.getAvailableModels();
+        if (generation === this.cacheGeneration) this.availableModels = models;
+      } catch {
+        // Catalog stays stale.
+      }
+    })();
+    const entry = { generation, promise };
+    this.modelsRefresh = entry;
+    void promise.then(() => {
+      if (this.modelsRefresh === entry) this.modelsRefresh = null;
+    });
+    return promise;
   }
 
   async refreshCommands(): Promise<void> {

@@ -311,6 +311,14 @@ export async function selectAccountPod(
     // A full id needs no listing: the server answers by id no matter how many pods have been
     // active more recently, so an old pod stays reachable by the ref `list` once printed.
     if (isFullUuid(podRef)) return client.getPod(podRef.toLowerCase());
+    const found = await client.lookupPodRef(podRef);
+    if (found !== null) {
+      if (found.total > 1) throw ambiguousPodRef(podRef, found.matches, found.total);
+      if (found.pod) return found.pod;
+      throw new PiPodError(`no pod matches "${podRef}"`, { hint: "see `pipod list --all`" });
+    }
+    // Only an absent route falls back to legacy pagination. Auth, network and
+    // server failures must not turn into an expensive or differently scoped scan.
     const pods = (await listAllPods(client, {})).pods;
 
     const named = pods.filter((pod) => pod.name === podRef);
@@ -340,13 +348,16 @@ export async function selectAccountPod(
   return pods[0]!;
 }
 
-function ambiguousPodRef(ref: string, pods: ApiPod[]): PiPodError {
-  return new PiPodError(`"${ref}" matches ${pods.length} pods`, {
-    hint: `use a longer ref:\n${podChoiceLines(pods)}`,
+type PodChoice = Pick<ApiPod, "id" | "name" | "state">;
+
+function ambiguousPodRef(ref: string, pods: PodChoice[], total = pods.length): PiPodError {
+  return new PiPodError(`"${ref}" matches ${total} pods`, {
+    hint: `use a longer ref:\n${podChoiceLines(pods)}` +
+      (total > pods.length ? `\n  … showing the first ${pods.length} matches` : ""),
   });
 }
 
-function podChoiceLines(pods: ApiPod[]): string {
+function podChoiceLines(pods: PodChoice[]): string {
   const refs = pods.map((pod) => displayRef(pod.id, "pod"));
   const counts = new Map<string, number>();
   for (const ref of refs) counts.set(ref, (counts.get(ref) ?? 0) + 1);
