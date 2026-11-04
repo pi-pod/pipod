@@ -1,9 +1,9 @@
 # Keyboard input in the attached TUI
 
-Two input defects turn one key press into several characters or into escape-sequence
-gibberish. Both live in the local byte path — nothing typed crosses the wire — and both are
-fixed in `src/client/runtime/` rather than by pinning a different pi-tui, because the pinned
-version is what pods and the launcher share.
+Three input defects turn one key press into several characters, the same character twice, or
+into escape-sequence gibberish. All live in the local byte path — nothing typed crosses the
+wire — and all are fixed in `src/client/runtime/` rather than by pinning a different pi-tui,
+because the pinned version is what pods and the launcher share.
 
 ## The path
 
@@ -11,6 +11,7 @@ version is what pods and the launcher share.
 terminal ──bytes──▶ ProcessTerminal ──▶ StdinBuffer ──▶ TUI input listeners ──▶ Editor
                                                                 │
                                                     chords · disconnected-quit ·
+                                                    key-encoding guard ·
                                                     key-repeat guard
 ```
 
@@ -69,6 +70,34 @@ reply may be missed and the theme falls back, which is cosmetic; the prompt stay
 Upstream pi-tui 1.4.0 still flushes these fragments (it only rescues recognizable terminal
 *replies*), so a version bump would not fix this.
 
+## 3. A press reported in both encodings types once (`key-encoding-guard.ts`)
+
+A terminal with the kitty keyboard protocol enabled may describe one press twice: the key
+event as a `CSI-u` sequence **and** the text it produced as raw bytes. pi-tui already guards
+this in `StdinBuffer.emitDataSequence` — it remembers the codepoint of the last CSI-u
+printable and drops a raw character that repeats it — but its recogniser
+(`parseUnmodifiedKittyPrintableCodepoint`) accepts only `ESC[<cp>u`, `ESC[<cp>:<shifted>u` and
+`ESC[<cp>::<base>u`, and refuses every form carrying a *modifier parameter*. `decodeKittyPrintable`
+accepts those, masking Caps Lock and Num Lock (`KITTY_PRINTABLE_ALLOWED_MODIFIERS = shift | 64
+| 128`). So the stock dedupe stops working the moment the terminal puts a modifier bit in that
+parameter — measured here with the lock bits a machine carries without anyone noticing, a Num
+Lock that is on by default (`input:numlock_by_default = true`) or a Caps Lock — and both copies
+insert. Upstream pi fixed the same class of report for one terminal order and shape in
+0.70.4 (#3780, "duplicate printable characters from Kitty keyboard protocol CSI-u plus raw
+character input on layouts such as Italian"); the pinned pi-tui still has the gap.
+
+The guard consumes a raw character only when a CSI-u printable for exactly that character
+arrived immediately before it, only once per CSI-u, and only within 50 ms — the two halves of
+one press are written together, so they always meet that window. It is fail-open by
+construction: an escaped duplicate costs one visible, recoverable character, while a wrong
+suppression would silently eat a keystroke. A release clears the memory rather than arming it,
+so the release event that follows a press can never make the next deliberate press of that key
+disappear. Releases and repeats otherwise stay with `key-repeat-guard.ts`, which owns them.
+
+Left open deliberately: the reversed order (raw text first, then the CSI-u). No observed
+terminal writes it, and deduping it would mean dropping a key *event* on suspicion — the one
+direction where a mistake loses input.
+
 ## Accepted rows
 
 Measured with a pty harness against pi 1.0.2 + pi-tui 1.0.2 (the pinned pair), driving
@@ -81,6 +110,14 @@ inside pi's own `InteractiveMode`:
 | release split past the flush (`\x1b[104;1:` … `3u`) | `h3u` | `h` |
 | press split past the flush | `;1:1u` | that key |
 | OSC reply fragment, then tap `j` | keystroke lost | `j` |
+| Num Lock bit on the CSI-u (`\x1b[97;129u` then `a`) | `aa` | `a` |
+| layout base + Num Lock (`\x1b[97:97:97;129u` then `a`) | `aa` | `a` |
+| symbol press with Num Lock (`\x1b[64;129u` then `@`) | `@@` | `@` |
+| Caps Lock bit (`\x1b[65;65u` then `A`) | `AA` | `A` |
+| both halves in one read (`\x1b[104;129uh`) | `hh` | `h` |
+| stock dedupe already covers it: `\x1b[64:64:50u` then `@` | `@` | `@` |
+| CSI-u half lost, same key 200 ms later | `aa` | `aa` |
+| release between the halves, then that key again | press kept | unchanged |
 
 Everything else must stay exactly as it was, and does: a tap inserts one character, two
 deliberate taps of the same key insert two, held Backspace and arrows still repeat, a
@@ -88,4 +125,4 @@ bracketed paste arrives verbatim, a legacy terminal without releases is untouche
 stray fragment (`\x1b[1` followed later by another key) costs neither keystroke.
 
 `PI_TUI_ESC_TIMEOUT` only widens the lone-ESC window, not the 50 ms sequence window, so it is
-not a workaround for either defect.
+not a workaround for any of these defects.
