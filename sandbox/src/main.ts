@@ -5,6 +5,7 @@ import { createLogger } from "./log.js";
 import { Store } from "./db/index.js";
 import { removeAbandonedImageBuilds } from "./images/derive.js";
 import { OciImageStore } from "./images/store.js";
+import { IMAGE_VERIFICATION_INTERVAL_MS } from "./images/verification-cache.js";
 import { createObjectStore } from "./archive/objectstore.js";
 import { CgroupTree } from "./runtime/cgroup.js";
 import { Runtime } from "./runtime/crun.js";
@@ -21,8 +22,6 @@ import {
 } from "./metrics.js";
 
 const VERSION = "0.1.0";
-/** How often verified image lowers have their contents re-hashed after boot. */
-const IMAGE_SCRUB_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Boot-phase timing. A restart of this service has to adopt the host's whole retained state,
@@ -112,7 +111,7 @@ export async function main(): Promise<void> {
       ).finally(() => {
         if (!shutdownStarted) scheduleImageScrub();
       });
-    }, IMAGE_SCRUB_INTERVAL_MS);
+    }, IMAGE_VERIFICATION_INTERVAL_MS);
     imageScrub.unref();
   };
   scheduleImageScrub();

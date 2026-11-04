@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { assertLayerNotMounted, fileDigest, layerTreeDigest, layerTreeFingerprint, verifyDiffDigest } from "./integrity.js";
+import { LayerVerificationCache } from "./verification-cache.js";
 import { open, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -18,14 +19,6 @@ import {
 interface StoredImage extends ResolvedImage {
   blobDigests?: string[];
   layerSources?: Array<{ diffDigest: string; descriptor: OciDescriptor }>;
-  /**
-   * Per lower, the content digest that verified it and the tree fingerprint at that moment.
-   * Persisted so a restart can trust an unchanged tree with a metadata walk instead of
-   * re-hashing the blob, re-extracting the layer and hashing both trees again — which is what
-   * made a restart take minutes (measured: 361.7 s of a 362.4 s boot). Contents are still
-   * compared by {@link scrub}, which runs every IMAGE_SCRUB_INTERVAL_MS.
-   */
-  layerVerifications?: Record<string, { content: string; fingerprint: string }>;
   /** Retain historical manifests for local pods without adding implicit aliases to /images. */
   cacheOnly?: boolean;
 }
@@ -206,6 +199,7 @@ export class OciImageStore implements ImageStore {
    */
   readonly #verifiedLayers = new Map<string, { content: string; fingerprint: string }>();
   readonly #layerChecks = new Map<string, Promise<boolean>>();
+  readonly #verificationCache: LayerVerificationCache;
 
   constructor(options: {
     stateDir: string;
@@ -216,6 +210,7 @@ export class OciImageStore implements ImageStore {
   }) {
     this.#maxImageBytes = options.maxImageBytes ?? Number.POSITIVE_INFINITY;
     this.#stateDir = path.resolve(options.stateDir);
+    this.#verificationCache = new LayerVerificationCache(this.#stateDir);
     this.#blobsDir = path.join(this.#stateDir, "images", "blobs");
     this.#layersDir = path.join(this.#stateDir, "layers");
     this.#refsDir = path.join(this.#stateDir, "images", "refs");
@@ -229,114 +224,89 @@ export class OciImageStore implements ImageStore {
   }
 
   /**
-   * Must finish before runtime reconciliation or any listener is started. Failure is fatal.
-   *
-   * Verifies exactly the lowers a sandbox that can resume would mount. Every stored image ref
-   * used to be re-verified here — blob hashed, layer re-extracted, both trees hashed — which
-   * cost 361.7 s of a 362.4 s restart for layers nothing was about to mount, while adopting the
-   * whole retained state afterwards took 663 ms. An unverified ref is not a correctness risk:
-   * `resolve` refuses it (its lower is not in {@link #verifiedLayers}) so the next pull repairs
-   * it, and {@link scrub} re-hashes verified contents every IMAGE_SCRUB_INTERVAL_MS.
-   *
-   * An unchanged tree is trusted from the record's persisted fingerprint: metadata only, no
-   * file contents read, the same model `resolve` already relies on within a boot.
+   * Finish before runtime reconciliation or listening. Keep the complete stored-ref/config
+   * gate; share verification of identical blobs/lowers within this offline pass only.
+   * Across boots, #ensureLayer can reuse a receipt for an unchanged tree, but compressed blobs
+   * are still cryptographically checked here. Missing or corrupt inputs still fail closed.
    */
   async validateAndRepair(required: Array<{ image: string; imageDigest: string; layers: string[] }> = []): Promise<void> {
     this.#verifiedLayers.clear();
-    const layersByRef = new Map<string, string[]>();
-    let reused = 0;
-    let reverified = 0;
-    for (const row of required) {
-      const reference = normalizeReference(row.image);
-      let layers = layersByRef.get(reference.ref);
-      if (layers === undefined) {
-        layers = await this.#verifyLowers(reference, row.imageDigest, (how) => {
-          if (how === "persisted") reused += 1;
-          else reverified += 1;
-        });
-        layersByRef.set(reference.ref, layers);
+    const verifiedManifests = new Map<string, string[]>();
+    const checkedBlobs = new Map<string, string>();
+    const checkedLowers = new Set<string>();
+    for (const record of await this.#listStored()) {
+      const reference = normalizeReference(record.ref);
+      const registry = this.#registry.request();
+      let sources = record.layerSources;
+      let diffs: string[] | undefined;
+      if (record.blobDigests?.length) {
+        const config = await this.#downloadBlob(registry, reference, record.blobDigests[0]!, this.#log);
+        const doc = JSON.parse(await readFile(config, "utf8")) as ImageConfigDocument;
+        diffs = stringArray(doc.rootfs?.diff_ids);
+        if (diffs.length !== record.blobDigests.length - 1) throw new Error(`invalid cached layer mapping: ${record.ref}`);
+        if (sources && (JSON.stringify(sources.map((s) => s.diffDigest)) !== JSON.stringify(diffs)
+          || JSON.stringify(sources.map((s) => s.descriptor.digest)) !== JSON.stringify(record.blobDigests.slice(1)))) {
+          throw new Error(`cached layer sources disagree with verified image config: ${record.ref}`);
+        }
       }
-      // The row pins the manifest it was created from; a layer list that disagrees with the
-      // verified image is not something to admit a lowerdir for.
-      if (JSON.stringify(row.layers) !== JSON.stringify(layers)) {
+      if (!sources && diffs && record.blobDigests) {
+        // Upgrade pre-integrity records offline using their verified retained blobs.
+        sources = [];
+        for (let i = 0; i < diffs.length; i++) {
+          parseDigest(diffs[i]!);
+          const digest = record.blobDigests[i + 1]!;
+          const blob = await this.#downloadBlob(registry, reference, digest, this.#log);
+          const file = await open(blob, "r");
+          const magic = Buffer.alloc(4);
+          try { await file.read(magic, 0, 4, 0); } finally { await file.close(); }
+          const suffix = magic[0] === 0x1f && magic[1] === 0x8b ? "+gzip"
+            : magic.equals(Buffer.from([0x28, 0xb5, 0x2f, 0xfd])) ? "+zstd" : "";
+          sources.push({ diffDigest: diffs[i]!, descriptor: { digest, mediaType: `application/vnd.oci.image.layer.v1.tar${suffix}` } });
+        }
+      }
+      if (!sources) {
+        // Never silently refresh a mutable tag during recovery.
+        const image = await this.pull(`${reference.registry}/${reference.repository}@${record.manifestDigest}`);
+        if (JSON.stringify(record.layers) !== JSON.stringify(image.layers)) throw new Error(`cached image layer selection mismatch: ${record.ref}`);
+        verifiedManifests.set(record.manifestDigest, image.layers);
+      } else {
+        for (const { diffDigest, descriptor } of sources) {
+          let blob = checkedBlobs.get(descriptor.digest);
+          if (blob === undefined) {
+            blob = await this.#ensureBlob(registry, reference, descriptor, this.#log);
+            checkedBlobs.set(descriptor.digest, blob);
+          } else if (descriptor.size !== undefined && (await stat(blob)).size > descriptor.size) {
+            throw new Error(`blob ${descriptor.digest} is larger than its ${descriptor.size}-byte limit`);
+          }
+          const key = JSON.stringify([diffDigest, descriptor.digest, descriptor.mediaType]);
+          if (!checkedLowers.has(key)) {
+            await this.#ensureLayer(blob, descriptor, diffDigest, this.#log);
+            checkedLowers.add(key);
+          }
+        }
+        const empty = new Set<string>();
+        for (const { diffDigest } of sources) {
+          if ((await readdir(this.layerDir(diffDigest))).length === 0) empty.add(diffDigest);
+        }
+        const expectedLayers = omitEmptyDiffLayers(sources.map((source) => source.diffDigest), empty);
+        if (expectedLayers.length === 0 || JSON.stringify(record.layers) !== JSON.stringify(expectedLayers)) {
+          throw new Error(`cached image layer selection mismatch: ${record.ref}`);
+        }
+        verifiedManifests.set(record.manifestDigest, expectedLayers);
+        await this.#writeRecord({ ...record, layerSources: sources });
+      }
+    }
+    for (const row of required) {
+      if (!verifiedManifests.has(row.imageDigest) || row.layers.some((digest) => !this.#verifiedLayers.has(digest))) {
+        const ref = normalizeReference(row.image);
+        const image = await this.pull(`${ref.registry}/${ref.repository}@${row.imageDigest}`);
+        verifiedManifests.set(row.imageDigest, image.layers);
+      }
+      if (JSON.stringify(row.layers) !== JSON.stringify(verifiedManifests.get(row.imageDigest))) {
         throw new Error(`sandbox image layer selection mismatch: ${row.imageDigest}`);
       }
     }
-    if (required.length > 0) {
-      this.#log(`verified ${layersByRef.size} image(s) for resume: ${reused} lower(s) unchanged, ${reverified} re-verified`);
-    }
-  }
-
-  /**
-   * The mounted layer list of one cached image, verifying each lower first. Reuses the record's
-   * layer sources; a record that is missing, belongs to another manifest, or predates recorded
-   * sources is fetched from its pinned manifest instead of a tag, which may have moved.
-   */
-  async #verifyLowers(
-    reference: ReturnType<typeof normalizeReference>,
-    manifestDigest: string,
-    note: (how: "persisted" | "reverified") => void,
-  ): Promise<string[]> {
-    const location = this.#recordPath(reference.ref);
-    let record: StoredImage | undefined;
-    try {
-      record = await this.#readRecord(location);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (record === undefined || record.manifestDigest !== manifestDigest || record.layerSources === undefined) {
-      const image = await this.pull(`${reference.registry}/${reference.repository}@${manifestDigest}`);
-      return image.layers;
-    }
-    // The record stays internally consistent without downloading its config blob again: the
-    // layer sources are exactly the blobs the manifest listed, in order.
-    const recorded = record.blobDigests;
-    if (
-      recorded !== undefined &&
-      (recorded.length !== record.layerSources.length + 1 ||
-        JSON.stringify(record.layerSources.map((source) => source.descriptor.digest)) !==
-          JSON.stringify(recorded.slice(1)))
-    ) {
-      throw new Error(`cached layer sources disagree with the recorded manifest: ${reference.ref}`);
-    }
-    const verifications: Record<string, { content: string; fingerprint: string }> = {
-      ...(record.layerVerifications ?? {}),
-    };
-    const empty = new Set<string>();
-    for (const { diffDigest, descriptor } of record.layerSources) {
-      const trusted = await this.#verifyPersistedLayer(diffDigest, record);
-      note(trusted ? "persisted" : "reverified");
-      if (!trusted) {
-        const registry = this.#registry.request();
-        const blob = await this.#ensureBlob(registry, reference, descriptor, this.#log);
-        await this.#ensureLayer(blob, descriptor.mediaType, diffDigest, this.#log);
-      }
-      const verified = this.#verifiedLayers.get(diffDigest);
-      if (verified !== undefined) verifications[diffDigest] = verified;
-      if ((await readdir(this.layerDir(diffDigest))).length === 0) empty.add(diffDigest);
-    }
-    // BuildKit legitimately repeats its empty diff layer, which OverlayFS cannot take twice.
-    const layers = omitEmptyDiffLayers(record.layerSources.map((source) => source.diffDigest), empty);
-    if (layers.length === 0) throw new Error(`cached image layer selection mismatch: ${reference.ref}`);
-    if (JSON.stringify(record.layers) !== JSON.stringify(layers)) {
-      throw new Error(`cached image layer selection mismatch: ${reference.ref}`);
-    }
-    await this.#writeRecord({ ...record, layerVerifications: verifications });
-    return layers;
-  }
-
-  /** Trust a lower from its persisted verification when the tree still matches it. */
-  async #verifyPersistedLayer(digest: string, record: StoredImage): Promise<boolean> {
-    const persisted = record.layerVerifications?.[digest];
-    if (persisted === undefined) return false;
-    try {
-      if (await layerTreeFingerprint(this.layerDir(digest)) !== persisted.fingerprint) return false;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-      throw error;
-    }
-    this.#verifiedLayers.set(digest, { content: persisted.content, fingerprint: persisted.fingerprint });
-    return true;
+    this.#log(`boot checked ${checkedBlobs.size} unique blob(s), ${checkedLowers.size} unique lower(s)`);
   }
 
   async resolve(ref: string): Promise<ResolvedImage | null> {
@@ -349,12 +319,6 @@ export class OciImageStore implements ImageStore {
       throw error;
     }
     if (record.layers.length === 0) return null;
-    // Seed from the record so a lower verified before this boot resolves without a pull. The
-    // fingerprint check below stays the gate: an unchanged tree is trusted, a changed one is
-    // forgotten and the caller's pull repairs it.
-    for (const [digest, verification] of Object.entries(record.layerVerifications ?? {})) {
-      if (!this.#verifiedLayers.has(digest)) this.#verifiedLayers.set(digest, verification);
-    }
     const verified = await Promise.all(record.layers.map((digest) => this.#layerStillVerified(digest)));
     if (verified.includes(false)) return null;
     return publicImage(record);
@@ -388,7 +352,7 @@ export class OciImageStore implements ImageStore {
       const descriptor = fetched.manifest.layers[index]!;
       const diffDigest = diffIds[index]!;
       const blob = await this.#ensureBlob(registry, normalized, descriptor, emit);
-      extractable -= await this.#ensureLayer(blob, descriptor.mediaType, diffDigest, emit, extractable);
+      extractable -= await this.#ensureLayer(blob, descriptor, diffDigest, emit, extractable);
       if ((await readdir(this.layerDir(diffDigest))).length === 0) emptyDiffs.add(diffDigest);
     }
     // BuildKit legitimately repeats its empty diff layer. Giving OverlayFS the same directory
@@ -479,6 +443,7 @@ export class OciImageStore implements ImageStore {
     const maxBytes = Math.min(declaredSize ?? Number.POSITIVE_INFINITY, this.#maxImageBytes);
     const destination = path.join(this.#blobsDir, algorithm, hex);
     if (await isFile(destination)) {
+      if ((await stat(destination)).size > maxBytes) throw new Error(`blob ${digest} is larger than its ${maxBytes}-byte limit`);
       if (await fileDigest(destination, algorithm) === hex) {
         emit(`using verified cached blob ${digest}`);
         return destination;
@@ -568,7 +533,14 @@ export class OciImageStore implements ImageStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      if (content === verified.content || this.#verifiedLayers.get(digest) !== verified) continue;
+      if (this.#verifiedLayers.get(digest) !== verified) continue;
+      if (content === verified.content) {
+        // Scrubbing provides fresh content evidence; keep the receipt useful across long runs.
+        await this.#verificationCache.refresh(digest, content, verified.fingerprint);
+        continue;
+      }
+      // A restart must not resurrect evidence that this scrub just disproved.
+      await this.#verificationCache.forget(digest);
       this.#verifiedLayers.delete(digest);
       forgotten.push(digest);
     }
@@ -578,7 +550,7 @@ export class OciImageStore implements ImageStore {
   /** Extracts and verifies a layer; returns the bytes it newly extracted (0 when already present). */
   async #ensureLayer(
     blobPath: string,
-    mediaType: string,
+    descriptor: OciDescriptor,
     digest: string,
     emit: (message: string) => void,
     maxBytes = this.#maxImageBytes,
@@ -588,6 +560,22 @@ export class OciImageStore implements ImageStore {
     const existing = this.#layerTasks.get(digest);
     if (existing) return existing;
     const task = (async () => {
+      const { mediaType } = descriptor;
+      const receipt = await this.#verificationCache.read(digest);
+      if (receipt?.blobDigest === descriptor.digest && receipt.mediaType === mediaType &&
+          receipt.uncompressedBytes <= maxBytes) {
+        try {
+          if (await layerTreeFingerprint(target) === receipt.fingerprint) {
+            this.#verifiedLayers.set(digest, { content: receipt.content, fingerprint: receipt.fingerprint });
+            emit(`using unchanged verified layer ${digest}`);
+            return 0;
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      // Invalidate before the slow path, so an interrupted repair cannot reuse old evidence.
+      await this.#verificationCache.forget(digest);
       const size = await verifyDiffDigest(blobPath, mediaType, digest, maxBytes);
       // Reconstruct a trusted comparison tree from the digest-verified blob. Even an
       // intentionally empty OCI layer is valid only if its expected tree is also empty.
@@ -596,8 +584,10 @@ export class OciImageStore implements ImageStore {
         await extractLayerBlob(blobPath, mediaType, rebuilt);
         const expected = await layerTreeDigest(rebuilt);
         let healthy = false;
-        try { healthy = await layerTreeDigest(target) === expected; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        try {
+          const before = await layerTreeFingerprint(target);
+          healthy = await layerTreeDigest(target) === expected && await layerTreeFingerprint(target) === before;
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
         if (!healthy) {
           emit(`repairing extracted layer ${digest}`);
           await assertLayerNotMounted(target);
@@ -605,7 +595,12 @@ export class OciImageStore implements ImageStore {
           await rename(rebuilt, target);
           if (await layerTreeDigest(target) !== expected) throw new Error(`layer repair verification failed: ${digest}`);
         }
-        this.#verifiedLayers.set(digest, { content: expected, fingerprint: await layerTreeFingerprint(target) });
+        const fingerprint = await layerTreeFingerprint(target);
+        await this.#verificationCache.write({
+          version: 1, diffDigest: digest, blobDigest: descriptor.digest, mediaType,
+          content: expected, fingerprint, uncompressedBytes: size, verifiedAt: Date.now(),
+        });
+        this.#verifiedLayers.set(digest, { content: expected, fingerprint });
         return size;
       } finally {
         await rm(rebuilt, { recursive: true, force: true });
