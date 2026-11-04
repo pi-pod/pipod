@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { assertLayerNotMounted, fileDigest, layerTreeDigest, layerTreeFingerprint, verifyDiffDigest } from "./integrity.js";
+import { LayerVerificationCache } from "./verification-cache.js";
 import { open, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
@@ -198,6 +199,7 @@ export class OciImageStore implements ImageStore {
    */
   readonly #verifiedLayers = new Map<string, { content: string; fingerprint: string }>();
   readonly #layerChecks = new Map<string, Promise<boolean>>();
+  readonly #verificationCache: LayerVerificationCache;
 
   constructor(options: {
     stateDir: string;
@@ -208,6 +210,7 @@ export class OciImageStore implements ImageStore {
   }) {
     this.#maxImageBytes = options.maxImageBytes ?? Number.POSITIVE_INFINITY;
     this.#stateDir = path.resolve(options.stateDir);
+    this.#verificationCache = new LayerVerificationCache(this.#stateDir);
     this.#blobsDir = path.join(this.#stateDir, "images", "blobs");
     this.#layersDir = path.join(this.#stateDir, "layers");
     this.#refsDir = path.join(this.#stateDir, "images", "refs");
@@ -220,10 +223,17 @@ export class OciImageStore implements ImageStore {
     return path.join(this.#layersDir, `${algorithm}-${hex}`);
   }
 
-  /** Must finish before runtime reconciliation or any listener is started. Failure is fatal. */
+  /**
+   * Finish before runtime reconciliation or listening. Keep the complete stored-ref/config
+   * gate; share verification of identical blobs/lowers within this offline pass only.
+   * Across boots, #ensureLayer can reuse a receipt for an unchanged tree, but compressed blobs
+   * are still cryptographically checked here. Missing or corrupt inputs still fail closed.
+   */
   async validateAndRepair(required: Array<{ image: string; imageDigest: string; layers: string[] }> = []): Promise<void> {
     this.#verifiedLayers.clear();
     const verifiedManifests = new Map<string, string[]>();
+    const checkedBlobs = new Map<string, string>();
+    const checkedLowers = new Set<string>();
     for (const record of await this.#listStored()) {
       const reference = normalizeReference(record.ref);
       const registry = this.#registry.request();
@@ -240,8 +250,7 @@ export class OciImageStore implements ImageStore {
         }
       }
       if (!sources && diffs && record.blobDigests) {
-        // Upgrade the pre-integrity cache offline: old records retained the config followed
-        // by compressed blobs in manifest order. Detect compression from the verified bytes.
+        // Upgrade pre-integrity records offline using their verified retained blobs.
         sources = [];
         for (let i = 0; i < diffs.length; i++) {
           parseDigest(diffs[i]!);
@@ -262,8 +271,18 @@ export class OciImageStore implements ImageStore {
         verifiedManifests.set(record.manifestDigest, image.layers);
       } else {
         for (const { diffDigest, descriptor } of sources) {
-          const blob = await this.#ensureBlob(registry, reference, descriptor, this.#log);
-          await this.#ensureLayer(blob, descriptor.mediaType, diffDigest, this.#log);
+          let blob = checkedBlobs.get(descriptor.digest);
+          if (blob === undefined) {
+            blob = await this.#ensureBlob(registry, reference, descriptor, this.#log);
+            checkedBlobs.set(descriptor.digest, blob);
+          } else if (descriptor.size !== undefined && (await stat(blob)).size > descriptor.size) {
+            throw new Error(`blob ${descriptor.digest} is larger than its ${descriptor.size}-byte limit`);
+          }
+          const key = JSON.stringify([diffDigest, descriptor.digest, descriptor.mediaType]);
+          if (!checkedLowers.has(key)) {
+            await this.#ensureLayer(blob, descriptor, diffDigest, this.#log);
+            checkedLowers.add(key);
+          }
         }
         const empty = new Set<string>();
         for (const { diffDigest } of sources) {
@@ -277,8 +296,6 @@ export class OciImageStore implements ImageStore {
         await this.#writeRecord({ ...record, layerSources: sources });
       }
     }
-    // A mutable tag may have moved since a stopped pod was created. Recover its pinned
-    // manifest, not today's tag, and never admit a row with an unverified lowerdir.
     for (const row of required) {
       if (!verifiedManifests.has(row.imageDigest) || row.layers.some((digest) => !this.#verifiedLayers.has(digest))) {
         const ref = normalizeReference(row.image);
@@ -289,6 +306,7 @@ export class OciImageStore implements ImageStore {
         throw new Error(`sandbox image layer selection mismatch: ${row.imageDigest}`);
       }
     }
+    this.#log(`boot checked ${checkedBlobs.size} unique blob(s), ${checkedLowers.size} unique lower(s)`);
   }
 
   async resolve(ref: string): Promise<ResolvedImage | null> {
@@ -334,7 +352,7 @@ export class OciImageStore implements ImageStore {
       const descriptor = fetched.manifest.layers[index]!;
       const diffDigest = diffIds[index]!;
       const blob = await this.#ensureBlob(registry, normalized, descriptor, emit);
-      extractable -= await this.#ensureLayer(blob, descriptor.mediaType, diffDigest, emit, extractable);
+      extractable -= await this.#ensureLayer(blob, descriptor, diffDigest, emit, extractable);
       if ((await readdir(this.layerDir(diffDigest))).length === 0) emptyDiffs.add(diffDigest);
     }
     // BuildKit legitimately repeats its empty diff layer. Giving OverlayFS the same directory
@@ -425,6 +443,7 @@ export class OciImageStore implements ImageStore {
     const maxBytes = Math.min(declaredSize ?? Number.POSITIVE_INFINITY, this.#maxImageBytes);
     const destination = path.join(this.#blobsDir, algorithm, hex);
     if (await isFile(destination)) {
+      if ((await stat(destination)).size > maxBytes) throw new Error(`blob ${digest} is larger than its ${maxBytes}-byte limit`);
       if (await fileDigest(destination, algorithm) === hex) {
         emit(`using verified cached blob ${digest}`);
         return destination;
@@ -514,7 +533,14 @@ export class OciImageStore implements ImageStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      if (content === verified.content || this.#verifiedLayers.get(digest) !== verified) continue;
+      if (this.#verifiedLayers.get(digest) !== verified) continue;
+      if (content === verified.content) {
+        // Scrubbing provides fresh content evidence; keep the receipt useful across long runs.
+        await this.#verificationCache.refresh(digest, content, verified.fingerprint);
+        continue;
+      }
+      // A restart must not resurrect evidence that this scrub just disproved.
+      await this.#verificationCache.forget(digest);
       this.#verifiedLayers.delete(digest);
       forgotten.push(digest);
     }
@@ -524,7 +550,7 @@ export class OciImageStore implements ImageStore {
   /** Extracts and verifies a layer; returns the bytes it newly extracted (0 when already present). */
   async #ensureLayer(
     blobPath: string,
-    mediaType: string,
+    descriptor: OciDescriptor,
     digest: string,
     emit: (message: string) => void,
     maxBytes = this.#maxImageBytes,
@@ -534,6 +560,22 @@ export class OciImageStore implements ImageStore {
     const existing = this.#layerTasks.get(digest);
     if (existing) return existing;
     const task = (async () => {
+      const { mediaType } = descriptor;
+      const receipt = await this.#verificationCache.read(digest);
+      if (receipt?.blobDigest === descriptor.digest && receipt.mediaType === mediaType &&
+          receipt.uncompressedBytes <= maxBytes) {
+        try {
+          if (await layerTreeFingerprint(target) === receipt.fingerprint) {
+            this.#verifiedLayers.set(digest, { content: receipt.content, fingerprint: receipt.fingerprint });
+            emit(`using unchanged verified layer ${digest}`);
+            return 0;
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      // Invalidate before the slow path, so an interrupted repair cannot reuse old evidence.
+      await this.#verificationCache.forget(digest);
       const size = await verifyDiffDigest(blobPath, mediaType, digest, maxBytes);
       // Reconstruct a trusted comparison tree from the digest-verified blob. Even an
       // intentionally empty OCI layer is valid only if its expected tree is also empty.
@@ -542,8 +584,10 @@ export class OciImageStore implements ImageStore {
         await extractLayerBlob(blobPath, mediaType, rebuilt);
         const expected = await layerTreeDigest(rebuilt);
         let healthy = false;
-        try { healthy = await layerTreeDigest(target) === expected; }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        try {
+          const before = await layerTreeFingerprint(target);
+          healthy = await layerTreeDigest(target) === expected && await layerTreeFingerprint(target) === before;
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
         if (!healthy) {
           emit(`repairing extracted layer ${digest}`);
           await assertLayerNotMounted(target);
@@ -551,7 +595,12 @@ export class OciImageStore implements ImageStore {
           await rename(rebuilt, target);
           if (await layerTreeDigest(target) !== expected) throw new Error(`layer repair verification failed: ${digest}`);
         }
-        this.#verifiedLayers.set(digest, { content: expected, fingerprint: await layerTreeFingerprint(target) });
+        const fingerprint = await layerTreeFingerprint(target);
+        await this.#verificationCache.write({
+          version: 1, diffDigest: digest, blobDigest: descriptor.digest, mediaType,
+          content: expected, fingerprint, uncompressedBytes: size, verifiedAt: Date.now(),
+        });
+        this.#verifiedLayers.set(digest, { content: expected, fingerprint });
         return size;
       } finally {
         await rm(rebuilt, { recursive: true, force: true });
