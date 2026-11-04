@@ -43,7 +43,13 @@ COPY --from=build /app/bin/pps-init /usr/local/lib/pi-pod-sandbox/pps-init
 ENV PI_POD_SANDBOX_INIT=/usr/local/lib/pi-pod-sandbox/pps-init
 VOLUME ["/state"]
 EXPOSE 8433
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+# The API starts listening only after the service adopts the state directory, which is the
+# whole host's history: 799 sandbox records and 793 archives took about seven minutes on the
+# 64 vCPU host that had last booted 45 days earlier. A 10 s start period therefore reported a
+# healthy boot as `unhealthy` for minutes, and a recreate looked like a failed upgrade. The
+# grace is for boot only — failures after it are reported on the same 30 s interval, and a
+# process that never adopts keeps its container restarting, which is visible either way.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15m \
   CMD curl -fsS http://localhost:8433/v1/healthz || exit 1
 # `crun run -d` detaches the sandbox: the runtime process and the in-sandbox init reparent to
 # PID 1 here, and node reaps only children it spawned itself, so every stopped sandbox left two
