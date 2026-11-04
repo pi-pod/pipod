@@ -56,9 +56,12 @@ failure leaves no successful gate. Retained legacy caches are upgraded offline u
 config/blob digest order and compression magic; absent metadata uses a **pinned manifest**
 fetch, never a mutable-tag refresh. Missing/corrupt blobs are downloaded and digest-verified.
 Keep `STATE_DIR/images` compressed blobs and SQLite across snapshots. Do not mount the
-extracted layer cache or image metadata on tmpfs. Boot validation deliberately pays temporary
-extraction space and I/O per unique layer; allow several minutes for a large cache rather
-than disabling the gate. Image resolution re-checks each verified tree's fingerprint before
+extracted layer cache or image metadata on tmpfs. Full verification pays temporary extraction
+space and I/O per unique layer, but a recent host-only verification receipt plus an unchanged
+tree fingerprint avoids repeating that work on restart. Compressed blobs are still hashed;
+receipts expire after six hours and content scrubbing refreshes or durably invalidates them.
+See [restart verification](restart-verification.md) for the trust boundary and cold/warm path.
+Image resolution re-checks each verified tree's fingerprint before
 launch — every entry's path, type, mode, owner, size, inode, link count, mtime and ctime,
 without reading file contents — so post-boot loss or modification cannot become a successful
 start (a re-pull repairs it). Every change made through the filesystem moves ctime, which
