@@ -536,8 +536,19 @@ export class Manager {
           fs.statSync(this.disks.layout(row.id).image).size!==8_000_000_000))
         throw new Error("small VM retained sandbox quota/profile mismatch");
     }
+    const phaseStart = process.hrtime.bigint();
+    let phaseAt = phaseStart;
+    const phase = (name: string, fields: Record<string, number | string> = {}): void => {
+      const now = process.hrtime.bigint();
+      this.log.info(
+        { phase: name, ms: Number((now - phaseAt) / 1_000_000n), initMs: Number((now - phaseStart) / 1_000_000n), ...fields },
+        "sandbox init phase",
+      );
+      phaseAt = now;
+    };
     for (const dir of Object.values(this.cfg.paths)) fs.mkdirSync(dir, { recursive: true });
     this.cgroups.ensure({ memoryBytes: this.cfg.fleet.memoryBytes, cpu: this.cfg.fleet.cpu },this.singleton.enabled);
+    phase("cgroups", { rows: this.store.all().length });
     if (this.cfg.hostBackend === "boat") {
       // Observable at every boot so an uncapped boat host can never pass as configured:
       // boat mode already fails closed at config load when the memory cap is missing.
@@ -550,14 +561,19 @@ export class Manager {
       );
     }
     this.normalizeStoredResources();
+    phase("resources", { rows: this.store.all().length });
     await this.network.ensureBridge();
+    phase("bridge");
     await this.reconcile();
+    phase("reconcile", { live: this.store.all().filter((r) => r.tier === "hot" || r.tier === "warm").length });
     await this.recoverJournal();
+    phase("journal");
     if(this.singleton.enabled && this.admission.active().some(r=>r.status==="quarantined"))
       throw new Error("small VM recovery left unresolved admission custody");
     if (this.cfg.hostBackend === "boat") this.store.rebaseTimers(this.clock());
     this.cleanupTenantParents();
     this.housekeeping();
+    phase("housekeeping");
   }
 
   /** Migrate variable legacy guarantees to the fixed floor while preserving them as ceilings. */

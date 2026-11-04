@@ -24,9 +24,32 @@ const VERSION = "0.1.0";
 /** How often verified image lowers have their contents re-hashed after boot. */
 const IMAGE_SCRUB_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * Boot-phase timing. A restart of this service has to adopt the host's whole retained state,
+ * and none of that used to be visible: the API simply did not answer for minutes and the only
+ * symptom was a healthcheck that said `unhealthy`. One line per phase at info level makes the
+ * slow one a measurement instead of an argument, and keeps a long boot explainable in a log.
+ */
+function bootPhases(log: ReturnType<typeof createLogger>) {
+  const started = process.hrtime.bigint();
+  let last = started;
+  return {
+    mark(phase: string, fields: Record<string, number | string> = {}): void {
+      const now = process.hrtime.bigint();
+      log.info(
+        { phase, ms: Number((now - last) / 1_000_000n), totalMs: Number((now - started) / 1_000_000n), ...fields },
+        "sandbox boot phase",
+      );
+      last = now;
+    },
+    elapsedMs: () => Number((process.hrtime.bigint() - started) / 1_000_000n),
+  };
+}
+
 export async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = createLogger(cfg.logLevel);
+  const boot = bootPhases(log);
   const metrics = new Metrics({ defaultMetrics: true, version: VERSION });
   const bootId = randomUUID();
   // A knob the service does not parse is a promise it is not keeping; say so at startup.
@@ -36,12 +59,14 @@ export async function main(): Promise<void> {
   }
 
   const store = new Store(cfg.paths.db);
+  boot.mark("store", { rows: store.all().length });
   if(cfg.serviceObservations.mode==="off" && ShadowObservationJournal.exists(cfg.stateDir))
     throw new Error("retained shadow journal cannot boot with observation mode off");
   const observations=cfg.serviceObservations.mode==="shadow-v1"
     ? new ShadowObservationJournal(cfg.stateDir,cfg.serviceObservations.keyPath!,cfg.serviceObservations.keyId!)
     : null;
   observations?.reconcile(store.all(),bootId,cfg.hostId);
+  if (observations) boot.mark("observations");
   const ociImages = new OciImageStore({
     stateDir: cfg.stateDir,
     auth: cfg.registryAuth,
@@ -51,6 +76,7 @@ export async function main(): Promise<void> {
   // No network, cgroup reconciliation, reaper, or listener until every retained lower
   // has been checked against verified blobs. Boat snapshots can retain empty directories.
   await ociImages.validateAndRepair(store.all().filter((row) => row.tier !== "archived"));
+  boot.mark("image-verify", { requiredRows: store.all().filter((row) => row.tier !== "archived").length });
   const images = instrumentImageStore(ociImages, metrics);
   const runtime = instrumentRuntime(new Runtime(cfg.runtime), metrics);
   const network = new Network(cfg.bridge.name, cfg.bridge.cidr, cfg.dns, undefined, {
@@ -66,7 +92,9 @@ export async function main(): Promise<void> {
     observations: observations ?? undefined,
   });
   await manager.init();
+  boot.mark("manager-init");
   await removeAbandonedImageBuilds(manager, log);
+  boot.mark("image-builds");
 
   const reaper = new Reaper(cfg, store, manager, cgroups, objects, log, metrics);
   reaper.start();
@@ -109,6 +137,7 @@ export async function main(): Promise<void> {
   });
 
   await app.listen({ host: cfg.host, port: cfg.port });
+  boot.mark("listening");
   log.info(
     {
       port: cfg.port,
