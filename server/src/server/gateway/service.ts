@@ -210,7 +210,6 @@ import {
   AGENTD_RECONNECT_GRACE_MS,
   agentdDialUrl,
   agentdSupervisorRunning,
-  classifyTransportFailure,
   ensureAgentdCallbackEgress,
   EGRESS_REAPPLY_COOLDOWN_MS,
   probeControlHostFromDescription,
@@ -902,10 +901,10 @@ export class GatewayService {
                 sandbox,
                 dialUrl: dialUrlForProbe,
                 controlHost: probeControlHostForReplace,
-              }).catch(() => "");
+              }).catch(() => null);
               if (diagnosis) {
                 this.deps.log.warn(
-                  `pod ${pod.id} transport diagnosis [${classifyTransportFailure(diagnosis)}]: ${diagnosis}`,
+                  `pod ${pod.id} transport diagnosis [${diagnosis.kind}]: ${diagnosis.summary}`,
                 );
               }
             }
