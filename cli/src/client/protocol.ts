@@ -4,6 +4,8 @@ export interface ShimHello {
   event: "hello";
   proto: number;
   piVersion: string;
+  /** A failed version lookup is distinct from a confirmed version mismatch. */
+  piVersionError?: { code: string; retryable: boolean };
   shimVersion: string;
   extensionVersion?: number;
   piRunning: boolean;

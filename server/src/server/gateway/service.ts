@@ -2060,6 +2060,17 @@ export class GatewayService {
   ): Promise<{ detach: () => void; handle: (message: ClientMessage) => Promise<void> }> {
     await this.admitSessionHost(session);
 
+    if (session.rpc.helloInfo?.piVersion === "unknown") {
+      // Refresh before committing the client hello. Later control fan-out is deliberately
+      // suppressed, and a CLI still awaiting version readiness drops those controls anyway.
+      // This must never retire a healthy supervisor or interfere with its active work.
+      const identity = await session.rpc.refreshPiIdentity().catch(() => {
+        this.deps.log.warn(`pi version discovery is temporarily unavailable for pod ${session.pod.id}`);
+        return session.rpc.helloInfo;
+      });
+      if (identity && identity.piVersion !== "unknown") verifyHello(identity, { close() {} });
+    }
+
     // Establish an ordered replay-to-live handoff. Once the persistence queue is caught up,
     // capture its watermark and register a buffering sink before doing any more async work.
     // Events above the watermark are buffered, while the durable prefix is replayed first.

@@ -208,6 +208,10 @@ export interface ShimHello {
   event: "hello";
   proto: number;
   piVersion: string;
+  /** Discovery failure is not a confirmed version mismatch. No command output travels here. */
+  piVersionError?: { code: string; retryable: boolean };
+  /** Correlates the v14 attach-time identity refresh, independently of liveness hellos. */
+  identityRequestId?: string;
   shimVersion: string;
   /** Absent on shims created before extension version reporting. */
   extensionVersion?: number;
@@ -306,6 +310,14 @@ export interface ShimShutdown {
 
 }
 
+function piVersionError(value: unknown): ShimHello["piVersionError"] {
+  if (!value || typeof value !== "object") return undefined;
+  const error = value as Record<string, unknown>;
+  if (typeof error.code !== "string" || typeof error.retryable !== "boolean") return undefined;
+  if (!["executable_unavailable", "installation_changed", "invalid_metadata", "metadata_unavailable", "probe_timeout", "probe_failed", "invalid_version"].includes(error.code)) return undefined;
+  return { code: error.code, retryable: error.retryable };
+}
+
 export function parseShimControl(json: string): ShimControlEvent | null {
   let parsed: unknown;
   try {
@@ -323,6 +335,9 @@ export function parseShimControl(json: string): ShimControlEvent | null {
         event: "hello",
         proto: obj["proto"],
         piVersion: String(obj["piVersion"] ?? "unknown"),
+        ...(piVersionError(obj["piVersionError"]) ? { piVersionError: piVersionError(obj["piVersionError"])! } : {}),
+        ...(typeof obj["identityRequestId"] === "string" && obj["identityRequestId"].length <= 128
+          ? { identityRequestId: obj["identityRequestId"] } : {}),
         shimVersion: String(obj["shimVersion"] ?? "unknown"),
         ...(typeof obj["extensionVersion"] === "number" &&
           Number.isInteger(obj["extensionVersion"]) &&

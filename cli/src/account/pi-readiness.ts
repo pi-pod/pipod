@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { verifyHello, verifyHelloEnvelope } from "../client/compat.js";
+import { piVersionDiscoveryError, verifyHello, verifyHelloEnvelope } from "../client/compat.js";
 import { bundledPiVersion, comparePiVersions, installedPiPackage } from "../client/piversion.js";
 import type { ShimHello } from "../client/protocol.js";
 import { PiPodError } from "../errors.js";
@@ -232,7 +232,8 @@ export async function ensureExactPi(opts: EnsureExactPiOptions): Promise<void> {
 
   const comparison = comparePiVersions(hello.piVersion, bundled);
   if (comparison === null) {
-    failClosed(opts.rpc, `the pod reported an unknown or malformed pi version (${hello.piVersion})`);
+    opts.rpc.close();
+    throw piVersionDiscoveryError(hello);
   }
   if (comparison > 0) {
     opts.rpc.close();

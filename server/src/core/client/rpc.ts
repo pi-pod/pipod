@@ -12,6 +12,7 @@
  * account-mode gateway client (account-mode-spec §6.2) implements the same base over a
  * server WebSocket, so pi's real InteractiveMode runs identically over either transport.
  */
+import { randomUUID } from "node:crypto";
 import type {
   AgentSessionEvent,
   JsonAgentSessionEvent,
@@ -157,8 +158,8 @@ export abstract class RpcClientBase {
    * verifies proto and pi version; no hello means the pod is running something other than
    * the shim — most likely a pre-RPC pi-pod session (§11).
    */
-  waitForHello(timeoutMs: number): Promise<ShimHello> {
-    if (this.hello) return Promise.resolve(this.hello);
+  waitForHello(timeoutMs: number, opts: { fresh?: boolean } = {}): Promise<ShimHello> {
+    if (this.hello && !opts.fresh) return Promise.resolve(this.hello);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.helloWaiters = this.helloWaiters.filter((w) => w !== onHello);
@@ -595,6 +596,12 @@ export class RemoteRpcClient extends RpcClientBase {
     resolve: (manifest: ShimTuiManifest | null) => void;
     timer: NodeJS.Timeout;
   }>();
+  private piIdentityProbe: {
+    id: string;
+    promise: Promise<ShimHello>;
+    resolve: (hello: ShimHello) => void;
+    reject: (error: Error) => void;
+  } | null = null;
 
   constructor(opts: RemoteRpcClientOptions) {
     super();
@@ -610,14 +617,60 @@ export class RemoteRpcClient extends RpcClientBase {
   }
 
   /**
-   * Ask the live shim to re-emit hello — the reattach/reconnect handshake (§6.3). Discards
-   * any cached hello first, so the answer reflects the shim's current truth (piRunning may
-   * have changed while no client was watching).
+   * Ask the live shim to re-emit hello — the reattach/reconnect handshake (§6.3). Await a
+   * fresh answer without erasing the last snapshot underneath concurrent client attaches.
    */
   requestHello(timeoutMs: number): Promise<ShimHello> {
-    this.hello = null;
-    this.askForHello();
-    return this.waitForHello(timeoutMs);
+    const answer = this.waitForHello(timeoutMs, { fresh: true });
+    try {
+      this.askForHello();
+    } catch (error) {
+      // The fresh waiter still owns its bounded timer; do not turn a refused write into
+      // an unrelated unhandled rejection when that timer eventually expires.
+      void answer.catch(() => {});
+      return Promise.reject(error);
+    }
+    return answer;
+  }
+
+  /**
+   * Retry a v14 discovery failure without restarting Pi. One bounded request per channel,
+   * shared by concurrent attaches; ordinary liveness hellos cannot satisfy its correlation.
+   * The resulting hello is adopted here, before the gateway sends its client handshake.
+   */
+  refreshPiIdentity(timeoutMs = 23_000): Promise<ShimHello | null> {
+    if (this.piIdentityProbe) return this.piIdentityProbe.promise;
+    const hello = this.hello;
+    if (!hello || hello.piVersion !== "unknown" || !hello.piVersionError?.retryable ||
+        Number(hello.shimVersion) < 14 || !hello.piRunning) return Promise.resolve(hello);
+    if (this.closed) return Promise.reject(new RpcTransportError("the pod channel is closed"));
+
+    const id = randomUUID();
+    let resolveResult!: (hello: ShimHello) => void;
+    let rejectResult!: (error: Error) => void;
+    const promise = new Promise<ShimHello>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    const finish = (error: Error | null, result?: ShimHello): void => {
+      if (this.piIdentityProbe?.id !== id) return;
+      clearTimeout(timer);
+      this.piIdentityProbe = null;
+      if (error) rejectResult(error);
+      else resolveResult(result!);
+    };
+    const timer = setTimeout(() => finish(new Error("timed out verifying the pod's pi version")), timeoutMs);
+    this.piIdentityProbe = {
+      id, promise,
+      resolve: (result) => finish(null, result),
+      reject: (error) => finish(error),
+    };
+    try {
+      this.writeFrame(encodeControlFrame(JSON.stringify({ cmd: "pi_identity", id })));
+    } catch (error) {
+      this.piIdentityProbe.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    return promise;
   }
 
   /** Ask shim v7+ for the cumulative partial it retained while this client was detached. */
@@ -680,6 +733,7 @@ export class RemoteRpcClient extends RpcClientBase {
    */
   rebindChannel(channel: FrameChannel, hello?: ShimHello): void {
     const error = new RpcTransportError("connection to the pi session was replaced");
+    this.piIdentityProbe?.reject(error);
     this.rejectPending(error);
     this.bindChannel(channel);
     // Notify after the new channel is bound so best-effort broker recovery cannot enqueue work
@@ -693,6 +747,7 @@ export class RemoteRpcClient extends RpcClientBase {
     this.channelGeneration++;
     this.closed = true;
     const error = new RpcTransportError("connection to the pi session was replaced");
+    this.piIdentityProbe?.reject(error);
     this.rejectPending(error);
     this.emitLifecycleInvalidation(error);
   }
@@ -732,6 +787,7 @@ export class RemoteRpcClient extends RpcClientBase {
    * so a channel rebound to a different pod (§6.4) starts from that pod's truth.
    */
   resetPodState(): void {
+    this.piIdentityProbe?.reject(new RpcTransportError("the pod session was replaced"));
     this.hello = null;
     this.piExitCode = undefined;
     this.stderrTailBuf = "";
@@ -743,6 +799,7 @@ export class RemoteRpcClient extends RpcClientBase {
     if (this.closed) return;
     this.closed = true;
     const error = new RpcTransportError("connection to the pi session was lost");
+    this.piIdentityProbe?.reject(error);
     this.rejectPending(error);
     this.emitLifecycleInvalidation(error);
   }
@@ -799,6 +856,17 @@ export class RemoteRpcClient extends RpcClientBase {
   private handleControlJson(json: string): void {
     const event = parseShimControl(json);
     if (!event) return;
+    if (event.event === "hello" && event.identityRequestId) {
+      // Late/uncorrelated replies must not overwrite a newer handshake. This response is
+      // readiness bookkeeping only, never transcript noise or a bypass of the client gate.
+      const probe = this.piIdentityProbe;
+      if (probe?.id === event.identityRequestId) {
+        this.acceptHello(event);
+        probe.resolve(event);
+      }
+      return;
+    }
+    if (event.event === "pi_exit") this.piIdentityProbe?.reject(new Error("pi exited during version discovery"));
     if (event.event === "stream_snapshot") {
       const waiters = [...this.streamSnapshotWaiters];
       this.streamSnapshotWaiters.clear();
