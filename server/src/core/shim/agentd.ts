@@ -759,7 +759,7 @@ const UI_SETTINGS_KEYS = [
   "theme", "hideThinkingBlock", "showCacheMissNotices", "quietStartup", "collapseChangelog",
   "doubleEscapeAction", "treeFilterMode", "editorPaddingX", "outputPad", "autocompleteMaxVisible",
   "showHardwareCursor", "markdown", "terminal", "images", "warnings", "tuiMode",
-  "fullscreenExitOutput", "fullscreenScrollbar",
+  "fullscreenExitOutput", "fullscreenScrollbar", "fullscreenCopyOnSelect", "fullscreenWheelScrollLines",
 ];
 const DIGEST_TOP_FILES = ["settings.json", "models.json", "mcporter.json", "subagents.json", "keybindings.json"];
 function statLine(rel, lines) {
@@ -822,8 +822,8 @@ function readAgentSettings(diagnostics) {
   return {};
 }
 function agentDirDigest() {
-  // Invalidate cached pre-model-scope manifests even when the pod's files are unchanged.
-  const lines = ["projection:model-scope-v1"];
+  // Projection changes must invalidate caches even when the pod's files are unchanged.
+  const lines = ["projection:model-scope-v1:fullscreen-mouse-v1"];
   for (const rel of DIGEST_TOP_FILES) statLine(rel, lines);
   statDir("themes", 0, lines);
   statDir("agents", 0, lines);
