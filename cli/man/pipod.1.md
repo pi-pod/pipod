@@ -703,6 +703,12 @@ Quitting detaches: the pod keeps running until the server's idle policy reaps
 it or `pipod stop` stops it. Raw pod shells are not available.
 Attaching to an archived pod offers to restore it first.
 
+The supervisor identifies the exact Pi executable it launched. Managed installations do not
+start a second Pi just to check its version. A failed lookup is retried safely during attach
+when possible, without stopping active work; a discovery failure is reported separately from
+an actual version mismatch. Older supervisors with a cached failed lookup need a stop/attach
+once idle, keeping the workspace files.
+
 Holding a character key types it once, and a press the terminal reports in both of its
 encodings types once too: key repeat stays available for Backspace, Tab and the arrow keys,
 where it is useful while editing.

@@ -63,6 +63,26 @@ export function verifyHelloEnvelope(hello: ShimHello, session: { close(): void }
   if (compatibilityWarning) warn(compatibilityWarning);
 }
 
+/** A failed discovery is not version skew; preserve the healthy pod and name real recovery. */
+export function piVersionDiscoveryError(hello: ShimHello): PiPodError {
+  let reason = "the supervisor could not identify the running Pi";
+  switch (hello.piVersionError?.code) {
+    case "probe_timeout": reason = "the custom Pi command's version check timed out"; break;
+    case "probe_failed": reason = "the custom Pi command's version check failed"; break;
+    case "invalid_version": reason = "the custom Pi command returned an invalid version"; break;
+    case "invalid_metadata": reason = "the installed Pi package metadata is invalid"; break;
+    case "metadata_unavailable": reason = "the installed Pi package metadata could not be read"; break;
+    case "installation_changed": reason = "the Pi installation changed after this session started"; break;
+    case "executable_unavailable": reason = "the Pi executable could not be found or accessed"; break;
+  }
+  const hint = Number(hello.shimVersion) < 14
+    ? "this pod's older supervisor cached a failed lookup; once the session is idle, stop and attach to the same pod to refresh it — workspace files are kept"
+    : hello.piVersionError?.retryable
+      ? "the pod was left running; attach again to retry version discovery without restarting it"
+      : "the pod was left running; check its Pi installation, then restart the pod once idle — workspace files are kept";
+  return new PiPodError(`could not verify the pod's pi version: ${reason}`, { hint });
+}
+
 /** Runtime boundary: only the launcher's exact installed Pi may reach InteractiveMode/RPC prompts. */
 export function verifyHello(hello: ShimHello, session: { close(): void }): void {
   verifyHelloEnvelope(hello, session);
@@ -71,16 +91,14 @@ export function verifyHello(hello: ShimHello, session: { close(): void }): void 
 
   session.close();
   const comparison = comparePiVersions(hello.piVersion, bundled);
+  if (comparison === null) throw piVersionDiscoveryError(hello);
   const base = describeVersionSkew(hello.piVersion, bundled);
-  if (comparison !== null && comparison > 0) {
+  if (comparison > 0) {
     throw new PiPodError("pi version skew: the pod runs a newer pi than this launcher", {
       hint: `${base} — run \`pipod update\`, then attach again; pi pod will not downgrade the pod`,
     });
   }
   throw new PiPodError("pi version skew between this launcher and the pod", {
-    hint:
-      comparison === null
-        ? `${base} — the reported version is unknown or malformed, so the session is refused`
-        : `${base} — the session is refused until the pod is updated automatically`,
+    hint: `${base} — the session is refused until the pod is updated automatically`,
   });
 }
