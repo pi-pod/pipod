@@ -12,8 +12,9 @@
  * At the moment of the flush the distinction is exact: the buffer is either a lone ESC (a key)
  * or an unterminated escape sequence (never a key). Dropping the latter would leave its tail to
  * be typed instead, so the fragment is held for exactly one more read: if the bytes that follow
- * complete a key, the key is delivered as if it had never been split; if they do not, the
- * fragment is discarded and those bytes are read on their own. Bounded by construction — a held
+ * complete a key or fullscreen mouse report, the input is delivered as if it had never split.
+ * Otherwise the fragment is discarded and those bytes are read on their own. Bounded by
+ * construction — a held
  * fragment never survives the next chunk, so a stray fragment cannot swallow typing. Upstream
  * pi-tui still flushes these fragments (1.4.0 only rescues recognizable terminal *replies*), so
  * a version bump cannot fix it for us.
@@ -42,6 +43,8 @@ const PASTE_START = "\x1b[200~";
  */
 const CSI_START = "\x1b[";
 const NEGOTIATION_PREFIX = /^\x1b\[\?[\d;]*$/;
+/** A complete SGR mouse report; following reports/keystrokes belong to the same read. */
+const SGR_MOUSE_REPORT = /^\x1b\[<\d+;\d+;\d+[Mm]/;
 /** Set on the patched method so a second import (or a re-wire) cannot double-wrap it. */
 const PATCHED = Symbol.for("pi-pod.stdin-fragment-guard");
 /** Count of fragments dropped this process — reported only through debug logging. */
@@ -99,7 +102,9 @@ export function guardStdinFragments(): void {
     held.delete(this);
     const text = typeof data === "string" ? data : Buffer.from(data).toString("utf8");
     const rejoined = fragment + text;
-    if (isKey(rejoined)) {
+    // Fullscreen owns mouse input too. Dropping a timed-out report's head would type its
+    // coordinates into the editor. Let StdinBuffer split any coalesced input after the report.
+    if (isKey(rejoined) || SGR_MOUSE_REPORT.test(rejoined)) {
       process.call(this, rejoined);
       return;
     }

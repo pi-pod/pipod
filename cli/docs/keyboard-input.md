@@ -58,9 +58,12 @@ reply is buffered.
 
 At the flush the distinction is exact: the buffer is a lone ESC (a key) or an unterminated
 escape sequence (never a key). The guard holds the fragment for exactly the next read and
-rejoins it only if the two together parse as one key — a split release then behaves as if it
-had never split. Otherwise the fragment is discarded and the user's bytes are read on their
-own, so a stray fragment cannot swallow the next keystroke.
+rejoins it only if the two together parse as one key or start with a complete SGR mouse report
+(`ESC [ < button ; column ; row M/m`). Fullscreen mode captures wheel, click, drag and release
+reports: treating them as non-keys dropped the report's head and typed its coordinates into
+the editor. Any input coalesced after the completed report goes through `StdinBuffer` normally.
+Otherwise the fragment is discarded and the user's bytes are read on their own, so a stray
+fragment cannot swallow the next keystroke.
 
 Fragments shaped like pi-tui's own keyboard-protocol replies are left untouched: the terminal
 reassembles those above the buffer already, and the guard must not starve that path. A split

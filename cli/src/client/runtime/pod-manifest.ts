@@ -130,6 +130,8 @@ const UI_SETTINGS_SCHEMA: Record<string, FieldValidator> = {
   tuiMode: oneOf("regular", "fullscreen"),
   fullscreenExitOutput: oneOf("transcript", "resume-hint"),
   fullscreenScrollbar: oneOf("hidden", "auto", "always"),
+  fullscreenCopyOnSelect: bool,
+  fullscreenWheelScrollLines: (value) => value === "auto" ? value : intIn(1, 100)(value),
 };
 
 export function validateUiSettings(value: unknown): Record<string, unknown> {
