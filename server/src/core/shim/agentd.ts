@@ -1127,8 +1127,9 @@ pi.on("exit", (code, signal) => {
 const DAEMON_RECONNECT_INITIAL_MS = ${opts.daemonReconnectInitialMs ?? 250};
 const DAEMON_RECONNECT_MAX_MS = ${opts.daemonReconnectMaxMs ?? 10_000};
 const DAEMON_PING_INTERVAL_MS = ${opts.daemonPingIntervalMs ?? 15_000};
-// Arms only after the gateway proves it answers pings (\`S {"cmd":"pong"}\`); a half-open
-// socket then reconnects in seconds instead of waiting out the TCP retransmission timeout.
+// Both CONNECTING and OPEN are bounded, including a gateway that never answers its first
+// ping. Liveness recovery replaces only the socket, never Pi or its tools.
+const DAEMON_CONNECT_TIMEOUT_MS = 10000;
 const DAEMON_READ_DEADLINE_MS = ${opts.daemonReadDeadlineMs ?? 45_000};
 const DAEMON_URL = (process.env.PI_POD_SERVER_URL || "").replace(/\\\/+$/, "") + "/v1/pod-transport";
 const DAEMON_TOKEN = process.env.PI_POD_SERVER_TOKEN || "";
@@ -1165,12 +1166,21 @@ function connectDaemon() {
     return;
   }
   daemonSocket = socket;
-  let lastInboundAt = Date.now();
-  let sawPong = false;
+  let lastInboundAt = performance.now();
+  const connectTimer = setTimeout(() => {
+    if (daemonSocket !== socket) return;
+    log("websocket connect deadline exceeded after " + DAEMON_CONNECT_TIMEOUT_MS + "ms; reconnecting");
+    reconnectAfterSocketEnd();
+    socket.removeEventListener("error", onSocketError);
+    socket.addEventListener("error", () => {}, { once: true });
+    try { socket.close(); } catch {}
+  }, DAEMON_CONNECT_TIMEOUT_MS);
   socket.addEventListener("open", () => {
     if (daemonSocket !== socket) return;
+    clearTimeout(connectTimer);
     daemonReconnectAttempt = 0;
-    lastInboundAt = Date.now();
+    lastInboundAt = performance.now();
+    log("websocket transport connected");
     try { fs.writeFileSync(AGENTD_READY_FILE, String(process.pid), { mode: 0o600 }); }
     catch (e) { log("could not write daemon ready file: " + e); }
     emitHello();
@@ -1178,8 +1188,8 @@ function connectDaemon() {
     pumpJournal();
     if (daemonPingTimer) clearInterval(daemonPingTimer);
     daemonPingTimer = setInterval(() => {
-      if (sawPong && Date.now() - lastInboundAt > DAEMON_READ_DEADLINE_MS) {
-        log("transport silent for " + (Date.now() - lastInboundAt) + "ms despite pings; reconnecting");
+      if (performance.now() - lastInboundAt >= DAEMON_READ_DEADLINE_MS) {
+        log("transport silent for " + Math.round(performance.now() - lastInboundAt) + "ms despite pings; reconnecting");
         reconnectAfterSocketEnd();
         socket.addEventListener("error", () => {}, { once: true });
         try { socket.close(); } catch {}
@@ -1191,15 +1201,16 @@ function connectDaemon() {
   });
   socket.addEventListener("message", (event) => {
     if (daemonSocket !== socket || typeof event.data !== "string") return;
-    lastInboundAt = Date.now();
+    lastInboundAt = performance.now();
     if (event.data.startsWith('S ') && event.data.includes('"pong"')) {
-      try { if (JSON.parse(event.data.slice(2)).cmd === "pong") { sawPong = true; return; } } catch {}
+      try { if (JSON.parse(event.data.slice(2)).cmd === "pong") return; } catch {}
     }
     // Each WebSocket text message is exactly one frame line and carries no delimiter.
     handleFrame(Buffer.from(event.data, "utf8"));
   });
   function reconnectAfterSocketEnd() {
     if (daemonSocket !== socket) return;
+    clearTimeout(connectTimer);
     daemonSocket = null;
     clearDaemonReadyFile();
     if (daemonPingTimer) { clearInterval(daemonPingTimer); daemonPingTimer = null; }
@@ -1223,7 +1234,11 @@ function connectDaemon() {
     // Retrying cannot succeed, so the daemon retires itself instead of reconnect-looping —
     // each rejected upgrade otherwise resets the backoff and hammers the gateway forever.
     const code = event && event.code ? event.code : 1006;
-    if (code !== 4001 && code !== 4404 && code !== 4410) { reconnectAfterSocketEnd(); return; }
+    if (code !== 4001 && code !== 4404 && code !== 4410) {
+      log("websocket transport closed (code " + code + "); reconnecting");
+      reconnectAfterSocketEnd(); return;
+    }
+    clearTimeout(connectTimer);
     daemonSocket = null;
     if (daemonPingTimer) { clearInterval(daemonPingTimer); daemonPingTimer = null; }
     log("transport permanently rejected (close " + code + "); daemon exiting");

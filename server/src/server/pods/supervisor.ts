@@ -4,6 +4,9 @@ import type { EgressPolicy, Sandbox } from "../../core/providers/types.js";
 import { shellQuote } from "../../core/providers/util.js";
 import { assertPiResourcesReadable, type PiResourceOverrides } from "./pi-resources.js";
 import { DEFAULT_RUNTIME_PATHS, type PodRuntimePaths } from "./runtime-paths.js";
+import { transportNetworkProbe, type TransportFailureKind } from "./transport-probe.js";
+export { transportNetworkProbe } from "./transport-probe.js";
+export type { TransportFailureKind } from "./transport-probe.js";
 
 /** Long enough to outlive the daemon's bounded 10-second reconnect backoff. */
 export const AGENTD_RECONNECT_GRACE_MS = 12_000;
@@ -12,76 +15,21 @@ const AGENTD_READY_INTERVAL_SECONDS = 0.1;
 const AGENTD_READY_TIMEOUT_SECONDS = AGENTD_READY_ATTEMPTS * AGENTD_READY_INTERVAL_SECONDS;
 const AGENTD_LOG_TAIL_LINES = 8;
 const AGENTD_LOG_TAIL_BYTES = 2_000;
-const PROBE_OUTPUT_BYTES = 600;
-const PROBE_GETENT_TIMEOUT_SECONDS = 3;
-const PROBE_DIAL_TIMEOUT_SECONDS = 12;
-const PROBE_EXEC_TIMEOUT_MS = 20_000;
 /** One stat per requested path on a machine that is already running commands for this launch. */
 const PI_RESOURCE_PROBE_TIMEOUT_MS = 30_000;
 export const EGRESS_REAPPLY_COOLDOWN_MS = 10 * 60 * 1000;
 
-/** Where a transport failure appears to come from, from the in-sandbox probe. */
-export type TransportFailureKind =
-  | "dns-stale-tailscale"
-  | "dns-dead"
-  | "dns-selective"
-  | "tcp-connect"
-  | "tls-http"
-  | "unknown";
-
 export class AgentdTransportUnavailableError extends Error {
   readonly kind: TransportFailureKind;
   readonly probe: string;
-  constructor(message: string, opts: { kind?: TransportFailureKind; probe?: string } = {}) {
+  readonly cradle: "exec" | "pty-cradle";
+  constructor(message: string, opts: { kind?: TransportFailureKind; probe?: string; cradle?: "exec" | "pty-cradle" } = {}) {
     super(message);
     this.name = "AgentdTransportUnavailableError";
     this.kind = opts.kind ?? "unknown";
     this.probe = opts.probe ?? "";
+    this.cradle = opts.cradle ?? "exec";
   }
-}
-
-/**
- * Classify a transport failure from its probe output. DNS kinds mean the pod's
- * own resolution is broken (possibly the stale-Tailscale-resolver outage); they
- * must never trigger a sandbox restart or a live-supervisor replacement — the
- * supervisor may recover on its own once DNS does. Everything else keeps the
- * existing replace-and-retry behavior.
- */
-export function classifyTransportFailure(probe: string): TransportFailureKind {
-  // No positive evidence, no DNS verdict: an unavailable or truncated probe must not
-  // disable the egress heal or preserve a supervisor on a guess. DNS kinds require a
-  // `dns:` line reporting failure (or an explicit python resolve error).
-  if (!probe || !probe.trim()) return "unknown";
-  const lines = probe.split("\n").map((line) => line.trim());
-  const find = (prefix: string): string | undefined =>
-    lines.find((line) => line.startsWith(prefix))?.slice(prefix.length).trim();
-  const resolv = find("resolv:") ?? "";
-  const tailscaled = find("tailscaled:") ?? "";
-  const dns = find("dns:") ?? "";
-  const dnsControl = find("dns-control:") ?? "";
-  const dnsFailed =
-    (dns !== "" && /timed out|did not resolve/i.test(dns)) || /py-resolve-error/i.test(probe);
-  const controlFailed = dnsControl === undefined || dnsControl === "" || /timed out|did not resolve/i.test(dnsControl);
-  const hasTailscaleResolv =
-    resolv.includes("100.100.100.100") || resolv.includes("fd7a:115c:a1e0");
-  if (dnsFailed) {
-    if (hasTailscaleResolv && tailscaled === "gone") return "dns-stale-tailscale";
-    if (dnsControl !== undefined && dnsControl !== "" && !controlFailed) return "dns-selective";
-    return "dns-dead";
-  }
-  if (/tcp-by-ip-error/i.test(probe)) return "tcp-connect";
-  if (/tls-error|http-by-ip-error/i.test(probe)) return "tls-http";
-  return "unknown";
-}
-
-/**
- * Whether a disconnected supervisor should be replaced for this failure kind.
- * DNS outages preserve the live supervisor (and its Pi): replacing it destroys
- * recoverable work without fixing resolution, and the sweep backoff spaces
- * retries until DNS recovers.
- */
-export function shouldReplaceDisconnectedSupervisor(kind: TransportFailureKind): boolean {
-  return kind !== "dns-stale-tailscale" && kind !== "dns-dead" && kind !== "dns-selective";
 }
 
 /**
@@ -183,6 +131,11 @@ export async function stopAgentdSupervisor(
   ], { timeoutMs: 10_000 });
 }
 
+async function supervisorReady(sandbox: Sandbox, paths: PodRuntimePaths): Promise<boolean> {
+  const result = await sandbox.exec(["bash", "-lc", `[ -s ${shellQuote(paths.agentdReady)} ]`], { timeoutMs: 5_000 }).catch(() => null);
+  return result?.exitCode === 0;
+}
+
 function readyWaitScript(paths: PodRuntimePaths): string {
   return (
     `for _ in $(seq 1 ${AGENTD_READY_ATTEMPTS}); do ` +
@@ -225,88 +178,6 @@ export function probeControlHostFromDescription(
   return undefined;
 }
 
-/** One bounded in-sandbox network probe: sandbox clock, DNS for the callback host (with a
- * distinct allowlist control host when available), and a staged dial — TCP connect by resolved
- * IP, a TLS-free HTTP request by IP, then the real HTTPS dial the daemon makes. Transport
- * startup failures include it so a disconnected pod self-reports why it cannot reach the
- * gateway — egress, DNS, TCP/TLS, or clock skew — instead of a bare timeout. */
-export async function transportNetworkProbe(args: {
-  sandbox: Sandbox;
-  dialUrl: string;
-  controlHost?: string;
-}): Promise<string> {
-  const dialHost = new URL(args.dialUrl).hostname;
-  const controlHost = args.controlHost;
-  const python = [
-    "import socket, sys, urllib.request, urllib.error",
-    `host, port = ${JSON.stringify(dialHost)}, 443`,
-    "try:",
-    "    ip = socket.getaddrinfo(host, port)[0][4][0]",
-    "    print('py-resolve:', ip)",
-    "except Exception as e:",
-    "    print('py-resolve-error:', type(e).__name__); sys.exit(0)",
-    "try:",
-    "    s = socket.create_connection((ip, port), 5); s.close()",
-    "    print('tcp-by-ip: ok')",
-    "except Exception as e:",
-    "    print('tcp-by-ip-error:', type(e).__name__, str(e)[:80])",
-    "try:",
-    "    req = urllib.request.Request(f'http://{ip}/v1/pod-transport', headers={'Host': host})",
-    "    r = urllib.request.urlopen(req, timeout=5)",
-    "    print('http-by-ip:', r.status)",
-    "except urllib.error.HTTPError as e:",
-    "    print('http-by-ip:', e.code)",
-    "except Exception as e:",
-    "    print('http-by-ip-error:', type(e).__name__, str(e)[:80])",
-    "try:",
-    `    r = urllib.request.urlopen(${JSON.stringify(args.dialUrl)}, timeout=5)`,
-    "    print('tls:', r.status)",
-    "except urllib.error.HTTPError as e:",
-    "    print('tls:', e.code)",
-    "except Exception as e:",
-    "    print('tls-error:', type(e).__name__, str(e)[:80])",
-  ].join("\n");
-  // Every piece is individually bounded (getent 3s, python 12s under `timeout`, unbuffered so
-  // partial step output survives a kill) so the probe always completes inside the exec
-  // deadline; a wedged resolver or stalled handshake yields its own labeled line instead of
-  // a deadline_exceeded that hides which step hung. `varName` must be a valid bash identifier.
-  //
-  // PIPESTATUS discipline: `${PIPESTATUS[0]}` is only meaningful immediately after a
-  // top-level pipeline. Inside `out=$(cmd | head -1)` it reports the assignment (head's
-  // status), silently swallowing timeout's 124 — so the pipe stays outside the substitution
-  // and `$?` reads timeout/getent directly.
-  const dnsLookup = (varName: string, label: string, host: string) =>
-    `${varName}out=$(timeout ${PROBE_GETENT_TIMEOUT_SECONDS} getent hosts ${shellQuote(host)} 2>/dev/null); ` +
-    `${varName}rc=$?; ` +
-    `${varName}out=$(printf '%s\\n' "$${varName}out" | head -1); ` +
-    `if [ "$${varName}rc" = 124 ]; then echo "${label}: lookup timed out"; ` +
-    `elif [ -z "$${varName}out" ]; then echo "${label}: ${host} did not resolve"; ` +
-    `else echo "${label}: $${varName}out"; fi; `;
-  // Resolver ownership (whose nameservers are these?) and daemon availability ride along
-  // so a stale Tailscale resolver is recognizable without a second round trip. The 124
-  // branch is a timed-out dial, not a missing python: only 127 means python3 is absent.
-  const script =
-    `echo "utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"; ` +
-    `echo "resolv: $(grep -E '^\\s*nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | tr '\\n' ' ')"; ` +
-    `if (pgrep -x tailscaled >/dev/null 2>&1 || ps -eo comm= 2>/dev/null | grep -qx tailscaled); then echo "tailscaled: live"; else echo "tailscaled: gone"; fi; ` +
-    dnsLookup("dns", "dns", dialHost) +
-    (controlHost ? dnsLookup("dnsc", "dns-control", controlHost) : "") +
-    `timeout ${PROBE_DIAL_TIMEOUT_SECONDS} python3 -u -c ${shellQuote(python)} 2>&1; ` +
-    `pyrc=$?; ` +
-    `if [ "$pyrc" = 124 ]; then echo "dial: probe timed out after ${PROBE_DIAL_TIMEOUT_SECONDS}s"; ` +
-    `elif [ "$pyrc" = 127 ]; then echo "dial: python3 probe unavailable ($pyrc)"; ` +
-    `elif [ "$pyrc" -ne 0 ]; then echo "dial: probe failed ($pyrc)"; fi`;
-  const result = await args.sandbox.exec(["bash", "-lc", script], {
-    timeoutMs: PROBE_EXEC_TIMEOUT_MS,
-  }).catch(
-    (e) => ({ exitCode: 1, output: `probe unavailable: ${e instanceof Error ? e.message : String(e)}` }),
-  );
-  return (result.output ?? "")
-    .replace(/Bearer\s+\S+/gi, "Bearer <redacted>")
-    .trim()
-    .slice(-PROBE_OUTPUT_BYTES);
-}
-
 /** The daemon's dial URL: server base URL plus the transport path, with the same
  * trailing-slash normalization the generated shim performs. */
 export function agentdDialUrl(serverUrl: string | undefined): string | undefined {
@@ -318,6 +189,7 @@ async function transportStartupError(
   paths: PodRuntimePaths,
   dialUrl: string | undefined,
   controlHost: string | undefined,
+  cradle: "exec" | "pty-cradle" = "exec",
 ): Promise<AgentdTransportUnavailableError> {
   const [tail, probe] = await Promise.all([
     sandbox.exec([
@@ -326,20 +198,20 @@ async function transportStartupError(
       `tail -n ${AGENTD_LOG_TAIL_LINES} ${shellQuote(paths.shimLog)} 2>/dev/null || true`,
     ], { timeoutMs: 5_000 }).catch(() => null),
     dialUrl
-      ? transportNetworkProbe({ sandbox, dialUrl, controlHost }).catch(() => "probe unavailable")
-      : "",
+      ? transportNetworkProbe({ sandbox, dialUrl, controlHost })
+      : null,
   ]);
   const detail = (tail?.output ?? "")
     .replace(/Bearer\s+\S+/gi, "Bearer <redacted>")
     .trim()
     .slice(-AGENTD_LOG_TAIL_BYTES);
-  const kind = probe ? classifyTransportFailure(probe) : "unknown";
+  const kind = probe?.kind ?? "unknown";
   const segments = [
     `pod transport supervisor stayed alive but did not connect within ${AGENTD_READY_TIMEOUT_SECONDS}s`,
-    probe ? `network probe [${kind}]: ${probe}` : "",
+    probe ? `network probe [${kind}]: ${probe.summary}` : "",
     detail,
   ].filter(Boolean);
-  return new AgentdTransportUnavailableError(segments.join(" — "), { kind, probe: probe ?? "" });
+  return new AgentdTransportUnavailableError(segments.join(" — "), { kind, probe: probe?.summary ?? "", cradle });
 }
 
 /** Start the WS supervisor and return only after it has opened its outbound transport.
@@ -390,12 +262,20 @@ export async function startAgentdSupervisor(args: {
       agentdDialUrl(args.env.PI_POD_SERVER_URL),
       args.probeControlHost,
     );
-    // A DNS-classified startup failure keeps the fresh supervisor: killing it would
-    // destroy the initial Pi even though only pod DNS is dead, and the sweep backoff
-    // retries attach (which re-probes) once resolution recovers.
-    if (shouldReplaceDisconnectedSupervisor(error.kind)) {
-      await stopAgentdSupervisor(args.sandbox, paths);
-    }
+    // Diagnosis is bounded but takes time: adopt a connection that arrived meanwhile.
+    if (await supervisorReady(args.sandbox, paths)) return "exec";
+    // Connectivity is never evidence of process death. Preserve Pi for every failure kind.
+    throw error;
+  }
+  // An interrupted provider exec does not prove the detached process died. Never create a
+  // second cradle beside a live or unknown supervisor; the next attach can adopt it.
+  const running = await agentdSupervisorRunning(args.sandbox, paths).catch(() => null);
+  if (running === null) {
+    throw new AgentdTransportUnavailableError("pod supervisor state could not be verified; it was left untouched — retry");
+  }
+  if (running) {
+    const error = await transportStartupError(args.sandbox, paths, agentdDialUrl(args.env.PI_POD_SERVER_URL), args.probeControlHost);
+    if (await supervisorReady(args.sandbox, paths)) return "exec";
     throw error;
   }
 
@@ -417,10 +297,9 @@ export async function startAgentdSupervisor(args: {
       paths,
       agentdDialUrl(args.env.PI_POD_SERVER_URL),
       args.probeControlHost,
+      "pty-cradle",
     );
-    if (shouldReplaceDisconnectedSupervisor(error.kind)) {
-      await stopAgentdSupervisor(args.sandbox, paths);
-    }
+    if (await supervisorReady(args.sandbox, paths)) return "pty-cradle";
     throw error;
   }
   setTimeout(() => cradle.close(), 1_000).unref?.();
@@ -434,7 +313,7 @@ function withEgressContext(
   if (!(error instanceof AgentdTransportUnavailableError)) return error;
   return new AgentdTransportUnavailableError(
     `${error.message} — egress policy: ${description.slice(0, 400)}`,
-    { kind: error.kind, probe: error.probe },
+    { kind: error.kind, probe: error.probe, cradle: error.cradle },
   );
 }
 
@@ -469,12 +348,9 @@ export async function startAgentdSupervisorWithEgressHeal(args: {
     const description = args.egressDescription;
     if (!description) throw error;
     const policy = egressPolicyFromDescription(description);
-    // A DNS-classified failure is the pod's own resolution, not provider enforcement:
-    // re-applying egress cannot fix it, so skip the provider mutation and report directly.
-    if (error instanceof AgentdTransportUnavailableError && !shouldReplaceDisconnectedSupervisor(error.kind)) {
-      throw withEgressContext(error, description);
-    }
-    if (!(error instanceof AgentdTransportUnavailableError) || args.reapplyEgress === false || !policy || !args.sandbox.updateEgress) {
+    // Only a demonstrated TCP failure can justify changing provider enforcement. DNS,
+    // reachable callbacks, TLS/HTTP and unavailable probes are not egress evidence.
+    if (!(error instanceof AgentdTransportUnavailableError) || error.kind !== "tcp-connect" || args.reapplyEgress === false || !policy || !args.sandbox.updateEgress) {
       throw withEgressContext(error, description);
     }
     try {
@@ -484,8 +360,11 @@ export async function startAgentdSupervisorWithEgressHeal(args: {
       throw withEgressContext(error, description);
     }
     try {
-      const cradle = await startAgentdSupervisor(base());
-      return { cradle, egressReapplied: true };
+      // Heal networking, not processes: the same daemon owns Pi and retries its socket.
+      const ready = await args.sandbox.exec(["bash", "-lc", readyWaitScript(args.paths ?? DEFAULT_RUNTIME_PATHS)], { timeoutMs: 20_000 });
+      if (ready.exitCode === 0) return { cradle: error.cradle, egressReapplied: true };
+      throw await transportStartupError(args.sandbox, args.paths ?? DEFAULT_RUNTIME_PATHS,
+        agentdDialUrl(args.env.PI_POD_SERVER_URL), args.probeControlHost, error.cradle);
     } catch (retry) {
       throw withEgressContext(retry, description);
     }
