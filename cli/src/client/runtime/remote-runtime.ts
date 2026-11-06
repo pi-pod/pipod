@@ -420,6 +420,10 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     // surface that answers as it is disposed would beat the abandon flag otherwise.
     beforeSessionInvalidate?.();
     extensionUi.invalidateDialogs(dialogs);
+    // Invalidation clears Pi's extension input listeners, but the editor keeps accepting
+    // keys throughout the asynchronous refresh (and if it fails). Restore the launcher's
+    // guards now, not just when the refreshed session eventually binds its UI.
+    bridge.rewireUi();
     await cache.reset();
     await refreshThinkingLevels();
     await authBridge.refresh();
