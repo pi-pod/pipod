@@ -1,9 +1,9 @@
 # Keyboard input in the attached TUI
 
-Three input defects turn one key press into several characters, the same character twice, or
-into escape-sequence gibberish. All live in the local byte path — nothing typed crosses the
-wire — and all are fixed in `src/client/runtime/` rather than by pinning a different pi-tui,
-because the pinned version is what pods and the launcher share.
+Input defects can turn one key press into several characters, the same character twice, or
+into escape-sequence gibberish. These guards run in the local byte path, ahead of both the
+built-in editor and pod-rendered extension editors. They live in `src/client/runtime/` rather
+than pinning a different pi-tui, because pods and the launcher share the pinned version.
 
 ## The path
 
@@ -100,6 +100,25 @@ disappear. Releases and repeats otherwise stay with `key-repeat-guard.ts`, which
 Left open deliberately: the reversed order (raw text first, then the CSI-u). No observed
 terminal writes it, and deduping it would mean dropping a key *event* on suspicion — the one
 direction where a mistake loses input.
+
+## 4. Reconnect must not leave the editor unguarded
+
+Session replacement clears Pi's extension UI before asynchronously refreshing the remote
+state. That also removes the launcher's input listeners, even though the same local editor
+continues accepting keys. Previously the guards returned only when the refreshed session
+bound its UI: typing during recovery bypassed both the encoding and repeat guards. A failed
+refresh could leave them absent until a later successful recovery. The socket being connected
+does not mean this refresh has finished.
+
+`remote-runtime.ts` now rewires the launcher's listeners synchronously after invalidating the
+old UI, before awaiting any refresh. The normal UI bind still unsubscribes and rewires them
+against the new context. This keeps one set of guards active throughout reconnect, pod switch,
+and session replacement, including refresh failures, without restarting the terminal or
+suppressing deliberate repeated presses.
+
+Measured on a live pod with the pinned Pi pair: a single dual-encoded press during the real
+reconnect refresh inserted `bb` before the fix and `b` after it. The terminal retained one stdin
+reader; the defect was a missing guard during recovery, not duplicate stdin subscriptions.
 
 ## Accepted rows
 
