@@ -67,7 +67,9 @@ function codeForm(go) {
 export async function wholeAccountPage(rawCode) {
   const code = rawCode ? normalizeCode(decodeURIComponent(rawCode)) : "";
   const { issuer } = await signInConfig();
-  const target = new URL(`${issuer.replace(/\/+$/, "")}/ui/login/device`);
+  // The identity provider's own device verification address (RFC 8628 verification_uri), which
+  // takes the code from the query and sends the person on to whichever login UI it runs.
+  const target = new URL(`${issuer.replace(/\/+$/, "")}/device`);
   if (code) target.searchParams.set("user_code", code);
   return [
     el(

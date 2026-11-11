@@ -335,7 +335,8 @@ is for the whole account.
 A limited sign-in keeps no Zitadel token on the machine: the server holds your session and
 issues the machine its own tokens, which nothing but this server accepts. It lasts as long as
 your own sign-in would (30 days without use, 90 at most, on a default self-hosted server) and
-ends when your account is removed. `pipod logout` ends it.
+ends when your account is removed. `pipod logout` ends it. Signing a machine in with
+`--template` ends the sign-in it replaces there, full or limited, so no wider token outlives it.
 
 `~/.pi-pod/auth.json` keeps its shape for a limited sign-in: `serverUrl`, `accessToken` and
 `refreshToken` are where they were, and two fields are added, `limitedTo` (`templateId`,
