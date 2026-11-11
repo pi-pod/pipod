@@ -19,13 +19,12 @@ import type { ServerEnv } from "../env.js";
 import { HttpError, conflict, serviceUnavailable } from "../httperrors.js";
 import { sanitizeFailureMessage } from "../safe-errors.js";
 import { credentialProvidersFor } from "../model-credentials/dependencies.js";
-import { acquireLease } from "../model-credentials/lease.js";
+import { leaseForPod } from "../model-credentials/lease.js";
 import {
   materializeCredentialLease,
   persistPodCredentialContract,
   readPodCredentialContract,
 } from "../model-credentials/materializer.js";
-import { MIN_VALIDITY_MS } from "../model-credentials/refresh.js";
 import { uuidv7 } from "../ids.js";
 import type { KekProvider } from "../secrets/crypto.js";
 import { resolvePodEnv } from "../pods/launchenv.js";
@@ -340,17 +339,15 @@ export async function extendPodCredentialContractForModel(args: {
   const next = [...new Set([...current, ...dependencies])].sort();
   await persistPodCredentialContract(pod.id, next);
   try {
-    const { lease, failures } = await acquireLease(
-      args.kek,
-      { orgId: pod.org_id, userId: pod.user_id },
-      next,
-      MIN_VALIDITY_MS,
-    );
+    const { lease, failures } = await leaseForPod(args.kek, pod, next);
     for (const providerId of added) {
-      if (failures[providerId]?.state !== "reconnect_required") continue;
+      const failure = failures[providerId];
+      if (failure?.state !== "reconnect_required") continue;
       throw new HttpError(409, "credential_reconnect_required", {
         code: "credential_reconnect_required",
-        message: `Reconnect the ${providerId} account credential before switching models.`,
+        message: failure.sharedBy
+          ? `The ${providerId} credential shared with you by ${failure.sharedBy} needs reconnecting before switching models; they can reconnect it, or connect your own.`
+          : `Reconnect the ${providerId} account credential before switching models.`,
         provider: providerId,
         requiredBy: args.modelProvider,
       });

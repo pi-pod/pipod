@@ -431,7 +431,7 @@ export interface ApiJobRun {
   finishedAt: string | null;
 }
 
-export type CredentialStatus =
+export type CredentialStatus = (
   | {
       providerId: string;
       type: "oauth" | "api_key";
@@ -453,7 +453,27 @@ export type CredentialStatus =
       state: "temporarily_unavailable";
       retryAfter?: string;
       revision: number;
-    };
+    }
+) & CredentialSource;
+
+/**
+ * Where a listed credential comes from (servers before credential sharing omit all three):
+ * your own, which `sharedWith` lists the members you share it with, or one `sharedBy` shared
+ * with you.
+ */
+export interface CredentialSource {
+  source?: "own" | "shared";
+  sharedBy?: string;
+  sharedWith?: string[];
+}
+
+export interface CredentialListing {
+  /** One per provider: the credential that serves your pods. */
+  credentials: CredentialStatus[];
+  /** Credentials shared with you that your own credential for the same provider overrides. */
+  overriddenShares?: CredentialStatus[];
+  providers: ConnectableProvider[];
+}
 
 export interface ConnectableProvider {
   id: string;
@@ -1138,7 +1158,7 @@ export class AccountClient {
     return this.request(`/jobs/${id}/runs`);
   }
 
-  modelCredentials(): Promise<{ credentials: CredentialStatus[]; providers: ConnectableProvider[] }> {
+  modelCredentials(): Promise<CredentialListing> {
     return this.request("/model-credentials");
   }
 
@@ -1165,6 +1185,18 @@ export class AccountClient {
 
   deleteModelCredential(providerId: string): Promise<void> {
     return this.request(`/model-credentials/${encodeURIComponent(providerId)}`, { method: "DELETE" });
+  }
+
+  shareModelCredential(providerId: string, email: string): Promise<{ providerId: string; sharedWith: string; created: boolean }> {
+    return this.request(this.sharePath(providerId, email), { method: "PUT" });
+  }
+
+  unshareModelCredential(providerId: string, email: string): Promise<void> {
+    return this.request(this.sharePath(providerId, email), { method: "DELETE" });
+  }
+
+  private sharePath(providerId: string, email: string): string {
+    return `/model-credentials/${encodeURIComponent(providerId)}/shares/${encodeURIComponent(email)}`;
   }
 
 
@@ -1211,6 +1243,12 @@ export function credentialProtocolError(
         code,
         hint: "run `pipod update`",
       });
+    case "credential_shared":
+      return new PiPodError(message ?? `${namedProvider} is shared with you; only its owner can change it`, {
+        status: opts.status,
+        code,
+        hint: `\`pipod credentials connect ${namedProvider}\` connects your own, which your pods then use instead`,
+      });
     default:
       return new PiPodError(message ?? `credential operation failed (${code})`, {
         status: opts.status,
@@ -1233,6 +1271,13 @@ async function responseError(res: Response, method: string, apiPath: string): Pr
     "credential_temporarily_unavailable",
     "credential_provider_unsupported",
     "client_upgrade_required",
+    // Credential sharing refusals: the server's message names the provider and the people.
+    "credential_shared",
+    "credential_already_shared",
+    "credential_not_found",
+    "member_not_found",
+    "member_ambiguous",
+    "cannot_share_with_self",
   ].includes(detail.code)) {
     const typedMessage = detail.message ?? (
       detail.code === "client_upgrade_required" && detail.minimumVersion

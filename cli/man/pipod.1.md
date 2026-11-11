@@ -35,7 +35,7 @@ Account commands:
   account                Open the Zitadel self-service console
   org-admin              Open the Zitadel Console for this organization
   billing                Open Stripe Checkout or the billing portal (authenticated)
-  credentials            Connect account model-provider sign-ins
+  credentials            Connect and share account model-provider sign-ins
 
 Configuration commands:
   init                   Scaffold .pi-pod/ config, env, env.example, and init.sh
@@ -122,7 +122,8 @@ sign-in, the server, your organization and roles, and what a launch here would r
 
 `pipod credentials connect` connects every provider your local pi is signed in to;
 `pipod credentials connect <provider>` signs in to one. The sign-ins belong to your account
-and apply to every pod you launch.
+and apply to every pod you launch. Someone in your organization can instead share theirs with
+you (`pipod credentials share`); `pipod credentials` shows which one your pods use.
 
 ### 4. Organization defaults
 
@@ -378,7 +379,8 @@ every pod you launch; OAuth refresh tokens stay in server custody and never
 reach pods or this machine.
 
 Actions:
-  list                       Saved credentials and connectable providers (default)
+  list                       The credential each provider uses, where it comes
+                             from, and connectable providers (default)
   connect                    Connect every provider your local pi is signed in to:
                              API keys are imported, everything else is a fresh
                              account login; ready credentials are left alone
@@ -386,6 +388,11 @@ Actions:
   reconnect <provider>       Redo the sign-in for a saved credential
   test <provider>            Verify a saved credential against the provider
   remove <provider> [--yes]  Delete a saved credential (alias: rm)
+  share <provider> --with <email>
+                             Let a member of your organization use your
+                             credential for this provider in their pods
+  unshare <provider> --with <email>
+                             Stop sharing it with them
 
 connect options:
   --api-key            Enter an API key instead of the OAuth flow
@@ -397,6 +404,20 @@ connect options:
 `connect` and `reconnect` need a person, for the browser sign-in or the hidden key prompt;
 `list` and `test` do not. A model-provider key is a credential here, not a secret: a template
 refuses one.
+
+For each provider, at launch and at every token refresh, a pod uses its launcher's own
+credential if they have one, otherwise the one shared with them, otherwise none. Connecting
+your own moves your pods to it; removing it moves them back to the shared one. Your own wins
+even when it needs reconnecting, so whose account pays never changes without you. A person
+can hold one shared credential per provider: a second `share` of the same provider with them
+is refused, naming who already shares it.
+
+A shared credential stays in the owner's custody. The other person's pods receive the same
+short-lived access token the owner's pods do; they can `test` it, but not reconnect, remove
+or re-share it. `unshare`, or removing the credential, takes effect at their pods' next token
+refresh, within about ten minutes. You can share only with people who have signed in to the
+organization. Shares and each pod's use of a shared credential appear in the organization's
+audit log.
 
 ### pipod init
 

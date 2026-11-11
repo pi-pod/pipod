@@ -255,7 +255,9 @@ connects the provider in the pi pod app under **Settings → Model providers**, 
 \`pipod credentials connect <provider>\`, or with \`/login\` while attached to a pod from the
 pipod CLI. ChatGPT plans sign in through the \`openai\` provider ("Sign in with ChatGPT");
 \`openai-codex\` is pi's legacy route. Signing in is deliberately human-only — you cannot do it
-for them. If a sign-in stops working, they reconnect it the same way.
+for them. If a sign-in stops working, they reconnect it the same way. Someone in their
+organization may share a credential with them instead (\`pipod credentials\` shows "shared by");
+that one only its owner can reconnect, and connecting their own replaces it for their pods.
 
 ## Init and bake scripts
 
