@@ -141,6 +141,8 @@ export async function reusePod(
     legacyLaunchInputsPresent?: boolean;
     provider?: string | null;
     piOverrides?: PiLaunchOverrides | null;
+    /** The limited sign-in that asked for this launch, recorded in its audit entry. */
+    limitedSignInId?: string | null;
   },
 ): Promise<PodLaunchResult> {
   assertLaunchContextSupported(args.launchContext);
@@ -254,7 +256,11 @@ export async function reusePod(
     action: "pod.reuse",
     targetType: "pod",
     targetId: pod.id,
-    detail: { provider: providerName, secretKeys: report.secretKeys },
+    detail: {
+      provider: providerName,
+      secretKeys: report.secretKeys,
+      ...(args.limitedSignInId ? { limitedSignIn: args.limitedSignInId } : {}),
+    },
   });
 
   void provisionReuse(deps, {

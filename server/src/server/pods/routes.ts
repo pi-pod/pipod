@@ -37,7 +37,8 @@ import {
 } from "./service.js";
 import { platformCredentialsOf, withProviderCredential } from "./providercred.js";
 import { edition } from "../edition.js";
-import { assertPodAccess } from "./access.js";
+import { assertPodAccess, assertWithinLimit } from "./access.js";
+import { limitedLaunchTemplateId } from "../auth/limited-sign-in.js";
 import { lookupPodRef } from "./ref-lookup.js";
 import {
   assertPodTokenReach,
@@ -498,7 +499,7 @@ export function registerPodRoutes(
     "/pods",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       // Keep the legacy body allowance during the ignore-with-warning compatibility window.
       bodyLimit: 2 * 1024 * 1024,
       schema: {
@@ -509,6 +510,9 @@ export function registerPodRoutes(
     },
     async (req, reply) => {
       if (!req.auth.podId) requirePermission(req.auth, "pods:launch");
+      // A limited sign-in launches from its own template, named or not, and from no other.
+      const requestedTemplateId = await limitedLaunchTemplateId(req.auth, req.body.templateId);
+      const limitedSignInId = req.auth.limitedTo?.signInId ?? null;
       if (req.body.operationId) {
         // The first idempotent contract covers the native empty/template launch
         // path only. Other launch shapes keep their established unkeyed flow.
@@ -521,7 +525,7 @@ export function registerPodRoutes(
         // PostgreSQL normalizes uuid columns to lowercase. Do it before the
         // frozen-input comparison so an uppercase retry stays the same launch.
         const operationId = req.body.operationId.toLowerCase();
-        const templateId = req.body.templateId?.toLowerCase() ?? null;
+        const templateId = requestedTemplateId?.toLowerCase() ?? null;
         const reservation = await reserveLaunchOperation({
           orgId: req.auth.orgId,
           userId: req.auth.userId,
@@ -549,6 +553,7 @@ export function registerPodRoutes(
             userId: req.auth.userId,
             templateId,
             launchOperation: claim,
+            limitedSignInId,
           });
           return reply.code(201).send({ pod: toApi(pod, gateway), report: clientFacingReport(report) });
         } catch (error) {
@@ -611,12 +616,13 @@ export function registerPodRoutes(
           userId: req.auth.userId,
           hostPod: host,
           parentPodId: req.auth.podId ?? null,
-          templateId: req.body.templateId ?? null,
+          templateId: requestedTemplateId,
           project: req.body.project
             ? { name: req.body.project.name, config: {}, env: {}, initScript: "", bakeScript: "" }
             : null,
           legacyLaunchInputsPresent: retiredLaunchInputs(req.body),
           piOverrides: req.body.piOverrides ?? null,
+          limitedSignInId,
         });
         return reply.code(201).send({ pod: toApi(pod, gateway), report: clientFacingReport(report) });
       }
@@ -625,7 +631,7 @@ export function registerPodRoutes(
         userId: req.auth.userId,
         // Never from the body: a pod's parentage is its authenticated identity.
         parentPodId: req.auth.podId ?? null,
-        templateId: req.body.templateId ?? null,
+        templateId: requestedTemplateId,
         project: req.body.project
           ? { name: req.body.project.name, config: {}, env: {}, initScript: "", bakeScript: "" }
           : null,
@@ -634,6 +640,7 @@ export function registerPodRoutes(
         piOverrides: req.body.piOverrides ?? null,
         forkFrom: req.body.forkFrom ?? null,
         workspaceSeed: req.body.workspaceSeed ?? false,
+        limitedSignInId,
       });
       return reply.code(201).send({ pod: toApi(pod, gateway), report: clientFacingReport(report) });
     },
@@ -671,6 +678,7 @@ export function registerPodRoutes(
     "/pods/:id/prompts",
     {
       preHandler: [app.authenticate],
+      config: { allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({
@@ -751,6 +759,7 @@ export function registerPodRoutes(
     "/pods/:id/prompts/:promptId",
     {
       preHandler: [app.authenticate],
+      config: { allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid(), promptId: z.string().uuid() }),
       },
@@ -782,6 +791,7 @@ export function registerPodRoutes(
     "/pods/:id/reuse",
     {
       preHandler: [app.authenticate],
+      config: { allowLimitedSignIn: true },
       bodyLimit: 2 * 1024 * 1024,
       schema: { params: z.object({ id: z.string().uuid() }), body: LaunchBody },
     },
@@ -790,11 +800,15 @@ export function registerPodRoutes(
       if (req.body.forkFrom) {
         throw badRequest("forking cannot be combined with pod reuse");
       }
+      // A limited sign-in relaunches only its own pods from its template, onto that template.
+      const templateId = await limitedLaunchTemplateId(req.auth, req.body.templateId);
+      if (req.auth.limitedTo) await assertPodAccess(await getPod(req.auth.orgId, req.params.id), req.auth);
       const { pod, report } = await reusePod(deps, {
         podId: req.params.id,
         orgId: req.auth.orgId,
         userId: req.auth.userId,
-        templateId: req.body.templateId ?? null,
+        limitedSignInId: req.auth.limitedTo?.signInId ?? null,
+        templateId,
         project: req.body.project
           ? { name: req.body.project.name, config: {}, env: {}, initScript: "", bakeScript: "" }
           : null,
@@ -813,7 +827,7 @@ export function registerPodRoutes(
     "/pods/resolve",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         // Query rather than body keeps new clients compatible with older strict-body servers.
         querystring: ResolveQuerySchema,
@@ -847,7 +861,7 @@ export function registerPodRoutes(
         delegation: req.auth.podId
           ? await parentDelegation({ query }, { orgId: req.auth.orgId, parentPodId: req.auth.podId })
           : null,
-        templateId: req.body.templateId ?? null,
+        templateId: await limitedLaunchTemplateId(req.auth, req.body.templateId),
         projectConfigRaw: req.body.projectConfig ?? null,
         legacyLaunchInputsPresent:
           req.body.hostConfig !== undefined ||
@@ -929,7 +943,7 @@ export function registerPodRoutes(
     "/pods",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         querystring: z.object({
           state: z.enum(["active", "archived"]).optional(),
@@ -971,15 +985,20 @@ export function registerPodRoutes(
       if (req.query.cursor && req.query.before) {
         throw badRequest("use cursor or before, not both");
       }
+      // A limited sign-in lists only what it reaches: its account's pods from its template.
+      const limit = req.auth.limitedTo;
+      if (limit && req.query.templateId && req.query.templateId.toLowerCase() !== limit.templateId) {
+        return { pods: [], nextCursor: null };
+      }
       const rows = await listPods({
         orgId: req.auth.orgId,
         state: req.query.state ?? null,
-        userId: req.query.mine ? req.auth.userId : null,
+        userId: req.query.mine || limit ? req.auth.userId : null,
         before: req.query.before ?? null,
         cursor: req.query.cursor ?? null,
         limit: req.query.limit + 1,
         project: req.query.project ?? null,
-        templateId: req.query.templateId ?? null,
+        templateId: limit ? limit.templateId : (req.query.templateId ?? null),
         lineageRootPodId: req.auth.podId ?? null,
         includeGone: req.query.includeGone,
       });
@@ -1000,7 +1019,7 @@ export function registerPodRoutes(
     "/pods/by-ref/:ref",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: { params: z.object({ ref: z.string().min(1).max(512) }) },
     },
     async (req) => {
@@ -1008,6 +1027,7 @@ export function registerPodRoutes(
         orgId: req.auth.orgId,
         userId: req.auth.userId,
         lineageRootPodId: req.auth.podId ?? null,
+        templateId: req.auth.limitedTo?.templateId ?? null,
         ref: req.params.ref,
       });
       let pod = null;
@@ -1024,6 +1044,7 @@ export function registerPodRoutes(
         // Recheck ownership and lineage after hydration, not just in the lookup.
         // Missing matches stay 200 so 404 remains an old-server capability signal.
         if (row.user_id !== req.auth.userId) return { pod: null, matches: [], total: 0 };
+        assertWithinLimit(row, req.auth);
         await assertPodTokenScope(row, req.auth, "inspect", { allowSelf: true });
         pod = viewFor(toApi(row, gateway), req.auth);
       }
@@ -1038,7 +1059,7 @@ export function registerPodRoutes(
     "/pods/:id",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         querystring: z.object({
@@ -1051,6 +1072,7 @@ export function registerPodRoutes(
         query: (text: string, params?: unknown[]) => query(text, params ?? []),
       };
       let pod = await getPod(req.auth.orgId, req.params.id);
+      assertWithinLimit(pod, req.auth);
       await assertPodTokenScope(pod, req.auth, "inspect", { allowSelf: true });
       // Bounded capacity wait state (§6.6, capacity-contract.md): waiting vs
       // final-deadline failure, attempts, and cancel — null when never queued.
@@ -1092,7 +1114,7 @@ export function registerPodRoutes(
     "/pods/:id/capacity-wait",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req, reply) => {
@@ -1112,7 +1134,7 @@ export function registerPodRoutes(
     "/pods/:id/capacity-wait",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req, reply) => {
@@ -1204,7 +1226,7 @@ export function registerPodRoutes(
     "/pods/:id",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({ name: z.string().min(1).max(200) }).strict(),
@@ -1237,7 +1259,7 @@ export function registerPodRoutes(
     "/pods/:id/stop",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req) => {
@@ -1271,7 +1293,7 @@ export function registerPodRoutes(
       `/pods/:id/${action}`,
       {
         preHandler: [app.authenticate],
-        config: { allowPodToken: true },
+        config: { allowPodToken: true, allowLimitedSignIn: true },
         schema: { params: z.object({ id: z.string().uuid() }) },
       },
       async (req) => {
@@ -1318,7 +1340,7 @@ export function registerPodRoutes(
     "/pods/:id",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         querystring: z.object({
@@ -1413,7 +1435,7 @@ export function registerPodRoutes(
     "/pods/:id/files",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       bodyLimit: SEND_BODY_LIMIT_BYTES,
       schema: {
         params: z.object({ id: z.string().uuid() }),
@@ -1525,7 +1547,7 @@ export function registerPodRoutes(
     "/pods/:id/files",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         querystring: z.object({ path: z.string().min(1).max(1024) }).strict(),
@@ -1730,7 +1752,7 @@ export function registerPodRoutes(
     "/pods/:id/workspace/clone",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       bodyLimit: 64 * 1024,
       schema: {
         params: z.object({ id: z.string().uuid() }),
@@ -1812,7 +1834,7 @@ export function registerPodRoutes(
     "/pods/:id/workspace/archive",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
       },
@@ -1907,7 +1929,7 @@ export function registerPodRoutes(
     "/pods/:id/workspace/skip",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         body: z.object({ reason: z.string().max(512).optional() }).strict().optional(),
@@ -1967,7 +1989,7 @@ export function registerPodRoutes(
     "/pods/:id/ws-ticket",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req, reply) => {
@@ -1985,6 +2007,7 @@ export function registerPodRoutes(
     "/pods/:id/sessions",
     {
       preHandler: [app.authenticate],
+      config: { allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         querystring: z.object({
@@ -2018,6 +2041,7 @@ export function registerPodRoutes(
     "/pods/:id/conversation/events",
     {
       preHandler: [app.authenticate],
+      config: { allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         querystring: z.object({
@@ -2058,6 +2082,7 @@ export function registerPodRoutes(
     "/sessions/:id/events",
     {
       preHandler: [app.authenticate],
+      config: { allowLimitedSignIn: true },
       schema: {
         params: z.object({ id: z.string().uuid() }),
         querystring: z.object({

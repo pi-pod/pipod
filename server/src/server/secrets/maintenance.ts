@@ -42,6 +42,7 @@ import {
   type KekProvider,
 } from "./crypto.js";
 import {
+  limitedSignInContext,
   modelCredentialContext,
   piAuthContext,
   piSettingsContext,
@@ -137,6 +138,7 @@ interface Row {
   user_id?: string;
   provider_id?: string;
   pod_id?: string;
+  sign_in_id?: string;
   owner_user_id?: string | null;
 }
 
@@ -225,6 +227,12 @@ const TABLE_SPECS: TableSpec[] = [
     idColumn: "pod_id",
     identitySelect: "pod_id",
     buildContext: podLaunchEnvRowContext,
+  },
+  {
+    table: "limited_sign_in_identities",
+    idColumn: "sign_in_id",
+    identitySelect: "sign_in_id",
+    buildContext: (row) => limitedSignInContext(requireText(row.sign_in_id ?? row.id)),
   },
 ];
 

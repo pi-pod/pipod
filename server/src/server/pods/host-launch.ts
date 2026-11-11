@@ -113,6 +113,8 @@ export async function launchHostChild(
     piOverrides?: PiLaunchOverrides | null;
     /** Set when a pod token asked for this launch: the child records it as its parent. */
     parentPodId?: string | null;
+    /** The limited sign-in that asked for this launch, recorded in its audit entry. */
+    limitedSignInId?: string | null;
   },
 ): Promise<PodLaunchResult> {
   await assertLaunchAllowed(undefined, args.userId);
@@ -363,6 +365,7 @@ export async function launchHostChild(
         secretKeys: report.secretKeys,
         clamps,
         ...(args.parentPodId ? { fromPod: args.parentPodId } : {}),
+        ...(args.limitedSignInId ? { limitedSignIn: args.limitedSignInId } : {}),
       },
     }),
   ]).catch(async (e) => {

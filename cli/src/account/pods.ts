@@ -183,7 +183,8 @@ export async function runAccountList(
   if (podRef) return runAccountGroupList(client, flags, podRef);
   // A project template pin is the default list scope. `--all` deliberately suppresses that
   // implicit filter, while an explicit `--template` remains authoritative alongside --all.
-  const templateRef = flags.template ?? (flags.all ? null : currentProjectTemplateRef());
+  // A limited sign-in sees one template's pods whatever the project pins.
+  const templateRef = flags.template ?? (flags.all || client.limitedTo ? null : currentProjectTemplateRef());
   const template = templateRef ? await resolveTemplate(client, templateRef) : null;
   // The plan line is SaaS-only and never worth a round trip of its own: ask for the
   // workstation block beside the pods, and let a server that has no such thing answer nothing.
@@ -458,7 +459,8 @@ async function archiveSweep(
   flags: AccountPodFlags,
   idleMs: number | null,
 ): Promise<{ pods: ApiPod[]; empty: () => void }> {
-  const templateRef = flags.template ?? (flags.all ? null : currentProjectTemplateRef());
+  // A limited sign-in sees one template's pods whatever the project pins.
+  const templateRef = flags.template ?? (flags.all || client.limitedTo ? null : currentProjectTemplateRef());
   const template = templateRef ? await resolveTemplate(client, templateRef) : null;
   const { pods: scopedPods, project } = await podsInScope(client, {
     all: flags.all || template !== null,

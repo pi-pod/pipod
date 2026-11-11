@@ -8,6 +8,12 @@ import { accountConsoleUrl, adminConsoleUrl } from "./consoles.js";
 import { verifyAccessToken } from "./jwt.js";
 import { hasPermission, type Permission } from "./rbac.js";
 import { materializeIdentity } from "./snapshots.js";
+import {
+  authenticateLimitedToken,
+  limitRefusal,
+  LIMITED_ACCESS_PREFIX,
+  type SignInLimit,
+} from "./limited-sign-in.js";
 
 export interface AuthContext {
   userId: string;
@@ -24,6 +30,11 @@ export interface AuthContext {
   permissions: string[];
   /** Set when authenticated with a pod-bound token (§8.5). */
   podId?: string;
+  /**
+   * Set for a limited sign-in (auth/limited-sign-in.ts): the person's account, narrowed to one
+   * template. `permissions` then holds only what the sign-in may use.
+   */
+  limitedTo?: SignInLimit;
   accountConsoleUrl?: string;
   adminConsoleUrl?: string;
 }
@@ -37,11 +48,22 @@ declare module "fastify" {
     allowPodToken?: boolean;
     /** `/me` and similar: a verified human token with no organization is allowed. */
     allowNoOrganization?: boolean;
+    /**
+     * Route opt-in for limited sign-ins; absent = refused. A route that opts in narrows what it
+     * reaches to the sign-in's limit (`req.auth.limitedTo`).
+     */
+    allowLimitedSignIn?: boolean;
   }
 }
 
-function routeConfig(req: FastifyRequest): { allowPodToken?: boolean; allowNoOrganization?: boolean } {
-  return (req.routeOptions.config as { allowPodToken?: boolean; allowNoOrganization?: boolean } | undefined) ?? {};
+interface AuthRouteConfig {
+  allowPodToken?: boolean;
+  allowNoOrganization?: boolean;
+  allowLimitedSignIn?: boolean;
+}
+
+function routeConfig(req: FastifyRequest): AuthRouteConfig {
+  return (req.routeOptions.config as AuthRouteConfig | undefined) ?? {};
 }
 
 /**
@@ -77,6 +99,25 @@ export function makeAuthHook(env: ServerEnv, log?: { warn: (msg: string) => void
         permissions: [],
         podId: row.pod_id,
       };
+      return;
+    }
+
+    if (bearer.startsWith(LIMITED_ACCESS_PREFIX)) {
+      const principal = await authenticateLimitedToken(bearer);
+      if (!principal) throw unauthorized("unknown, expired or ended sign-in token");
+      req.auth = {
+        userId: principal.userId,
+        email: principal.email,
+        orgId: principal.orgId,
+        ...(principal.orgAlias ? { orgAlias: principal.orgAlias } : {}),
+        orgName: principal.orgName,
+        permissions: principal.permissions,
+        limitedTo: principal.limit,
+      };
+      // Deny by default: a route the limit was never considered for stays closed to it.
+      if (!config.allowLimitedSignIn) {
+        throw limitRefusal(principal.limit, `it cannot use ${req.method} ${req.routeOptions.url ?? req.url}`);
+      }
       return;
     }
 

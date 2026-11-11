@@ -2,9 +2,10 @@
  * src/account/api.ts — the REST half of account mode (account-mode-spec §5, §7).
  *
  * A thin, typed client over the server's `/v1` surface. One deliberate behavior: a 401 is
- * retried exactly once by refreshing directly at Zitadel, rewriting `auth.json` with the new
- * pair, so a laptop that slept through a token expiry never surfaces it (§3.2). A failed
- * refresh names the fix (`pipod login`) instead of leaking an HTTP status.
+ * retried exactly once by refreshing directly at Zitadel (at the server itself for a limited
+ * sign-in), rewriting `auth.json` with the new pair, so a laptop that slept through a token
+ * expiry never surfaces it (§3.2). A failed refresh names the fix (`pipod login`) instead of
+ * leaking an HTTP status.
  */
 import * as fs from "node:fs";
 import { Readable } from "node:stream";
@@ -12,7 +13,8 @@ import { PiPodError } from "../errors.js";
 import { debug } from "../log.js";
 import type { ConfigProvenanceEntry } from "../userconfig.js";
 import { discover, refreshTokens, DEFAULT_CLIENT_ID } from "./oidc.js";
-import { readAccountAuth, withAccountAuthLock, writeAccountAuth, type AccountAuth } from "./store.js";
+import { renewLimitedSignIn } from "./limited-sign-in.js";
+import { readAccountAuth, withAccountAuthLock, writeAccountAuth, type AccountAuth, type LimitedSignIn } from "./store.js";
 import {
   isWorkstationHostId,
   parseWorkstationDemand,
@@ -502,14 +504,18 @@ function sessionTokensChanged(left: AccountAuth, right: AccountAuth): boolean {
   );
 }
 
-/** Same server, identity provider, organization and user: a token rotation, not another sign-in. */
+/**
+ * Same server, identity provider, organization, user and limit: a token rotation, not another
+ * sign-in. A full sign-in and a limited one for the same person are different sign-ins.
+ */
 function sameAccount(left: AccountAuth, right: AccountAuth): boolean {
   return (
     left.serverUrl === right.serverUrl &&
     left.issuer === right.issuer &&
     left.clientId === right.clientId &&
     left.orgId === right.orgId &&
-    left.user.id === right.user.id
+    left.user.id === right.user.id &&
+    left.limitedTo?.templateId === right.limitedTo?.templateId
   );
 }
 
@@ -556,6 +562,11 @@ export class AccountClient {
     return this.auth.podToken === true;
   }
 
+  /** The template a limited sign-in is limited to; undefined for any other session. */
+  get limitedTo(): LimitedSignIn | undefined {
+    return this.auth.limitedTo;
+  }
+
   async request<T = unknown>(apiPath: string, opts: ApiRequestOptions = {}): Promise<T> {
     const attempt = () => this.rawRequest(apiPath, opts, this.auth.accessToken);
     let res: Response;
@@ -577,10 +588,7 @@ export class AccountClient {
           hint: "the pod was deleted, or its token rotated — the session it belongs to is over",
         });
       }
-      throw new PiPodError("your pi pod server session has expired", {
-        hint: "run `pipod login`",
-        status: 401,
-      });
+      throw this.expiredSessionError();
     }
     if (opts.allow404 && res.status === 404) return null as T;
     if (!res.ok) {
@@ -638,10 +646,7 @@ export class AccountClient {
           hint: "the pod was deleted, or its token rotated — the session it belongs to is over",
         });
       }
-      throw new PiPodError("your pi pod server session has expired", {
-        hint: "run `pipod login`",
-        status: 401,
-      });
+      throw this.expiredSessionError();
     }
     if (!res.ok) throw await responseError(res, opts.method, apiPath);
     if (res.status === 204) return undefined as T;
@@ -675,6 +680,14 @@ export class AccountClient {
   }
 
 
+  private expiredSessionError(): PiPodError {
+    const limit = this.auth.limitedTo;
+    return new PiPodError(limit ? "this limited sign-in has ended" : "your pi pod server session has expired", {
+      hint: limit ? `run \`pipod login --device --template ${limit.templateName}\`` : "run `pipod login`",
+      status: 401,
+    });
+  }
+
   private refresh(): Promise<void> {
     if (!this.refreshPromise) {
       this.refreshPromise = this.performRefresh().finally(() => {
@@ -703,6 +716,17 @@ export class AccountClient {
       }
 
       const refreshAuth = diskAuth ?? this.auth;
+      if (refreshAuth.limitedTo && refreshAuth.tokenEndpoint && refreshAuth.refreshToken) {
+        // The server renews its own tokens; the refresh token does not rotate.
+        const pair = await renewLimitedSignIn(
+          refreshAuth.tokenEndpoint,
+          refreshAuth.refreshToken,
+          refreshAuth.limitedTo.templateName,
+        );
+        this.auth = { ...refreshAuth, accessToken: pair.accessToken, refreshToken: pair.refreshToken };
+        if (diskAuth) writeAccountAuth(this.auth, this.opts.home);
+        return;
+      }
       if (!refreshAuth.issuer || !refreshAuth.clientId || !refreshAuth.refreshToken) {
         throw new PiPodError("your pi pod server session has expired", { hint: "run `pipod login`" });
       }
@@ -737,9 +761,18 @@ export class AccountClient {
   me(): Promise<{
     user: { id: string; email?: string; displayName?: string };
     currentOrgId: string | null;
-    /** Absent when the token carries no roles — callers must tolerate undefined. */
+    /** Absent when the token carries no roles — callers must tolerate undefined. For a limited
+     *  sign-in, what the sign-in may use rather than what the account holds. */
     permissions?: string[];
     organization?: { id: string; alias: string | null; name: string | null } | null;
+    /** Present only for a limited sign-in: the template it is limited to, by id. */
+    limitedTo?: {
+      kind: "template";
+      templateId: string;
+      templateName: string;
+      templateDeleted?: boolean;
+      signInId: string;
+    };
     accountConsoleUrl?: string;
     adminConsoleUrl?: string;
     /**

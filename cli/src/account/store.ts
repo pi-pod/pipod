@@ -40,6 +40,21 @@ export interface AccountAuth {
   orgAlias?: string;
   /** A pod's own scoped token rather than a person's session: reaches only its children. */
   podToken?: boolean;
+  /**
+   * A limited sign-in (`pipod login --template`): the person's account, able to launch from this
+   * template only and to reach only their pods from it. Its tokens are the server's own, not the
+   * identity provider's: `issuer`, `clientId` and `idToken` are absent, and the access token is
+   * renewed by posting the refresh token to `tokenEndpoint`.
+   */
+  limitedTo?: LimitedSignIn;
+  /** Where a limited sign-in renews its access token: an OAuth refresh-token grant, form-encoded. */
+  tokenEndpoint?: string;
+}
+
+export interface LimitedSignIn {
+  templateId: string;
+  /** The template's name when the sign-in was confirmed; `whoami` asks the server for today's. */
+  templateName: string;
 }
 
 export function accountAuthPath(home?: string | undefined): string | null {
@@ -70,12 +85,33 @@ export function readAccountAuth(home?: string | undefined): AccountAuth | null {
       hint: "run `pipod login` again to replace the invalid session",
     });
   }
+  if (auth.limitedTo !== undefined) {
+    if (
+      typeof auth.limitedTo?.templateId !== "string" ||
+      typeof auth.tokenEndpoint !== "string" ||
+      !sameOrigin(auth.tokenEndpoint, auth.serverUrl)
+    ) {
+      throw new PiPodError(`${file} holds a limited sign-in this CLI cannot use`, {
+        hint: "run `pipod login --device --template <name>` again",
+      });
+    }
+    return auth;
+  }
   if (!auth.podToken && auth.refreshToken && (typeof auth.issuer !== "string" || typeof auth.clientId !== "string")) {
     throw new PiPodError(`${file} contains a session from an unsupported identity provider`, {
       hint: "run `pipod login` again to create a Zitadel OIDC session",
     });
   }
   return auth;
+}
+
+/** A limited sign-in's tokens go to its own server and nowhere else. */
+function sameOrigin(left: string, right: string): boolean {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
 }
 
 /**

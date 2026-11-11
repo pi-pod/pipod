@@ -654,7 +654,9 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
       const frame = await rpc.getFiles(query);
       return { entries: frame.entries, complete: frame.complete };
     },
-    ...(!opts.client.isPodToken ? {
+    // Connecting a model credential is the account's to do: neither a pod's token nor a limited
+    // sign-in may.
+    ...(!opts.client.isPodToken && !opts.client.limitedTo ? {
       accountAuthSupported,
       accountLogin: (providerId: string, authType: "oauth" | "api_key", interaction: RemoteAuthInteraction) => runCredentialLogin({
         client: opts.client,

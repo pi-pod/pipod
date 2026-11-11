@@ -34,12 +34,33 @@ export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv, dashboa
     ...(env.ZITADEL_MOBILE_CLIENT_ID ? { mobileClientId: env.ZITADEL_MOBILE_CLIENT_ID } : {}),
     ...(env.ZITADEL_DASHBOARD_CLIENT_ID ? { dashboardClientId: env.ZITADEL_DASHBOARD_CLIENT_ID } : {}),
     ...(env.SERVER_URL ? { serverUrl: env.SERVER_URL } : {}),
+    // Where people confirm sign-ins with a code. Limited sign-ins are confirmed there and need it;
+    // a full one is shown there first, so the person reads that it is for the whole account.
+    ...(dashboardUrl ? { dashboardUrl, limitedSignIn: true } : {}),
   }));
 
   r.get(
     "/me",
-    { preHandler: [app.authenticate], config: { allowNoOrganization: true } },
+    { preHandler: [app.authenticate], config: { allowNoOrganization: true, allowLimitedSignIn: true } },
     async (req) => {
+      const limit = req.auth.limitedTo;
+      if (limit) {
+        // What this sign-in is, not what the account is: its own permissions, its limit, and no
+        // consoles or plan — it can open neither.
+        return {
+          user: { id: req.auth.userId, ...(req.auth.email ? { email: req.auth.email } : {}) },
+          currentOrgId: req.auth.orgId,
+          permissions: req.auth.permissions,
+          organization: { id: req.auth.orgId, alias: req.auth.orgAlias ?? null, name: req.auth.orgName ?? null },
+          limitedTo: {
+            kind: "template" as const,
+            templateId: limit.templateId,
+            templateName: limit.templateName,
+            templateDeleted: limit.templateDeleted,
+            signInId: limit.signInId,
+          },
+        };
+      }
       const organization = req.auth.orgId
         ? {
             id: req.auth.orgId,

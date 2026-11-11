@@ -6,6 +6,7 @@ import { audit } from "../audit.js";
 import { getPool, tx, type Queryable } from "../db/index.js";
 import { badRequest, forbidden, notFound } from "../httperrors.js";
 import { IdentityId } from "../ids.js";
+import { limitRefusal } from "../auth/limited-sign-in.js";
 import type { KekProvider } from "./crypto.js";
 import {
   deleteSecret,
@@ -24,6 +25,11 @@ const ScopeParams = z.object({
 
 async function checkScopeAccess(auth: AuthContext, scope: SecretScope, scopeId: string, write: boolean,
   client: Queryable = getPool(), lock = false) {
+  // A limited sign-in reaches only the names of its own template's secrets (the routes that
+  // write are closed to it anyway).
+  if (auth.limitedTo && (write || scope !== "template" || scopeId.toLowerCase() !== auth.limitedTo.templateId)) {
+    throw limitRefusal(auth.limitedTo, "it can list only its own template's secret names");
+  }
   if (scope === "org") {
     if (auth.podId) throw forbidden("pod tokens cannot touch org secrets");
     if (scopeId !== auth.orgId) throw forbidden("org mismatch");
@@ -61,7 +67,11 @@ export function registerSecretRoutes(app: FastifyInstance, kek: KekProvider): vo
 
   r.get(
     "/secrets/:scope/:scopeId",
-    { preHandler: [app.authenticate], config: { allowPodToken: true }, schema: { params: ScopeParams } },
+    {
+      preHandler: [app.authenticate],
+      config: { allowPodToken: true, allowLimitedSignIn: true },
+      schema: { params: ScopeParams },
+    },
     async (req) => {
       await checkScopeAccess(req.auth, req.params.scope, req.params.scopeId, false);
       return {

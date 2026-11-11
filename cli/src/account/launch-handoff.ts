@@ -86,7 +86,8 @@ export async function runAccountLaunch(opts: RunAccountLaunchOptions): Promise<n
   announceSettingsChain(plan);
   announceWorkspaceSeed(plan);
 
-  if (plan.projectRoot && plan.templateId) {
+  // A limited sign-in launches its own template whatever the project pins, so a pin's drift is moot.
+  if (plan.projectRoot && plan.templateId && !client.limitedTo) {
     const stale = await projectTemplateStaleness({ client, cwd: hostCwd, home: flags.home ?? opts.home });
     if (stale) warn(stale);
   }

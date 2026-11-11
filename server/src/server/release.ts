@@ -43,7 +43,7 @@ export function releaseIdentity(): ReleaseIdentity {
 export function registerVersionRoute(app: FastifyInstance): void {
   app.get(
     "/version",
-    { preHandler: [app.authenticate], config: { allowNoOrganization: true, allowPodToken: true } },
+    { preHandler: [app.authenticate], config: { allowNoOrganization: true, allowPodToken: true, allowLimitedSignIn: true } },
     async () => {
       const schema = await readSchemaStatus(edition().migrations())
         .then(({ state, pending, unknown }) => ({ state, pending: pending.length, unknown: unknown.length }))
