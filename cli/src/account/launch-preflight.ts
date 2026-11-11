@@ -10,6 +10,7 @@ import { toOutgoingBundleConfig } from "./bundle-source.js";
 import { assertMachineConfigCurrent, currentProjectName } from "./launch-overlays.js";
 import type { AccountClient, ApiTemplate, PiLaunchOverrides, ResolveReport } from "./api.js";
 import { PI_RESOURCE_KEYS, sameResourceList } from "./launch-resources.js";
+import { matchTemplate } from "./template-ref.js";
 import type { AccountLaunchFlags, AccountLaunchPlan } from "./launch-types.js";
 import {
   machineClientConfig,
@@ -320,20 +321,19 @@ function confirmPiOverridesEcho(resolved: ResolveReport, piOverrides?: PiLaunchO
   }
 }
 
-/** Resolve a visible template by id or name; personal templates shadow org names. */
+/** Resolve a visible template by id or name (see template-ref.ts for which name wins). */
 export async function resolveTemplate(client: AccountClient, ref: string): Promise<ApiTemplate> {
   const { templates } = await client.listTemplates();
-  const byId = templates.find((template) => template.id === ref);
-  const named = templates
-    .filter((template) => template.name.toLowerCase() === ref.toLowerCase())
-    .sort((a, b) => (a.scope === "user" ? 0 : 1) - (b.scope === "user" ? 0 : 1));
-  const found = byId ?? named[0];
+  const found = matchTemplate(templates, ref);
   const limit = client.limitedTo;
   if (!found && limit) {
     if (ref === limit.templateId || ref.toLowerCase() === limit.templateName.toLowerCase()) {
-      throw new PiPodError(`template ${limit.templateName} (${limit.templateId}) is gone, so this sign-in can launch nothing`, {
-        hint: "a template made again under the same name is a different one: sign in again with `pipod login --device --template <name>`",
-      });
+      throw new PiPodError(
+        `template ${limit.templateName} (${limit.templateId}) is deleted or no longer shared with you, so this sign-in can launch nothing`,
+        {
+          hint: "a template made again under the same name is a different one: sign in again with `pipod login --device --template <name>`",
+        },
+      );
     }
     throw new PiPodError(`this sign-in is limited to template ${limit.templateName}; it cannot use ${ref}`, {
       hint: "launch without --template, or sign in with `pipod login` for the whole account",

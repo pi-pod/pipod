@@ -2,7 +2,9 @@
  * src/commands/templates.ts — `pipod templates` (§8.5).
  *
  * Templates default to personal (user-scoped): only their owner sees and launches them.
- * `--org` at creation or `templates share` makes one org-wide, where it sits *below* each
+ * `templates share <name> --with <email>` lets one named member launch it too (and
+ * `templates unshare` takes that back); `--org` at creation or `templates share <name>` makes
+ * one org-wide, which cannot be undone. Org-wide and shared templates sit *below* each
  * member's own settings. They were previously only authorable in the app; this is the
  * same surface from the terminal, addressed by name rather than uuid.
  */
@@ -10,7 +12,7 @@ import * as fs from "node:fs";
 import type { AccountClient, ApiTemplate, PiSettingsFilesBody } from "../account/api.js";
 import { compileBundleSource, flatPiSettings, toOutgoingBundleConfig, type EnvSnapshot } from "../account/bundle-source.js";
 import { requireAccountClient } from "../account/client.js";
-import { findTemplate, scopeOf } from "../account/template-ref.js";
+import { assertOwnTemplate, findTemplate, ownerOf, scopeOf } from "../account/template-ref.js";
 import { validateConfig } from "../config.js";
 import { PiPodError } from "../errors.js";
 import { parseJsonc } from "../jsonc.js";
@@ -47,9 +49,11 @@ export async function runTemplates(args: string[], flags: TemplatesFlags): Promi
       return rmCmd(client, rest, effective);
     case "share":
       return shareCmd(client, rest);
+    case "unshare":
+      return unshareCmd(client, rest);
     default:
       throw new PiPodError(`unknown \`pipod templates\` action "${action}"`, {
-        hint: "actions: list (default), show, create, edit, share, rm",
+        hint: "actions: list (default), show, create, edit, share, unshare, rm",
       });
   }
 }
@@ -61,18 +65,32 @@ async function listCmd(client: AccountClient): Promise<number> {
     info("this org has no templates — pods start from the built-in defaults");
     return 0;
   }
-  out(`${"NAME".padEnd(24)} ${"SCOPE".padEnd(6)} ${"KEYS".padEnd(5)} DESCRIPTION`);
+  out(`${"NAME".padEnd(24)} ${"SCOPE".padEnd(6)} ${"KEYS".padEnd(5)} ${"SHARING".padEnd(28)} DESCRIPTION`);
   for (const t of templates) {
     const keys = String(Object.keys(t.config ?? {}).length);
-    out(`${t.name.padEnd(24)} ${scopeOf(t).padEnd(6)} ${keys.padEnd(5)} ${t.description ?? ""}`);
+    out(`${t.name.padEnd(24)} ${scopeOf(t).padEnd(6)} ${keys.padEnd(5)} ${sharing(t).padEnd(28)} ${t.description ?? ""}`);
   }
   return 0;
+}
+
+/** Who else a template reaches, in the list's words: "by <owner>" or "with <members>". */
+function sharing(t: ApiTemplate): string {
+  if (scopeOf(t) === "shared") return `by ${ownerOf(t)}`;
+  if (scopeOf(t) === "org") return "everyone";
+  return t.sharedWith?.length ? `with ${t.sharedWith.join(", ")}` : "-";
 }
 
 async function showCmd(client: AccountClient, args: string[]): Promise<number> {
   const t = await findTemplate(client, args[0]);
   info(`${t.name} (${t.id})`);
-  info(`scope       ${scopeOf(t) === "user" ? "user (only you)" : "org"}`);
+  const scope = scopeOf(t);
+  if (scope === "shared") {
+    info(`scope       shared with you by ${ownerOf(t)} (you can launch it; only they can change it)`);
+  } else if (scope === "user") {
+    info(`scope       user (${t.sharedWith?.length ? `you, and shared with ${t.sharedWith.join(", ")}` : "only you"})`);
+  } else {
+    info("scope       org");
+  }
   if (t.description) info(`description ${t.description}`);
   if (t.createdFromPod) info(`created by  pod ${t.createdFromPod}`);
   info(`updated     ${t.updatedAt}`);
@@ -266,7 +284,10 @@ async function createCmd(client: AccountClient, args: string[], flags: Templates
   const created = opts.fromHere ? await writeTemplateSnapshot(create) : await create();
   info(`created template ${created.name} (${created.id})`);
   if (scopeOf(created) === "user") {
-    info(`it is personal — only you see it; share it org-wide with \`pipod templates share ${created.name}\``);
+    info(
+      `it is personal — only you see it; share it with one person with \`pipod templates share ${created.name} --with <email>\`, ` +
+        `or org-wide with \`pipod templates share ${created.name}\``,
+    );
   }
   if (opts.fromHere) {
     info(snapshotSummary(piSettings));
@@ -328,6 +349,13 @@ async function snapshotFromHere(
   };
 }
 
+/** Whose pods a template's secrets reach. */
+function reach(template: { scope?: "user" | "org" | "shared"; sharedWith?: string[] }): string {
+  if (scopeOf(template) === "org") return "every org member's pod launched from it";
+  if (template.sharedWith?.length) return `every pod you or ${template.sharedWith.join(", ")} launch from it`;
+  return "every pod you launch from it";
+}
+
 /**
  * Uploading project env values is a new act, not a detail of compiling the source, so it
  * needs its own signal: --with-secrets, or a yes at this prompt. -y is
@@ -335,7 +363,7 @@ async function snapshotFromHere(
  */
 export async function syncEnvSecrets(
   client: AccountClient,
-  template: { id: string; name: string; scope?: "user" | "org" },
+  template: { id: string; name: string; scope?: "user" | "org" | "shared"; sharedWith?: string[] },
   env: EnvSnapshot,
   opts: { withSecrets: boolean; reportStale: boolean },
 ): Promise<void> {
@@ -352,7 +380,7 @@ export async function syncEnvSecrets(
     opts.withSecrets ||
     (await confirm(
       `upload ${names.length} env value(s) as secrets on template ${template.name} ` +
-        `(${labeled})? they reach ${scopeOf(template) === "user" ? "every pod you launch from it" : "every org member's pod launched from it"}`,
+        `(${labeled})? they reach ${reach(template)}`,
       { nonInteractiveDefault: false },
     ));
   if (!consented) {
@@ -407,6 +435,7 @@ async function editCmd(client: AccountClient, args: string[]): Promise<number> {
     });
   }
   const t = await findTemplate(client, rest[0]);
+  assertOwnTemplate(t, "change it");
   if (
     opts.name === undefined &&
     opts.description === undefined &&
@@ -435,22 +464,154 @@ async function editCmd(client: AccountClient, args: string[]): Promise<number> {
   return 0;
 }
 
-/** Hand a personal template to the org. One-way: org templates cannot go private again. */
+/**
+ * `share <name|id> --with <email>` lets one member launch the template; `share <name|id>` alone
+ * hands it to the whole org, which cannot be undone. The two differ by one option, so anything
+ * that is not exactly one of them is refused before the server is asked: `--with` without a
+ * usable email, a second `--with`, a stray word (an email without `--with`), any other option.
+ */
+function parseShareArgs(
+  action: "share" | "unshare",
+  args: readonly string[],
+): { ref: string; with: string | undefined } {
+  const usage = `usage: pipod templates ${action} <name|id> ${action === "share" ? "[--with <email>]" : "--with <email>"}`;
+  let ref: string | undefined;
+  let member: string | undefined;
+  let withSeen = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--with" || arg.startsWith("--with=")) {
+      if (withSeen) {
+        throw new PiPodError("--with names one person; nothing was shared — share with each person separately", { hint: usage });
+      }
+      withSeen = true;
+      const value = arg === "--with" ? args[++i] : arg.slice("--with=".length);
+      if (value === undefined || value.startsWith("-")) {
+        throw new PiPodError("--with needs the email of the person to share with; nothing was shared", { hint: usage });
+      }
+      member = value.trim();
+      if (!EMAIL.test(member)) {
+        throw new PiPodError(
+          member ? `--with ${JSON.stringify(member)} is not an email address; nothing was shared` : "--with is empty; nothing was shared",
+          { hint: usage },
+        );
+      }
+    } else if (arg.startsWith("-")) {
+      throw new PiPodError(`unknown option ${arg} for \`pipod templates ${action}\`; nothing was shared`, { hint: usage });
+    } else if (ref === undefined) {
+      ref = arg;
+    } else {
+      throw new PiPodError(`unexpected argument ${JSON.stringify(arg)}; nothing was shared`, {
+        hint: arg.includes("@") ? `to share with one person: pipod templates ${action} ${ref} --with ${arg}` : usage,
+      });
+    }
+  }
+  if (!ref) throw new PiPodError("which template?", { hint: usage });
+  if (action === "unshare" && !withSeen) {
+    throw new PiPodError("unshare needs --with <email>: it stops sharing with one person", {
+      hint: `${usage}\nan org-wide template cannot be made personal again`,
+    });
+  }
+  return { ref, with: member };
+}
+
+/** Enough to tell an email from a typo or a template name; the server checks it again. */
+const EMAIL = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:".]+$/;
+
 async function shareCmd(client: AccountClient, args: string[]): Promise<number> {
-  const t = await findTemplate(client, args[0]);
+  const parsed = parseShareArgs("share", args);
+  const t = await findTemplate(client, parsed.ref);
+  assertOwnTemplate(t, "share it");
+  if (parsed.with !== undefined) return shareWithMember(client, t, parsed.with);
   if (scopeOf(t) === "org") {
     info(`${t.name} is already org-wide`);
     return 0;
   }
-  const updated = await client.updateTemplate(t.id, { scope: "org" });
+  const updated = await shareWithOrg(client, t);
   info(`shared ${updated.name} with the org — every member can now see and launch from it`);
   return 0;
 }
 
+/** One-way: org templates cannot go private again, so the request says it means the whole org. */
+async function shareWithOrg(client: AccountClient, t: ApiTemplate): Promise<ApiTemplate> {
+  try {
+    return await client.updateTemplate(t.id, { scope: "org", orgWide: true });
+  } catch (error) {
+    // A server from before named shares rejects the confirmation field it does not know. It has
+    // no other kind of share, so the plain request means exactly what was asked for.
+    if (error instanceof PiPodError && error.status === 400 && /validation failed/i.test(error.message)) {
+      return client.updateTemplate(t.id, { scope: "org" });
+    }
+    throw error;
+  }
+}
+
+async function shareWithMember(client: AccountClient, t: ApiTemplate, email: string): Promise<number> {
+  if (scopeOf(t) === "org") {
+    info(`${t.name} is org-wide: every member, ${email} included, can already launch it`);
+    return 0;
+  }
+  const shared = await withShareRoute(() => client.shareTemplate(t.id, email));
+  if (!shared.created) {
+    info(`${shared.name} is already shared with ${shared.sharedWith}`);
+    return 0;
+  }
+  info(
+    `shared ${shared.name} with ${shared.sharedWith} — they can launch from it and read it (secret names, never values); ` +
+      "only you can change it, its secrets or who it is shared with",
+  );
+  info(`take it back with \`pipod templates unshare ${shared.name} --with ${shared.sharedWith}\``);
+  return 0;
+}
+
+async function unshareCmd(client: AccountClient, args: string[]): Promise<number> {
+  const parsed = parseShareArgs("unshare", args);
+  const t = await findTemplate(client, parsed.ref);
+  assertOwnTemplate(t, "change who it is shared with");
+  if (scopeOf(t) === "org") {
+    throw new PiPodError(`${t.name} is org-wide, and an org-wide template cannot be made personal again`);
+  }
+  const email = parsed.with!;
+  const result = await withShareRoute(() => client.unshareTemplate(t.id, email));
+  info(
+    result.removed
+      ? `stopped sharing ${result.name} with ${email}: they cannot launch from it any more, and nor can their pods' forks, child pods, co-located pods or jobs`
+      : `${result.name} was not shared with ${email}`,
+  );
+  const { total, running } = result.pods;
+  if (total > 0) {
+    info(
+      `${email} still has ${total} pod${total === 1 ? "" : "s"} from ${result.name} (${running} running). ` +
+        "They stay theirs and keep the template's secrets they were launched with; " +
+        `ending that access means stopping ${total === 1 ? "it" : "them"} and rotating ${result.name}'s secrets`,
+    );
+  } else {
+    info(`${email} has no pods from ${result.name}`);
+  }
+  return 0;
+}
+
+/** A server from before named shares has no share route at all. */
+async function withShareRoute<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof PiPodError && error.status === 404 && /^Route /.test(error.message)) {
+      throw new PiPodError("this pi pod server cannot share a template with one person", {
+        hint: "it needs a newer pi pod server; nothing was shared",
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
 async function rmCmd(client: AccountClient, args: string[], flags: TemplatesFlags): Promise<number> {
   const t = await findTemplate(client, args[0]);
+  assertOwnTemplate(t, "delete it");
+  const shares = t.sharedWith?.length ? ` (it is shared with ${t.sharedWith.join(", ")}; they lose it too)` : "";
   const ok = await confirm(
-    scopeOf(t) === "user" ? `delete your template ${t.name}?` : `delete template ${t.name} for the whole org?`,
+    scopeOf(t) === "user" ? `delete your template ${t.name}${shares}?` : `delete template ${t.name} for the whole org?`,
     {
       nonInteractiveDefault: false,
       assumeYes: flags.yes === true,

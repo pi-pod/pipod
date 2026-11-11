@@ -7,6 +7,7 @@ import { query, tx, type Queryable } from "../db/index.js";
 import { badRequest, forbidden, conflict, notFound } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import { readLayer } from "../settings/merge.js";
+import { visibleTemplateSql } from "../templates/store.js";
 import { delegatedTemplateId, nestedPodsPolicy, parentDelegation } from "../pods/lineage.js";
 import {
   assertJobScopeChange,
@@ -115,17 +116,19 @@ async function lockTemplateForJob(
     activeDefinition: boolean;
   },
 ): Promise<void> {
+  // The job's owner must be able to launch from the template: their own, the organization's, or
+  // one shared with them. A shared template stays its owner's personal template, so only the
+  // member's own (user-scoped) jobs use it.
   const rows = await client.query<{ owner_user_id: string | null }>(
-    `SELECT owner_user_id FROM pod_templates
-     WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
-       AND (owner_user_id IS NULL OR owner_user_id = $3)
-     FOR SHARE`,
+    `SELECT t.owner_user_id FROM pod_templates t
+     WHERE t.id = $1 AND t.org_id = $2 AND ${visibleTemplateSql("t", "$3")}
+     FOR SHARE OF t`,
     [args.templateId, args.orgId, args.userId],
   );
   const template = rows.rows[0];
   if (!template) {
     if (args.activeDefinition) {
-      throw conflict("template is archived — pick another before creating or resuming the job");
+      throw conflict("template is archived or no longer shared with you — pick another before creating or resuming the job");
     }
     throw notFound("template not found");
   }

@@ -192,8 +192,9 @@ tell its pods' agents what access the template is meant to have:
 - Run `pipod diff <layer>` before `pipod push <layer>`: a push replaces the whole layer.
   With no terminal, push declines instead of asking, so show the person the diff, then run
   `pipod push <layer> --yes`.
-- Organization changes reach every member's next pod, and `pipod templates share` cannot be
-  undone: confirm both with the person first.
+- Organization changes reach every member's next pod, and `pipod templates share` without
+  `--with` cannot be undone: confirm both with the person first. Sharing a template with
+  one person (`--with`) hands them its secrets in their pods: confirm that too.
 - Iterate with `pipod doctor` and `pipod --dry-run`; both create nothing.
 
 ## LAYERS
@@ -478,7 +479,8 @@ Usage: pipod templates [action]
 Manage pod templates on the pi pod server. A template stores config, init and
 bake scripts, Pi settings files, named secrets, and agent instructions.
 Templates are personal by default: only their owner sees and launches them.
---org at creation or `templates share` makes one org-wide.
+`templates share <name> --with <email>` lets one member launch it too;
+--org at creation or `templates share <name>` makes one org-wide.
 
 Agent instructions are added to the agent's system prompt in every pod launched
 from the template, with the hosts and secrets the pod actually has: say what
@@ -493,8 +495,13 @@ Actions:
   create <name>    Create a template
   edit <name|id>   Update a template's name, description, config, scripts, or
                    agent instructions
+  share <name|id> --with <email>
+                   Let one member of the org launch from your personal
+                   template and read it (secret names, never values)
+  unshare <name|id> --with <email>
+                   Stop sharing it with them; their existing pods keep running
   share <name|id>  Make a personal template org-wide (cannot be undone)
-  rm <name|id>     Delete a template (alias: delete)
+  rm <name|id>     Delete a template (alias: delete); this ends its shares
 
 create/edit options:
   --name <name>         New name (edit only)
@@ -519,6 +526,18 @@ launch's offer, which creates the template and pins it in .pi-pod/config.json, o
 with `pipod diff` and `pipod push` from the project.
 A personal template sits above your user layer and an org-wide one below it
 (`pipod help layers`); making one org-wide needs the org:manage permission.
+
+Sharing a personal template with one person needs no more than owning it. They can
+launch from it, sign a machine in limited to it (`pipod login --device --template`),
+and read it with `templates show` (secret names, never values); to them it sits below
+their own user layer, like an org-wide template, and `templates list` names you as
+its owner. Only you change it, its secrets, or who it is shared with, and your changes
+reach their next pod. A name finds their own template first, then the organization's,
+then one shared with them; when two members share templates of the same name with
+them, they name it by id. `unshare` stops their launches and their pods' forks,
+child pods, co-located pods and jobs from it. The pods they already have stay theirs
+and keep the template's secrets they were launched with: to end that access, stop
+those pods and rotate the template's secrets. Deleting the template ends its shares.
 
 ### pipod push
 

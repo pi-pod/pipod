@@ -527,6 +527,18 @@ is revoked there. The server learns who belongs to an organization from sign-ins
 cannot see someone being removed in the Zitadel Console: unshare before or when you
 remove them.
 
+A shared template (`pipod templates share <template> --with <email>`) crosses it too: the
+other person's pods receive the template's secret values, and so does any code in them,
+which runs the template's scripts with their own credentials. They cannot read a value
+through the API, change the template or its secrets, or share it further. `unshare` stops
+every new launch from it — theirs, and their pods' forks, child pods, co-located pods and
+jobs — but the pods they already have keep the template secrets they were launched with,
+even across restarts; stop those pods and rotate the template's secrets to end that
+access (`unshare` counts them). Someone removed in the Zitadel Console can no longer sign
+in, but the server cannot see the removal, so their existing pods' tokens and their
+scheduled jobs could still launch from a template shared with them: unshare it when you
+remove them, as for a credential.
+
 A template's agent instructions ("read-write in staging, read-only in
 production") reach the agent in every pod launched from it, but they enforce
 nothing: a pod can do whatever its secrets and egress allow. Give a template

@@ -157,14 +157,16 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       template: template && {
         id: template.id,
         name: template.name,
-        scope: template.owner_user_id ? ("user" as const) : ("org" as const),
+        // "shared": another member's template, shared with this pod's owner by `sharedBy`.
+        scope: template.access === "own" ? ("user" as const) : template.access,
+        ...(template.access === "shared" ? { sharedBy: template.shared_by } : {}),
         version: template.version,
         config: stripRetiredConfigKeys(template.config) as Record<string, unknown>,
         initScript: template.init_script ?? "",
         bakeScript: template.bake_script ?? "",
         piFiles: template.pi_settings,
         agentInstructions: template.agent_instructions ?? "",
-      } satisfies SettingsLayerRow & { id: string; name: string; scope: "user" | "org"; agentInstructions: string },
+      } satisfies SettingsLayerRow & { id: string; name: string; scope: "user" | "org" | "shared"; agentInstructions: string },
     };
   });
 }

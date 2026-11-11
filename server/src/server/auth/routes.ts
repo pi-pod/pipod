@@ -56,7 +56,11 @@ export function registerAuthRoutes(app: FastifyInstance, env: ServerEnv, dashboa
             kind: "template" as const,
             templateId: limit.templateId,
             templateName: limit.templateName,
-            templateDeleted: limit.templateDeleted,
+            // Why it launches nothing, when it does not: "deleted" or "unshared".
+            templateUnavailable: limit.templateUnavailable,
+            // pipod 0.1.28 reads only this flag to say the sign-in launches nothing, so it is set
+            // whenever that is true, including when the template is no longer shared.
+            templateDeleted: limit.templateUnavailable !== null,
             signInId: limit.signInId,
           },
         };

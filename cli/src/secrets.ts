@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AccountClient, ServerSecretScope } from "./account/api.js";
+import { matchTemplate } from "./account/template-ref.js";
 import { PROJECT_ENV_FILE } from "./config.js";
 import { parseDotenv } from "./dotenv.js";
 import { PiPodError } from "./errors.js";
@@ -177,9 +178,7 @@ export async function resolveScopeTarget(
     });
   }
   const { templates } = await opts.client.listTemplates();
-  const match =
-    templates.find((t) => t.id === which) ??
-    templates.find((t) => t.name.toLowerCase() === which.toLowerCase());
+  const match = matchTemplate(templates, which);
   if (!match) {
     throw new PiPodError(`no template named "${which}" in this org`, {
       hint: "list them with `pipod templates`",

@@ -7,6 +7,7 @@ import { getPool, tx, type Queryable } from "../db/index.js";
 import { badRequest, forbidden, notFound } from "../httperrors.js";
 import { IdentityId } from "../ids.js";
 import { limitRefusal } from "../auth/limited-sign-in.js";
+import { findTemplate, lockTemplateForChange } from "../templates/store.js";
 import type { KekProvider } from "./crypto.js";
 import {
   deleteSecret,
@@ -23,8 +24,9 @@ const ScopeParams = z.object({
   scopeId: IdentityId,
 });
 
+/** Inside a transaction (`client`), a write holds the template's row lock until it commits. */
 async function checkScopeAccess(auth: AuthContext, scope: SecretScope, scopeId: string, write: boolean,
-  client: Queryable = getPool(), lock = false) {
+  client: Queryable = getPool()) {
   // A limited sign-in reaches only the names of its own template's secrets (the routes that
   // write are closed to it anyway).
   if (auth.limitedTo && (write || scope !== "template" || scopeId.toLowerCase() !== auth.limitedTo.templateId)) {
@@ -42,14 +44,16 @@ async function checkScopeAccess(auth: AuthContext, scope: SecretScope, scopeId: 
     if (write) requirePermission(auth, "secrets:own:write");
     return;
   }
-  // Another user's personal template is invisible here, like everywhere else.
-  const template = await client.query<{ created_from_pod: string | null }>(
-    `SELECT created_from_pod FROM pod_templates
-     WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
-       AND (owner_user_id IS NULL OR owner_user_id = $3)${lock ? " FOR SHARE" : ""}`,
-    [scopeId, auth.orgId, auth.userId],
-  );
-  const row = template.rows[0];
+  // Another member's personal template is invisible here, like everywhere else, unless they shared
+  // it with you; then its secret names are yours to read and its values theirs to set.
+  const row = write
+    ? await lockTemplateForChange(client, {
+        orgId: auth.orgId,
+        templateId: scopeId,
+        userId: auth.userId,
+        what: "set or remove its secrets",
+      })
+    : await findTemplate(auth.orgId, scopeId, auth.userId);
   if (!row) throw notFound("template not found");
   // Pod tokens reach only templates they created (spec §8.5), and even then write-only like everyone.
   if (auth.podId) {
@@ -102,7 +106,7 @@ export function registerSecretRoutes(app: FastifyInstance, kek: KekProvider): vo
         throw badRequest(`"${req.params.name}" is a provider credential and may only be stored in org scope`);
       }
       await tx(async (client) => {
-        await checkScopeAccess(req.auth, req.params.scope, req.params.scopeId, true, client, true);
+        await checkScopeAccess(req.auth, req.params.scope, req.params.scopeId, true, client);
         await putSecret({
           kek,
           orgId: req.auth.orgId,
@@ -135,7 +139,7 @@ export function registerSecretRoutes(app: FastifyInstance, kek: KekProvider): vo
     async (req, reply) => {
       await checkScopeAccess(req.auth, req.params.scope, req.params.scopeId, true);
       await tx(async (client) => {
-        await checkScopeAccess(req.auth, req.params.scope, req.params.scopeId, true, client, true);
+        await checkScopeAccess(req.auth, req.params.scope, req.params.scopeId, true, client);
         const removed = await deleteSecret({
           orgId: req.auth.orgId,
           scopeType: req.params.scope,

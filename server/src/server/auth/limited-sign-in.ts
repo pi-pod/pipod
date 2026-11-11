@@ -23,7 +23,7 @@ import { HttpError, conflict, forbidden, notFound } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import { limitedSignInContext } from "../secrets/context.js";
 import { decryptSecret, encryptSecret, type KekProvider } from "../secrets/crypto.js";
-import { findTemplate, type TemplateRow } from "../templates/store.js";
+import { findTemplate, findTemplateByName, visibleTemplateSql, type VisibleTemplate } from "../templates/store.js";
 import { renewSession, revokeSession } from "./identity-provider.js";
 import { verifyAccessToken } from "./jwt.js";
 import { hasPermission, type Permission } from "./rbac.js";
@@ -53,8 +53,11 @@ export interface SignInLimit {
   templateId: string;
   /** The template's name now; it may have been renamed since the sign-in was confirmed. */
   templateName: string;
-  /** The template was deleted: the sign-in launches nothing. */
-  templateDeleted: boolean;
+  /**
+   * Why the sign-in launches nothing, when it does not: the template was deleted, or it was
+   * another member's and is no longer shared with the account. Null while it can launch.
+   */
+  templateUnavailable: "deleted" | "unshared" | null;
 }
 
 export interface LimitedPrincipal {
@@ -161,10 +164,13 @@ export async function authenticateLimitedToken(token: string): Promise<LimitedPr
     permissions: string[];
     template_id: string;
     template_name: string;
-    template_deleted: boolean;
+    template_unavailable: "deleted" | "unshared" | null;
   }>(
     `SELECT s.id AS sign_in_id, s.user_id, u.email, s.org_id, o.alias AS org_alias, o.name AS org_name,
-            s.permissions, s.template_id, t.name AS template_name, (t.archived_at IS NOT NULL) AS template_deleted
+            s.permissions, s.template_id, t.name AS template_name,
+            CASE WHEN t.archived_at IS NOT NULL THEN 'deleted'
+                 WHEN NOT (${visibleTemplateSql("t", "s.user_id")}) THEN 'unshared'
+            END AS template_unavailable
        FROM limited_sign_in_tokens k
        JOIN limited_sign_ins s ON s.id = k.sign_in_id
        JOIN users u ON u.id = s.user_id
@@ -186,7 +192,7 @@ export async function authenticateLimitedToken(token: string): Promise<LimitedPr
       signInId: row.sign_in_id,
       templateId: row.template_id,
       templateName: row.template_name,
-      templateDeleted: row.template_deleted,
+      templateUnavailable: row.template_unavailable,
     },
   };
 }
@@ -286,20 +292,27 @@ async function requestByUserCode(rawCode: string, client?: PoolClient): Promise<
   return row;
 }
 
-/** A template the person may launch from, by id, or by name with their own winning over the org's. */
-async function templateForPerson(orgId: string, userId: string, ref: string): Promise<TemplateRow | null> {
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref)) {
-    return findTemplate(orgId, ref.toLowerCase(), userId);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The template a request names, as the person deciding it would launch it: by id, or by name with
+ * their own first, then the organization's, then one shared with them. A name that only templates
+ * shared by different members match is ambiguous: that is the problem, and the id resolves it.
+ */
+async function templateForPerson(
+  orgId: string,
+  userId: string,
+  ref: string,
+): Promise<{ template: VisibleTemplate | null; ambiguity: string | null }> {
+  if (UUID.test(ref)) return { template: await findTemplate(orgId, ref.toLowerCase(), userId), ambiguity: null };
+  try {
+    return { template: await findTemplateByName(orgId, userId, ref), ambiguity: null };
+  } catch (error) {
+    if (error instanceof HttpError && (error.detail as { code?: string } | undefined)?.code === "template_name_ambiguous") {
+      return { template: null, ambiguity: error.message };
+    }
+    throw error;
   }
-  const rows = await query<{ id: string }>(
-    `SELECT id FROM pod_templates
-      WHERE org_id = $1 AND archived_at IS NULL AND (owner_user_id IS NULL OR owner_user_id = $2)
-        AND lower(name) = lower($3)
-      ORDER BY (owner_user_id IS NULL), created_at LIMIT 1`,
-    [orgId, userId, ref],
-  );
-  const id = rows.rows[0]?.id;
-  return id ? findTemplate(orgId, id, userId) : null;
 }
 
 interface Person {
@@ -309,7 +322,12 @@ interface Person {
 }
 
 /** Why `person` cannot grant this request, or null when they can. */
-function grantProblem(person: Person, template: TemplateRow | null, ref: string): string | null {
+function grantProblem(
+  person: Person,
+  { template, ambiguity }: { template: VisibleTemplate | null; ambiguity: string | null },
+  ref: string,
+): string | null {
+  if (ambiguity) return ambiguity;
   if (!template) return `you have no template named ${JSON.stringify(ref)} in this organization`;
   if (!hasPermission(person.permissions, "pods:launch")) return "your account cannot launch pods (it lacks pods:launch)";
   return null;
@@ -322,7 +340,14 @@ export interface RequestView {
   expiresAt: string;
   /** What the machine asked for, verbatim: shown only when it names no template you can use. */
   templateRef: string;
-  template: { id: string; name: string; scope: "user" | "org"; description: string | null } | null;
+  template: {
+    id: string;
+    name: string;
+    /** `shared`: another member's personal template, shared with this person by `sharedBy`. */
+    scope: "user" | "org" | "shared";
+    sharedBy: string | null;
+    description: string | null;
+  } | null;
   /** Why this person cannot confirm it; null when they can. */
   problem: string | null;
   /** Set once decided by someone else: the request is not this person's to see further. */
@@ -333,7 +358,10 @@ export interface RequestView {
 export async function describeRequest(rawCode: string, person: Person): Promise<RequestView> {
   const row = await requestByUserCode(rawCode);
   const decidedByAnother = row.decided_by !== null && row.decided_by !== person.userId;
-  const template = decidedByAnother ? null : await templateForPerson(person.orgId, person.userId, row.template_ref);
+  const resolved = decidedByAnother
+    ? { template: null, ambiguity: null }
+    : await templateForPerson(person.orgId, person.userId, row.template_ref);
+  const template = resolved.template;
   return {
     userCode: formatUserCode(row.user_code),
     state: row.state,
@@ -343,10 +371,11 @@ export async function describeRequest(rawCode: string, person: Person): Promise<
     template: template && {
       id: template.id,
       name: template.name,
-      scope: template.owner_user_id ? "user" : "org",
+      scope: template.access === "own" ? "user" : template.access,
+      sharedBy: template.shared_by,
       description: template.description,
     },
-    problem: decidedByAnother ? "someone else already decided this sign-in" : grantProblem(person, template, row.template_ref),
+    problem: decidedByAnother ? "someone else already decided this sign-in" : grantProblem(person, resolved, row.template_ref),
     decidedByAnother,
   };
 }
@@ -391,8 +420,9 @@ export async function approveRequest(
     const row = await requestByUserCode(rawCode, client);
     if (row.state !== "pending") throw conflict("this sign-in was already decided");
     if (row.expired) throw notFound("this code expired before it was confirmed; run the command on the machine again");
-    const template = await templateForPerson(person.orgId, person.userId, row.template_ref);
-    const problem = grantProblem(person, template, row.template_ref);
+    const resolved = await templateForPerson(person.orgId, person.userId, row.template_ref);
+    const template = resolved.template;
+    const problem = grantProblem(person, resolved, row.template_ref);
     if (problem || !template) throw forbidden(problem ?? "this template cannot be granted");
 
     const renewal = await renewSession(deps.env, clientId, sessionRefreshToken);
@@ -430,7 +460,12 @@ export async function approveRequest(
         action: "sign_in.limited.create",
         targetType: "limited_sign_in",
         targetId: signInId,
-        detail: { templateId: template.id, templateName: template.name, permissions: narrowedPermissions(claims.organization.permissions) },
+        detail: {
+          templateId: template.id,
+          templateName: template.name,
+          ...(template.access === "shared" ? { templateOwner: template.owner_user_id, templateOwnerEmail: template.shared_by } : {}),
+          permissions: narrowedPermissions(claims.organization.permissions),
+        },
       },
       client,
     );

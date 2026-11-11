@@ -21,6 +21,7 @@ import { sanitizeFailureMessage } from "../safe-errors.js";
 import { piSettingsDigest, type LocalPiSettingsLayers, type PlannedPiSettings } from "../settings/pi-settings.js";
 import { runPodInitSteps } from "./initialization.js";
 import { resolvePodEnv, savePodLaunchEnv } from "./launchenv.js";
+import { sharedTemplateAudit } from "../templates/store.js";
 import { START_TIMEOUT_MS, STOP_TIMEOUT_MS } from "./lifecycle.js";
 import { materializeLaunchCredentialLease, resolveLaunchEgressPolicy } from "./provisioning.js";
 import {
@@ -259,6 +260,7 @@ export async function reusePod(
     detail: {
       provider: providerName,
       secretKeys: report.secretKeys,
+      ...sharedTemplateAudit(plan.template),
       ...(args.limitedSignInId ? { limitedSignIn: args.limitedSignInId } : {}),
     },
   });

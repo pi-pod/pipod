@@ -21,7 +21,7 @@ import { button, el } from "./dom.js";
  * @property {string} requestedAt
  * @property {string} expiresAt
  * @property {string} templateRef
- * @property {{ id: string, name: string, scope: "user" | "org", description: string | null } | null} template
+ * @property {{ id: string, name: string, scope: "user" | "org" | "shared", sharedBy?: string | null, description: string | null } | null} template
  * @property {string | null} problem
  * @property {boolean} decidedByAnother
  */
@@ -31,6 +31,16 @@ import { button, el } from "./dom.js";
  * @property {{ id: string, email?: string }} user
  * @property {{ id: string, alias: string | null, name: string | null } | null} organization
  */
+
+/**
+ * Whose template the machine would be limited to, as the person confirming reads it.
+ * @param {NonNullable<SignInRequest["template"]>} template
+ */
+function templateOrigin(template) {
+  if (template.scope === "user") return "Your personal template";
+  if (template.scope === "shared") return `Shared with you by ${template.sharedBy ?? "another member"}, who owns it`;
+  return "Organization template";
+}
 
 /** @param {string} raw */
 function normalizeCode(raw) {
@@ -155,7 +165,7 @@ export async function limitedSignInPage(who, rawCode) {
       { class: "scope limited" },
       el("div", { class: "muted small" }, "Template"),
       el("div", { class: "template-name" }, template.name),
-      el("div", { class: "muted small" }, `${template.scope === "user" ? "Your personal template" : "Organization template"} · ID `, el("code", {}, template.id)),
+      el("div", { class: "muted small" }, `${templateOrigin(template)} · ID `, el("code", {}, template.id)),
     ),
     el("p", {}, "Signing in as ", el("strong", {}, account), org ? ` in ${org}.` : "."),
     el("h3", {}, "The machine will be able to"),

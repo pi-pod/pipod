@@ -6,7 +6,7 @@ export interface AccountLaunchPlan {
   /** Local display/workspace identity only; it never travels in the launch body. */
   projectName?: string;
   templateId?: string;
-  templateScope?: "user" | "org";
+  templateScope?: "user" | "org" | "shared";
   /** True only when resolve included projectConfig for the one-time bootstrap preview. */
   bootstrapPreview: boolean;
   /** Server-resolved pod config plus machine-only client preferences. */

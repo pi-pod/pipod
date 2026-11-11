@@ -126,8 +126,16 @@ export interface ApiTemplate {
   name: string;
   description: string | null;
   status: "active";
-  /** Older servers predate scoping and treat every template as org-wide. */
-  scope?: "user" | "org";
+  /**
+   * `user`: yours. `org`: the organization's. `shared`: another member's personal template that
+   * they shared with you (`sharedBy`). Older servers predate scoping and treat every template as
+   * org-wide.
+   */
+  scope?: "user" | "org" | "shared";
+  /** For a template shared with you: its owner's email. */
+  sharedBy?: string | null;
+  /** For your own personal template: who you shared it with. Older servers omit it. */
+  sharedWith?: string[];
   initScript: string | null;
   /** Older servers omit this; treat as unset rather than empty. */
   bakeScript?: string | null;
@@ -770,7 +778,10 @@ export class AccountClient {
       kind: "template";
       templateId: string;
       templateName: string;
+      /** True when the sign-in launches nothing (see templateUnavailable for why). */
       templateDeleted?: boolean;
+      /** Why it launches nothing: the template was deleted, or is no longer shared with you. */
+      templateUnavailable?: "deleted" | "unshared" | null;
       signInId: string;
     };
     accountConsoleUrl?: string;
@@ -827,8 +838,31 @@ export class AccountClient {
   }
 
   /** `expectedVersion` makes the write compare-and-swap on servers that expose template versions. */
-  updateTemplate(id: string, body: Partial<TemplateBody> & { expectedVersion?: number }): Promise<ApiTemplate> {
+  /**
+   * `orgWide` confirms that `scope: "org"` makes a personal template organization-wide, which
+   * cannot be undone; servers since 0.1.29 refuse the change without it.
+   */
+  updateTemplate(
+    id: string,
+    body: Partial<TemplateBody> & { expectedVersion?: number; orgWide?: true },
+  ): Promise<ApiTemplate> {
     return this.request(`/templates/${id}`, { method: "PATCH", body });
+  }
+
+  /** Share your personal template with one member of the organization. Idempotent. */
+  shareTemplate(id: string, email: string): Promise<{ templateId: string; name: string; sharedWith: string; created: boolean }> {
+    return this.request(`/templates/${id}/shares/${encodeURIComponent(email)}`, { method: "PUT" });
+  }
+
+  /** Stop sharing your template with one member; counts their pods from it that remain. */
+  unshareTemplate(id: string, email: string): Promise<{
+    templateId: string;
+    name: string;
+    member: string;
+    removed: boolean;
+    pods: { total: number; running: number };
+  }> {
+    return this.request(`/templates/${id}/shares/${encodeURIComponent(email)}`, { method: "DELETE" });
   }
 
   activateTemplate(id: string): Promise<{ id: string; status: string }> {

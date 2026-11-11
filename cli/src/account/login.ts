@@ -242,8 +242,14 @@ export async function runWhoami(flags: { home?: string | undefined }): Promise<n
   // One line scripts can rely on: `limit   template <name> — <id>` for a limited sign-in, and
   // `limit   none — …` for one that is the whole account.
   if (me.limitedTo) {
-    const deleted = me.limitedTo.templateDeleted ? " (deleted: this sign-in launches nothing)" : "";
-    info(`limit   template ${me.limitedTo.templateName} — ${me.limitedTo.templateId}${deleted}`);
+    const unavailable = me.limitedTo.templateUnavailable ?? (me.limitedTo.templateDeleted ? "deleted" : null);
+    const note =
+      unavailable === "unshared"
+        ? " (no longer shared with you: this sign-in launches nothing)"
+        : unavailable === "deleted"
+          ? " (deleted: this sign-in launches nothing)"
+          : "";
+    info(`limit   template ${me.limitedTo.templateName} — ${me.limitedTo.templateId}${note}`);
   } else if (auth.podToken) {
     info("limit   this pod's token — it reaches only the pods this pod launched");
   } else {
