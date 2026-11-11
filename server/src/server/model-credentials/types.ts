@@ -38,6 +38,24 @@ export type CredentialStatus =
       revision: number;
     };
 
+/**
+ * A credential as `GET /model-credentials` lists it: its status plus where it comes from.
+ * `sharedBy` (the owner's email) is set on credentials someone shared with the subject;
+ * `sharedWith` (member emails) on the subject's own credentials they share.
+ */
+export type ListedCredential = CredentialStatus & {
+  source: "own" | "shared";
+  sharedBy?: string;
+  sharedWith?: string[];
+};
+
+export interface CredentialListing {
+  /** One per provider: the credential that serves the subject's pods (see sharing.ts). */
+  credentials: ListedCredential[];
+  /** Credentials shared with the subject that their own credential for the same provider overrides. */
+  overriddenShares: ListedCredential[];
+}
+
 export interface CredentialLease {
   revision: string;
   /**
@@ -56,21 +74,27 @@ export interface CredentialLease {
   >;
 }
 
-export type LeaseFailure =
+export type LeaseFailure = (
   | { state: "reconnect_required"; reason: string }
   | { state: "temporarily_unavailable" }
-  | { state: "missing" };
+  | { state: "missing" }
+) & {
+  /** The owner's email, present only when the failing credential is one shared with the subject. */
+  sharedBy?: string;
+};
 
 export interface LeaseResult {
   lease: CredentialLease;
   failures: Record<string, LeaseFailure>;
+  /** Providers in the lease served by someone else's credential, by provider id. */
+  shared: Record<string, { ownerUserId: string; sharedBy: string }>;
 }
 
 export type BrokerAuthType = Parameters<ModelRuntime["login"]>[1];
 export type BrokerAuthInteraction = Parameters<ModelRuntime["login"]>[2];
 
 export interface ModelCredentialBroker {
-  status(subject: CredentialSubject): Promise<CredentialStatus[]>;
+  status(subject: CredentialSubject): Promise<CredentialListing>;
   login(
     subject: CredentialSubject,
     providerId: string,

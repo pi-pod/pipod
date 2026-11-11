@@ -499,6 +499,15 @@ code in the pod can read them and use the pod's token to fetch the current lease
 Removing a credential takes it out of the owner's pods, but the provider still
 accepts it: revoke it there if a pod may have exposed it.
 
+A shared credential (`pipod credentials share <provider> --with <email>`) crosses that
+boundary on purpose: the other person's pods, and any code in them, can read the access
+token or API key the owner's pods would. Share only with people you would hand the key
+to. The refresh token still never leaves the server, and `unshare` takes the credential
+out of their pods at the next lease refresh, but a provider accepts an API key until it
+is revoked there. The server learns who belongs to an organization from sign-ins, so it
+cannot see someone being removed in the Zitadel Console: unshare before or when you
+remove them.
+
 A template's agent instructions ("read-write in staging, read-only in
 production") reach the agent in every pod launched from it, but they enforce
 nothing: a pod can do whatever its secrets and egress allow. Give a template

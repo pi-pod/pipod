@@ -51,8 +51,7 @@ import { launchHostChild, resolvePlacementHost } from "./host-launch.js";
 import { PI_RESOURCE_OVERRIDE_FIELDS } from "./pi-resources.js";
 import { startedHostChildIds } from "./lifecycle.js";
 import { assertPodLifecycleAction } from "./create-attempts.js";
-import { acquireLease } from "../model-credentials/lease.js";
-import { MIN_VALIDITY_MS } from "../model-credentials/refresh.js";
+import { leaseForPod } from "../model-credentials/lease.js";
 import { uuidv7 } from "../ids.js";
 import {
   conversationEventsQuery,
@@ -1169,7 +1168,8 @@ export function registerPodRoutes(
   }
 
   // Pods poll this by revision instead of /pi-auth/fresh. The provider set is the
-  // server-maintained contract; the lease is always the pod owner's, sanitized.
+  // server-maintained contract; the lease is always the pod owner's, sanitized — their own
+  // credential per provider, else one shared with them (model-credentials/sharing.ts).
   // Pod tokens are welcome: this is their renewal window.
   r.get(
     "/pods/:id/model-credential-lease",
@@ -1189,12 +1189,7 @@ export function registerPodRoutes(
       // Usable credentials: a pod leases its own, never a descendant's.
       if (req.auth.podId && req.auth.podId !== pod.id) throw forbidden("pods lease only their own model credentials");
       const providerIds = pod.credential_providers ?? [];
-      const { lease } = await acquireLease(
-        deps.kek,
-        { orgId: pod.org_id, userId: pod.user_id },
-        providerIds,
-        MIN_VALIDITY_MS,
-      );
+      const { lease } = await leaseForPod(deps.kek, pod, providerIds, { heldRevision: req.query.revision });
       if (req.query.revision === lease.revision) {
         return reply.code(304).send();
       }

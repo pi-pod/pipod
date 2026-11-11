@@ -43,27 +43,36 @@ export async function runCredentials(args: string[], flags: CredentialsFlags = {
       // A bare `connect` (at most `--yes`) means every provider, not a usage error.
       return rest.every((arg) => arg === "--yes" || arg === "-y")
         ? bulkConnect(rest, flags)
-        : connectCredential(rest, flags);
+        : connectCredential(rest, flags, { reconnect: action === "reconnect" });
     case "test":
       return testCredential(rest, clientFor(flags));
     case "remove":
     case "rm":
       return removeCredential(rest, flags);
+    case "share":
+      return shareCredential(rest, clientFor(flags));
+    case "unshare":
+      return unshareCredential(rest, clientFor(flags));
     default:
       throw new PiPodError(`unknown \`pipod credentials\` action "${action}"`, {
-        hint: "actions: list (default), connect [<provider>] [--api-key [--from-pi]] (no provider connects every connectable provider), reconnect <provider>, test <provider>, remove <provider> [--yes]",
+        hint: "actions: list (default), connect [<provider>] [--api-key [--from-pi]] (no provider connects every connectable provider), reconnect <provider>, test <provider>, remove <provider> [--yes], share <provider> --with <email>, unshare <provider> --with <email>",
       });
   }
 }
 
 async function listCredentials(client: AccountClient): Promise<number> {
   const result = await client.modelCredentials();
-  if (result.credentials.length === 0) info("no account model-provider credentials are saved");
+  const overridden = result.overriddenShares ?? [];
+  if (result.credentials.length === 0 && overridden.length === 0) {
+    info("no account model-provider credentials are saved");
+  }
   for (const credential of result.credentials) out(formatStatus(credential));
+  for (const credential of overridden) out(`${formatStatus(credential)}  (not used: you have your own)`);
 
-  const stored = new Set(result.credentials.map((credential) => credential.providerId));
+  // A provider served by someone else's credential can still take your own.
+  const own = new Set(result.credentials.filter((c) => c.source !== "shared").map((c) => c.providerId));
   const connectable = result.providers
-    .filter((provider) => provider.brokerSupported && !stored.has(provider.id))
+    .filter((provider) => provider.brokerSupported && !own.has(provider.id))
     .map((provider) => provider.id);
   info(`Connectable: ${connectable.length > 0 ? connectable.join(", ") : "none"}`);
   return 0;
@@ -71,7 +80,11 @@ async function listCredentials(client: AccountClient): Promise<number> {
 
 const CONNECT_USAGE = "usage: pipod credentials connect <provider> [--api-key [--from-pi]]";
 
-async function connectCredential(args: string[], flags: CredentialsFlags): Promise<number> {
+async function connectCredential(
+  args: string[],
+  flags: CredentialsFlags,
+  opts: { reconnect: boolean },
+): Promise<number> {
   let providerId: string | undefined;
   let apiKey = false;
   let fromPi = false;
@@ -85,6 +98,16 @@ async function connectCredential(args: string[], flags: CredentialsFlags): Promi
   if (!providerId) throw new PiPodError(CONNECT_USAGE);
   // OAuth grants are machine-bound and never importable; --from-pi always means an API key.
   if (fromPi) apiKey = true;
+  // `connect` on a shared provider gives you your own, which then serves your pods; `reconnect`
+  // means the credential you use now, and a shared one is its owner's to reconnect.
+  if (opts.reconnect) {
+    const shared = await sharedCredentialServing(clientFor(flags), providerId);
+    if (shared) {
+      throw new PiPodError(`${providerId} is shared with you by ${shared.sharedBy}; only they can reconnect it`, {
+        hint: `\`pipod credentials connect ${providerId}\` connects your own, which your pods then use instead`,
+      });
+    }
+  }
 
   const terminal = flags.interaction ? null : terminalInteraction();
   try {
@@ -161,7 +184,10 @@ async function bulkConnect(args: string[], flags: CredentialsFlags): Promise<num
   const planned: ConnectPlan[] = [];
   const skipped: SkippedProvider[] = connectable
     .filter((provider) => stored.get(provider.id)?.state === "ready")
-    .map((provider) => ({ providerId: provider.id, reason: "already connected" }));
+    .map((provider) => {
+      const sharedBy = stored.get(provider.id)?.sharedBy;
+      return { providerId: provider.id, reason: sharedBy ? `shared by ${sharedBy}` : "already connected" };
+    });
   for (const provider of candidates) {
     const local = await check(provider.id);
     if (local.status === "invalid") {
@@ -332,7 +358,11 @@ async function testCredential(args: string[], client: AccountClient): Promise<nu
   const { status } = await client.testModelCredential(providerId);
   out(formatStatus(status));
   if (status.state === "ready") return 0;
-  info(`\`pipod credentials reconnect ${providerId}\` signs in again`);
+  info(
+    status.sharedBy
+      ? `${status.sharedBy} can reconnect it; \`pipod credentials connect ${providerId}\` connects your own instead`
+      : `\`pipod credentials reconnect ${providerId}\` signs in again`,
+  );
   return 1;
 }
 
@@ -346,25 +376,107 @@ async function removeCredential(args: string[], flags: CredentialsFlags): Promis
     else throw new PiPodError(`unexpected argument "${arg}"`, { hint: "usage: pipod credentials remove <provider> [--yes]" });
   }
   if (!providerId) throw new PiPodError("usage: pipod credentials remove <provider> [--yes]");
+  const client = clientFor(flags);
+  const listing = await client.modelCredentials();
+  const serving = listing.credentials.find((credential) => credential.providerId === providerId);
+  if (serving?.sharedBy) {
+    throw new PiPodError(`${providerId} is shared with you by ${serving.sharedBy}; only they can remove it`, {
+      hint: `\`pipod credentials connect ${providerId}\` connects your own, which your pods then use instead`,
+    });
+  }
+  // Removing your own falls back to the credential someone shares with you, if anyone does.
+  const fallback = listing.overriddenShares?.find((credential) => credential.providerId === providerId)?.sharedBy;
   if (!yes && !isInteractive()) {
     throw new PiPodError(`refusing to remove the saved ${providerId} sign-in without a terminal`, {
       hint: `rerun with \`pipod credentials remove ${providerId} --yes\``,
     });
   }
   const approved = await confirm(
-    `Remove the saved ${providerId} sign-in? Pods stop using it.`,
+    fallback
+      ? `Remove your saved ${providerId} sign-in? Pods switch to the one ${fallback} shares with you.`
+      : `Remove the saved ${providerId} sign-in? Pods stop using it.`,
     { nonInteractiveDefault: false, assumeYes: yes },
   );
   if (!approved) throw new CancelledError("Credential removal cancelled");
-  await clientFor(flags).deleteModelCredential(providerId);
-  info(`removed the saved ${providerId} sign-in; pods stop using it`);
+  await client.deleteModelCredential(providerId);
+  info(
+    fallback
+      ? `removed your saved ${providerId} sign-in; pods now use the one ${fallback} shares with you`
+      : `removed the saved ${providerId} sign-in; pods stop using it`,
+  );
   info(`${providerId} still accepts it until you revoke it there; do that if a pod may have exposed it`);
+  return 0;
+}
+
+/** The credential serving your pods for `providerId` when it is someone else's, else null. */
+async function sharedCredentialServing(
+  client: AccountClient,
+  providerId: string,
+): Promise<{ sharedBy: string } | null> {
+  const { credentials } = await client.modelCredentials();
+  const sharedBy = credentials.find((credential) => credential.providerId === providerId)?.sharedBy;
+  return sharedBy ? { sharedBy } : null;
+}
+
+const SHARE_USAGE = "usage: pipod credentials share <provider> --with <email>";
+const UNSHARE_USAGE = "usage: pipod credentials unshare <provider> --with <email>";
+
+function parseShareArgs(args: string[], usage: string): { providerId: string; email: string } {
+  let providerId: string | undefined;
+  let email: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--with") email = args[++i];
+    else if (arg.startsWith("--with=")) email = arg.slice("--with=".length);
+    else if (arg.startsWith("-")) throw new PiPodError(`unknown pipod credentials option "${arg}"`, { hint: usage });
+    else if (providerId === undefined) providerId = arg;
+    else throw new PiPodError(`unexpected argument "${arg}"`, { hint: usage });
+  }
+  if (!providerId || !email) throw new PiPodError(usage);
+  return { providerId, email };
+}
+
+/** A server from before credential sharing has no share routes at all. */
+function sharingUnsupported(error: unknown): unknown {
+  if (error instanceof PiPodError && error.status === 404 && error.code === undefined) {
+    return new PiPodError("this pi pod server does not support credential sharing", {
+      hint: "it needs a newer pi pod server; ask whoever runs it to update",
+    });
+  }
+  return error;
+}
+
+async function shareCredential(args: string[], client: AccountClient): Promise<number> {
+  const { providerId, email } = parseShareArgs(args, SHARE_USAGE);
+  const shared = await client.shareModelCredential(providerId, email).catch((error: unknown) => {
+    throw sharingUnsupported(error);
+  });
+  info(
+    shared.created
+      ? `shared your ${providerId} credential with ${shared.sharedWith}; their pods use it unless they connect their own`
+      : `your ${providerId} credential was already shared with ${shared.sharedWith}`,
+  );
+  return 0;
+}
+
+async function unshareCredential(args: string[], client: AccountClient): Promise<number> {
+  const { providerId, email } = parseShareArgs(args, UNSHARE_USAGE);
+  await client.unshareModelCredential(providerId, email).catch((error: unknown) => {
+    throw sharingUnsupported(error);
+  });
+  info(`${email} no longer gets your ${providerId} credential`);
+  info("their running pods drop it at their next credential refresh, within about ten minutes");
   return 0;
 }
 
 function formatStatus(status: CredentialStatus): string {
   const expires = status.state === "ready" && status.expiresAt ? `  (expires ${status.expiresAt})` : "";
-  return `${status.providerId}  ${status.state.replaceAll("_", " ")}${expires}`;
+  const source = status.sharedBy
+    ? `  shared by ${status.sharedBy}`
+    : status.sharedWith?.length
+      ? `  shared with ${status.sharedWith.join(", ")}`
+      : "";
+  return `${status.providerId}  ${status.state.replaceAll("_", " ")}${expires}${source}`;
 }
 
 function rejectExtra(args: string[], usage: string): void {

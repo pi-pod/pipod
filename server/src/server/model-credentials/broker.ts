@@ -18,10 +18,12 @@ import {
   type LoginExec,
 } from "./login.js";
 import { type RefreshExec } from "./refresh.js";
-import { deleteCredential, listCredentialMeta } from "./store.js";
+import { listCredentials } from "./sharing.js";
+import { deleteCredential } from "./store.js";
 import type {
   BrokerAuthInteraction,
   BrokerAuthType,
+  CredentialListing,
   CredentialStatus,
   CredentialSubject,
   LeaseResult,
@@ -117,21 +119,21 @@ export function createModelCredentialBroker(
   seams?: ModelCredentialBrokerSeams,
 ): ModelCredentialBroker {
   return {
-    async status(subject: CredentialSubject): Promise<CredentialStatus[]> {
+    async status(subject: CredentialSubject): Promise<CredentialListing> {
       try {
-        const metas = await listCredentialMeta(subject);
-        const statuses = metas.map((meta) => classifyCredentialMeta(meta));
+        const listing = await listCredentials(subject);
         await auditBroker({
           subject,
           action: "model_credentials.status",
           detail: {
-            providers: statuses.map((status) => ({
+            providers: listing.credentials.map((status) => ({
               provider: status.providerId,
               state: status.state,
+              source: status.source,
             })),
           },
         });
-        return statuses;
+        return listing;
       } catch (error) {
         await auditBrokerFailure(subject, "model_credentials.status", undefined, error);
         throw error;

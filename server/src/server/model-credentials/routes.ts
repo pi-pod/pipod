@@ -25,7 +25,7 @@ import {
   listConnectableProviders,
 } from "./broker.js";
 import { brokerCapability, type BrokerCapability } from "./dependencies.js";
-import { acquireLease } from "./lease.js";
+import { leaseForPod } from "./lease.js";
 import {
   consumeLoginTicket,
   createLoginTicket,
@@ -38,6 +38,7 @@ import {
   readPodCredentialContract,
 } from "./materializer.js";
 import { ensureFreshCredential, MIN_VALIDITY_MS, type RefreshExec } from "./refresh.js";
+import { servingCredential, shareCredential, unshareCredential } from "./sharing.js";
 import { listCredentialMeta } from "./store.js";
 import type {
   BrokerAuthInteraction,
@@ -58,6 +59,10 @@ export interface ModelCredentialRouteDeps {
 
 const ProviderParams = z.object({
   providerId: z.string().min(1).max(200),
+});
+
+const ShareParams = ProviderParams.extend({
+  email: z.string().min(3).max(320).regex(/^[^@\s]+@[^@\s]+$/, "must be an email address"),
 });
 
 const LoginTicketBody = z
@@ -195,12 +200,7 @@ async function applyLoginToPod(
   // supplies them. Sleeping/non-materialized pods retain the contract and receive the lease
   // on their next strict readiness or best-effort wake pass.
   if (!deps.podDeps || pod.provider_state !== "started" || !pod.provider_sandbox_id) return;
-  const { lease } = await acquireLease(
-    deps.kek,
-    { orgId: pod.org_id, userId: pod.user_id },
-    contract,
-    MIN_VALIDITY_MS,
-  );
+  const { lease } = await leaseForPod(deps.kek, pod, contract);
   await withPodSandbox(deps.podDeps, pod, (sandbox) =>
     materializeCredentialLease(sandbox, lease),
   );
@@ -281,11 +281,11 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
     "/model-credentials",
     { preHandler: [app.authenticate] },
     async (req) => {
-      const [credentials, providers] = await Promise.all([
+      const [listing, providers] = await Promise.all([
         broker.status(subjectOf(req.auth)),
         listConnectableProviders(),
       ]);
-      return { credentials, providers };
+      return { ...listing, providers };
     },
   );
 
@@ -331,26 +331,31 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
     },
     async (req) => {
       const { providerId } = req.params;
-      const subject = subjectOf(req.auth);
       try {
-        const outcome = await ensureFreshCredential(
-          deps.kek,
-          subject,
-          providerId,
-          MIN_VALIDITY_MS,
-          { refreshExec: deps.refreshExec },
-        );
+        // The credential that serves this person's pods: their own, else one shared with them.
+        // Testing a shared one refreshes the owner's grant exactly as their own pods would.
+        const serving = await servingCredential(subjectOf(req.auth), providerId);
+        const owner = serving?.owner;
+        const source = serving?.sharedBy
+          ? { source: "shared" as const, sharedBy: serving.sharedBy }
+          : { source: "own" as const };
+        const auditSource = serving?.sharedBy ? { source: "shared", owner: owner!.userId } : {};
+        const outcome = owner
+          ? await ensureFreshCredential(deps.kek, owner, providerId, MIN_VALIDITY_MS, {
+              refreshExec: deps.refreshExec,
+            })
+          : ({ state: "missing" } as const);
         if (outcome.state === "missing") {
-          await auditRoute(req.auth, "model_credentials.test", providerId, { outcome: "missing" });
+          await auditRoute(req.auth, "model_credentials.test", providerId, { outcome: "missing", ...auditSource });
           throw notFound("credential not found");
         }
-        const meta = (await listCredentialMeta(subject)).find((row) => row.providerId === providerId);
+        const meta = (await listCredentialMeta(owner!)).find((row) => row.providerId === providerId);
         if (!meta) {
-          await auditRoute(req.auth, "model_credentials.test", providerId, { outcome: "missing" });
+          await auditRoute(req.auth, "model_credentials.test", providerId, { outcome: "missing", ...auditSource });
           throw notFound("credential not found");
         }
-        const status = classifyCredentialMeta(meta);
-        await auditRoute(req.auth, "model_credentials.test", providerId, { outcome: status.state });
+        const status = { ...classifyCredentialMeta(meta), ...source };
+        await auditRoute(req.auth, "model_credentials.test", providerId, { outcome: status.state, ...auditSource });
         return { status };
       } catch (error) {
         if (error instanceof HttpError && error.statusCode === 404) throw error;
@@ -374,15 +379,80 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
     },
     async (req, reply) => {
       const subject = subjectOf(req.auth);
-      const removed = await broker.remove(subject, req.params.providerId);
-      if (!removed) throw notFound("credential not found");
+      const providerId = req.params.providerId;
+      const removed = await broker.remove(subject, providerId);
+      if (!removed) {
+        const serving = await servingCredential(subject, providerId);
+        if (serving?.sharedBy) {
+          throw new HttpError(409, "credential_shared", {
+            code: "credential_shared",
+            message:
+              `${providerId} is shared with you by ${serving.sharedBy}; only they can remove it. ` +
+              `\`pipod credentials connect ${providerId}\` connects your own, which your pods then use instead.`,
+            provider: providerId,
+            sharedBy: serving.sharedBy,
+          });
+        }
+        throw notFound("credential not found");
+      }
       const podDeps = deps.podDeps;
       if (podDeps) {
         // Not awaited: a slow host must not hold up the removal itself.
-        void reapplyCredentialLeaseInStartedPods(podDeps, subject, req.params.providerId).catch(() => {
-          podDeps.log.warn(`removing ${req.params.providerId} from started pods failed; they drop it on wake`);
+        // A credential shared with this person, if any, takes over in the same pass.
+        void reapplyCredentialLeaseInStartedPods(podDeps, subject, providerId).catch(() => {
+          podDeps.log.warn(`removing ${providerId} from started pods failed; they drop it on wake`);
         });
       }
+      return reply.code(204).send();
+    },
+  );
+
+  // Sharing is the owner's: only someone with their own credential for the provider can share
+  // it, and unsharing touches only the caller's own shares. See sharing.ts for the rule that
+  // decides which credential serves a person.
+  r.put(
+    "/model-credentials/:providerId/shares/:email",
+    {
+      preHandler: [app.authenticate],
+      schema: { params: ShareParams },
+    },
+    async (req) => {
+      const { providerId, email } = req.params;
+      try {
+        const { member, created } = await shareCredential(subjectOf(req.auth), providerId, email);
+        await auditRoute(req.auth, "model_credentials.share", providerId, {
+          outcome: created ? "shared" : "unchanged",
+          member: member.userId,
+          memberEmail: member.email,
+        });
+        return { providerId, sharedWith: member.email, created };
+      } catch (error) {
+        try {
+          await auditRoute(req.auth, "model_credentials.share", providerId, {
+            outcome: error instanceof HttpError ? error.message : "error",
+          });
+        } catch {
+          // keep original
+        }
+        throw error;
+      }
+    },
+  );
+
+  r.delete(
+    "/model-credentials/:providerId/shares/:email",
+    {
+      preHandler: [app.authenticate],
+      schema: { params: ShareParams },
+    },
+    async (req, reply) => {
+      const { providerId, email } = req.params;
+      const { removed, memberUserId } = await unshareCredential(subjectOf(req.auth), providerId, email);
+      await auditRoute(req.auth, "model_credentials.unshare", providerId, {
+        outcome: removed ? "removed" : "absent",
+        ...(memberUserId ? { member: memberUserId } : {}),
+        memberEmail: email,
+      });
       return reply.code(204).send();
     },
   );

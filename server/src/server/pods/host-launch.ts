@@ -26,7 +26,7 @@ import { badRequest, conflict } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import { truncate } from "../push/copy.js";
 import { enqueuePush } from "../push/queue.js";
-import { listCredentialMeta } from "../model-credentials/store.js";
+import { servingCredentialMetas } from "../model-credentials/sharing.js";
 import { assertProviderNotDenied, assertProviderPermitted, resolveSettings } from "../settings/merge.js";
 import { planLocalPiSettings } from "../settings/pi-settings.js";
 import { DEFAULT_TEMPLATE_NAME } from "../templates/store.js";
@@ -146,7 +146,7 @@ export async function launchHostChild(
       includeUserLayer,
       templateId: template?.id ?? null,
     }),
-    listCredentialMeta({ orgId: args.orgId, userId: args.userId }),
+    servingCredentialMetas({ orgId: args.orgId, userId: args.userId }),
     resolveSettings({
       orgId: args.orgId,
       userId: args.userId,

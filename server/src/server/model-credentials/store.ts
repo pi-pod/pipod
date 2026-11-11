@@ -20,8 +20,18 @@ export type PiCredential = NonNullable<Awaited<ReturnType<PiCredentialStore["rea
 /** OpenRouter and similar encode "non-expiring" as MAX_SAFE_INTEGER; also treat ≥ year 9000 as NULL. */
 export const NON_EXPIRING_SQL_CUTOFF_MS = Date.UTC(9000, 0, 1);
 
-const META_COLUMNS = `id, org_id, user_id, provider_id, credential_type, key_id, expires_at, revision,
-       last_refresh_at, last_failure_code, last_failure_at, created_at, updated_at`;
+const META_COLUMN_NAMES = [
+  "id", "org_id", "user_id", "provider_id", "credential_type", "key_id", "expires_at", "revision",
+  "last_refresh_at", "last_failure_code", "last_failure_at", "created_at", "updated_at",
+] as const;
+
+/** The {@link ModelCredentialMetaRow} select list — every column but the ciphertext — for a query
+ * that names `model_credentials` as `alias`. */
+export function credentialMetaColumns(alias?: string): string {
+  return META_COLUMN_NAMES.map((name) => (alias ? `${alias}.${name}` : name)).join(", ");
+}
+
+const META_COLUMNS = credentialMetaColumns();
 
 export interface ModelCredentialRow {
   id: string;

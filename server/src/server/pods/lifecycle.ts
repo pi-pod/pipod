@@ -6,12 +6,11 @@ import { hostForPod, hostCanDial, requireHostAwake, currentHostUrl, clientForHos
 import { assertPersonalPodAccess, edition } from "../edition.js";
 import { requestCpuAllocatorWake } from "../workers/cpu-allocator.js";
 import { query, tx } from "../db/index.js";
-import { acquireLease } from "../model-credentials/lease.js";
+import { leaseForPod } from "../model-credentials/lease.js";
 import {
   materializeCredentialLease,
   readPodCredentialContract,
 } from "../model-credentials/materializer.js";
-import { MIN_VALIDITY_MS } from "../model-credentials/refresh.js";
 import { acquireQuotaLocks, orgConcurrencyCapTx, assertQuotaRoomTx, assertRoomToWake } from "./concurrency.js";
 import { isHostPod, withHostChildSandbox } from "./hostmachine.js";
 import { HttpError, conflict, notFound, serviceUnavailable } from "../httperrors.js";
@@ -335,12 +334,7 @@ export async function materializePodCredentialLeaseBestEffort(
   const providers = await readPodCredentialContract(pod);
   if (providers.length === 0) return;
   try {
-    const { lease } = await acquireLease(
-      deps.kek,
-      { orgId: pod.org_id, userId: pod.user_id },
-      providers,
-      MIN_VALIDITY_MS,
-    );
+    const { lease } = await leaseForPod(deps.kek, pod, providers);
     await materializeCredentialLease(sandbox, lease, env);
   } catch {
     deps.log.warn(`pod ${pod.id} credential lease refresh was unavailable; keeping its existing auth file`);
@@ -349,9 +343,10 @@ export async function materializePodCredentialLeaseBestEffort(
 
 /**
  * Re-apply the lease in the owner's started pods that contract `providerId`, so a removed
- * account credential leaves them now rather than at their next ten-minute lease poll. A pod
- * this misses — asleep, or its host unreachable — drops it on wake, or at that poll once the
- * pod has a lease record (`POD_LEASED_PROVIDERS_PATH`).
+ * account credential leaves them now rather than at their next ten-minute lease poll (or, when
+ * someone shares that provider with the owner, is replaced by the shared one). A pod this
+ * misses — asleep, or its host unreachable — drops it on wake, or at that poll once the pod has
+ * a lease record (`POD_LEASED_PROVIDERS_PATH`).
  */
 export async function reapplyCredentialLeaseInStartedPods(
   deps: PodServiceDeps,

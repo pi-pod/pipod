@@ -38,12 +38,11 @@ import {
 import { HttpError, badRequest, conflict, serviceUnavailable } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import { credentialProvidersFor, resolveRequiredCredentialProviders } from "../model-credentials/dependencies.js";
-import { acquireLease } from "../model-credentials/lease.js";
+import { leaseForPod } from "../model-credentials/lease.js";
 import {
   materializeCredentialLease,
   persistPodCredentialContract,
 } from "../model-credentials/materializer.js";
-import { MIN_VALIDITY_MS } from "../model-credentials/refresh.js";
 import type { CredentialLease, LeaseFailure } from "../model-credentials/types.js";
 import { truncate } from "../push/copy.js";
 import { FLEET_UNAVAILABLE_CODE, fleetUnavailableDetail, sanitizeFailureMessage } from "../safe-errors.js";
@@ -231,7 +230,10 @@ function throwIfRequiredLeaseBlocked(
       const reason = failure.reason ? ` (${failure.reason})` : "";
       throw conflict("credential_reconnect_required", {
         code: "credential_reconnect_required",
-        message: `Reconnect the ${providerId} account credential${reason}.`,
+        message: failure.sharedBy
+          ? `The ${providerId} credential shared with you by ${failure.sharedBy} needs reconnecting${reason}; ` +
+            `they can reconnect it, or connect your own.`
+          : `Reconnect the ${providerId} account credential${reason}.`,
         provider: providerId,
         requiredBy: credentialRequiredBy(providerId, modelProvider, packages),
       });
@@ -239,7 +241,9 @@ function throwIfRequiredLeaseBlocked(
     if (failure.state === "temporarily_unavailable" && lease.providers[providerId] === undefined) {
       throw serviceUnavailable("credential_temporarily_unavailable", {
         code: "credential_temporarily_unavailable",
-        message: `The ${providerId} account credential is temporarily unavailable.`,
+        message: failure.sharedBy
+          ? `The ${providerId} credential shared with you by ${failure.sharedBy} is temporarily unavailable.`
+          : `The ${providerId} account credential is temporarily unavailable.`,
         provider: providerId,
         retryable: true,
       });
@@ -270,11 +274,10 @@ export async function materializeLaunchCredentialLease(args: {
   const required = resolveRequiredCredentialProviders({ modelProvider, packages }).filter(
     (id) => id.length > 0,
   );
-  const { lease, failures } = await acquireLease(
+  const { lease, failures } = await leaseForPod(
     args.kek,
-    { orgId: args.orgId, userId: args.userId },
+    { id: args.podId, org_id: args.orgId, user_id: args.userId },
     contract,
-    MIN_VALIDITY_MS,
   );
   throwIfRequiredLeaseBlocked(required, lease, failures, modelProvider, packages);
   await materializeCredentialLease(args.sandbox, lease, args.execEnv);

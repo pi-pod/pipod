@@ -23,7 +23,7 @@ import {
   resolveRequiredCredentialProviders,
 } from "../model-credentials/dependencies.js";
 import { classifyCredentialMeta } from "../model-credentials/login.js";
-import { listCredentialMeta, type CredentialMeta } from "../model-credentials/store.js";
+import { servingCredentialMetas, type ServingCredentialMeta } from "../model-credentials/sharing.js";
 import { checkProviderCredential, resolveSecrets } from "../secrets/store.js";
 import { assertProviderNotDenied, assertProviderPermitted, resolveSettings, type Clamp, type OrgPolicy } from "../settings/merge.js";
 import { HOST_PROVIDER_NAME } from "../../core/providers/host.js";
@@ -226,10 +226,12 @@ function credentialRequiredBy(
   return credentialProvider;
 }
 
-function reconnectRequiredError(providerId: string, requiredBy: string): never {
+function reconnectRequiredError(providerId: string, requiredBy: string, sharedBy: string | undefined): never {
   throw conflict("credential_reconnect_required", {
     code: "credential_reconnect_required",
-    message: `The saved ${providerId} credential must be reconnected.`,
+    message: sharedBy
+      ? `The ${providerId} credential shared with you by ${sharedBy} must be reconnected; they can reconnect it, or connect your own.`
+      : `The saved ${providerId} credential must be reconnected.`,
     provider: providerId,
     requiredBy,
   });
@@ -237,11 +239,13 @@ function reconnectRequiredError(providerId: string, requiredBy: string): never {
 
 /**
  * Account credential metadata for a launch: ready stored ids (no contents) plus the
- * authorized contract. Throws 409 `credential_reconnect_required` when a required
- * provider is already in terminal reconnect state. Missing required rows are allowed.
+ * authorized contract. `metas` are the credentials that serve the launcher, one per provider:
+ * their own, else one shared with them (model-credentials/sharing.ts). Throws 409
+ * `credential_reconnect_required` when a required provider is already in terminal reconnect
+ * state. Missing required rows are allowed.
  */
 export function planLaunchCredentials(args: {
-  metas: CredentialMeta[];
+  metas: ServingCredentialMeta[];
   config: Pick<PiPodConfig, "pi">;
   piSettings: PlannedPiSettings | null;
 }): { piAuth: { providers: string[] } | null; credentialContract: string[] } {
@@ -289,7 +293,7 @@ export function planLaunchCredentials(args: {
     const meta = byId.get(providerId);
     if (!meta) continue;
     if (classifyCredentialMeta(meta).state !== "reconnect_required") continue;
-    reconnectRequiredError(providerId, credentialRequiredBy(providerId, modelProvider, packages));
+    reconnectRequiredError(providerId, credentialRequiredBy(providerId, modelProvider, packages), meta.sharedBy);
   }
 
   return {
@@ -457,7 +461,7 @@ export async function planPodLaunch(
       includeUserLayer: includeUserBundle,
       templateId: template?.id ?? null,
     }),
-    listCredentialMeta({ orgId: args.orgId, userId: args.userId }),
+    servingCredentialMetas({ orgId: args.orgId, userId: args.userId }),
     resolveSettings({
       orgId: args.orgId,
       userId: args.userId,
