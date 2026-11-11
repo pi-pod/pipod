@@ -33,7 +33,7 @@ import {
   type LocalPiSettingsLayers,
   type PlannedPiSettings,
 } from "../settings/pi-settings.js";
-import type { TemplateRow } from "../templates/store.js";
+import { templateSettingsScope, type VisibleTemplate } from "../templates/store.js";
 import {
   loadProviderRegistry,
   PACKAGE_PROVIDERS,
@@ -42,7 +42,7 @@ import {
   withPackageProviders,
   type ProviderRegistry,
 } from "../../core/piregistry.js";
-import { composePodEnv, type LaunchEnvLayers } from "./launchenv.js";
+import { composePodEnv, launchEnvLayersFor, type LaunchEnvLayers } from "./launchenv.js";
 import {
   applyPiResourceOverrides,
   normalizePiResources,
@@ -319,7 +319,8 @@ export interface LaunchProject {
  */
 export interface PodLaunchPlan {
   sandboxHostId: string | null;
-  template: TemplateRow | null;
+  /** As the launcher sees it: their own, the organization's, or shared with them. */
+  template: VisibleTemplate | null;
   project: LaunchProject | null;
   config: PiPodConfig;
   /** Which explicit layer supplied each configured leaf value (later layers win). */
@@ -468,7 +469,7 @@ export async function planPodLaunch(
       includeUserLayer: includeUserBundle,
       templateConfigRaw: template?.config ?? null,
       templatePiFilesRaw: template?.pi_settings ?? null,
-      templateScope: template ? (template.owner_user_id === null ? "org" : "user") : null,
+      templateScope: template ? templateSettingsScope(template) : null,
       projectConfigRaw,
       templateSelected: template !== null,
     }),
@@ -639,7 +640,7 @@ export async function planPodLaunch(
     org: resolved.bakeScripts.org,
     user: resolved.bakeScripts.user,
     template: template?.bake_script ?? null,
-    templateScope: template?.owner_user_id === null ? "org" : "user",
+    templateScope: template ? templateSettingsScope(template) : "user",
   });
   const composedBake = composeBakeScript(bakeSteps);
   const imageRecipeInputs = {
@@ -685,7 +686,7 @@ export async function planPodLaunch(
     org: resolved.initScripts.org,
     user: resolved.initScripts.user,
     template: template?.init_script ?? null,
-    templateScope: template?.owner_user_id === null ? "org" : "user",
+    templateScope: template ? templateSettingsScope(template) : "user",
   });
 
   // A template-less, project-less launch has no name of its own yet; pi renames the pod
@@ -695,7 +696,7 @@ export async function planPodLaunch(
   // Every launch works in the same initially-empty workdir; the init scripts own its
   // contents (§5.2).
   const workdir = config.workdir;
-  const launchEnvLayers: LaunchEnvLayers = { project: {} };
+  const launchEnvLayers = launchEnvLayersFor(secrets.layers, template);
   const podEnv = composePodEnv(secrets.env, launchEnvLayers);
   const secretScopes: Record<string, string> = { ...secrets.origins };
   const secretShadows: Record<string, string[]> = {};

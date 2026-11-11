@@ -29,10 +29,10 @@ import { enqueuePush } from "../push/queue.js";
 import { servingCredentialMetas } from "../model-credentials/sharing.js";
 import { assertProviderNotDenied, assertProviderPermitted, resolveSettings } from "../settings/merge.js";
 import { planLocalPiSettings } from "../settings/pi-settings.js";
-import { DEFAULT_TEMPLATE_NAME } from "../templates/store.js";
+import { DEFAULT_TEMPLATE_NAME, sharedTemplateAudit, templateSettingsScope } from "../templates/store.js";
 import { withHostMachineProvider } from "./hostmachine.js";
 import { runPodInitSteps } from "./initialization.js";
-import { composePodEnv, savePodLaunchEnv, type LaunchEnvLayers } from "./launchenv.js";
+import { composePodEnv, launchEnvLayersFor, savePodLaunchEnv } from "./launchenv.js";
 import { ensureProviderPodStarted } from "./lifecycle.js";
 import {
   delegateCredentials,
@@ -155,7 +155,7 @@ export async function launchHostChild(
       includeUserLayer,
       templateConfigRaw: template?.config ?? null,
       templatePiFilesRaw: template?.pi_settings ?? null,
-      templateScope: template ? (template.owner_user_id === null ? "org" : "user") : null,
+      templateScope: template ? templateSettingsScope(template) : null,
       templateSelected: template !== null,
     }),
   ]);
@@ -220,7 +220,7 @@ export async function launchHostChild(
         org: resolved.initScripts.org,
         user: resolved.initScripts.user,
         template: template?.init_script ?? null,
-        templateScope: template?.owner_user_id === null ? "org" : "user",
+        templateScope: template ? templateSettingsScope(template) : "user",
       })
     : [];
   if (!ownsWorkdir && (
@@ -240,7 +240,7 @@ export async function launchHostChild(
   config.idleTimeoutMinutes = 0;
   config.archiveAfterMinutes = 0;
 
-  const launchEnvLayers: LaunchEnvLayers = { project: {} };
+  const launchEnvLayers = launchEnvLayersFor(secrets.layers, template);
   const podEnv = composePodEnv(secrets.env, launchEnvLayers);
   const secretScopes: Record<string, string> = { ...secrets.origins };
   for (const key of Object.keys(launchEnvLayers.project)) {
@@ -360,6 +360,7 @@ export async function launchHostChild(
       targetId: podId,
       detail: {
         template: template?.id ?? (project ? `project:${project.name}` : DEFAULT_TEMPLATE_NAME),
+        ...sharedTemplateAudit(template),
         provider: HOST_PROVIDER_NAME,
         host: host.id,
         secretKeys: report.secretKeys,

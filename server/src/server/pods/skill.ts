@@ -33,8 +33,10 @@ A **session** is a pi agent session (like this one) inside a pod. This pod was l
 one template; the user can ask you to create a *new* template so their next pod comes up
 pre-configured. You cannot launch pods from a template you create (see "Child pods"): the user
 launches it. Templates you create are **personal to the user** — only they see and launch
-them. Sharing one org-wide is the user's step, not yours: \`pipod templates share <name>\`
-(it needs the org:manage permission and cannot be undone).
+them. Sharing one is the user's step, not yours: \`pipod templates share <name> --with <email>\`
+lets one named member launch from it (and \`templates unshare\` takes that back), while
+\`pipod templates share <name>\` makes it org-wide (it needs the org:manage permission and
+cannot be undone).
 
 ## This pod's template and its access
 
@@ -303,7 +305,9 @@ Rules for both scripts:
 
 Every launch resolves server-resident organization and user bundles plus an optional template. An
 organization-scoped template is positioned before the user bundle; a user-scoped template is
-positioned after it. Later config values win, arrays replace, setup scripts concatenate in that
+positioned after it. A template another member shared with the user (\`scope: "shared"\`,
+\`sharedBy\` names its owner) is positioned like an organization-scoped one, and only its owner
+can change it or its secrets. Later config values win, arrays replace, setup scripts concatenate in that
 same order, and Pi files merge per file. Request project settings, env, scripts, and Pi files are
 retired launch inputs; push them to a template or server bundle instead. Organization policy clamps
 the resolved result, and \`requireTemplate\` can require a selected template. Explicit
@@ -318,7 +322,7 @@ applies from the next launch):
 Each of \`org\`, \`user\`, and \`template\` carries \`config\`, \`initScript\`, \`bakeScript\`,
 \`piFiles\`, and \`version\`; \`template\` also carries \`agentInstructions\`. \`user\` is null in a pod launched without its owner's personal
 settings (an organization job, and pods it launches); \`template\` is null when this pod
-launched without one or it has since been deleted. Organization policy is not readable from a
+launched without one, it has since been deleted, or it is no longer shared with the user. Organization policy is not readable from a
 pod; \`POST /v1/pods/resolve\` (above) reports every clamp it applies.
 
 The organization and user layers are **read-only** to you: their scripts run in every later

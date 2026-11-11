@@ -178,6 +178,16 @@ function ago(iso) {
   return "just now";
 }
 
+/**
+ * @param {Template} t
+ * @returns {string}
+ */
+function whoCanLaunch(t) {
+  if (t.scope === "org") return "Everyone";
+  if (t.scope === "shared") return `You, shared by ${t.sharedBy ?? "another member"}`;
+  return t.sharedWith?.length ? `Me and ${t.sharedWith.join(", ")}` : "Only me";
+}
+
 /** @param {Me} who */
 async function templatesPage(who) {
   /** @type {{ templates: Template[] }} */
@@ -191,7 +201,7 @@ async function templatesPage(who) {
         "tr",
         {},
         el("td", {}, el("a", { href: `#/templates/${t.id}` }, t.name)),
-        el("td", {}, t.scope === "org" ? "Everyone" : "Only me"),
+        el("td", {}, whoCanLaunch(t)),
         el("td", { class: "muted" }, t.description ?? ""),
         el("td", { class: "muted nowrap", title: new Date(t.updatedAt).toLocaleString() }, ago(t.updatedAt)),
       ),
@@ -206,7 +216,7 @@ async function templatesPage(who) {
         { class: "intro" },
         "Named settings you choose when you launch, with ",
         el("code", {}, "pipod --template <name>"),
-        ". Yours are only yours; the organization's are launched by everyone in it.",
+        ". Yours are only yours unless you share one; the organization's are launched by everyone in it.",
       ),
       rows.length
         ? el(

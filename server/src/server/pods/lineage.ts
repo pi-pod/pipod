@@ -6,7 +6,7 @@
 import type { QueryResult, QueryResultRow } from "pg";
 import { conflict, forbidden, HttpError, notFound } from "../httperrors.js";
 import type { OrgPolicy } from "../settings/merge.js";
-import { getTemplate, type TemplateRow } from "../templates/store.js";
+import { getTemplate, type VisibleTemplate } from "../templates/store.js";
 import { AWAKE_POD_SQL } from "./concurrency.js";
 
 /** Absolute ceiling on nesting, independent of policy: every ancestry walk is bounded by it. */
@@ -317,15 +317,17 @@ export async function launchTemplate(args: {
   userId: string;
   templateId: string | null | undefined;
   delegation: ParentDelegation | null | undefined;
-}): Promise<TemplateRow | null> {
+}): Promise<VisibleTemplate | null> {
   const templateId = delegatedTemplateId(args.templateId, args.delegation);
   if (!templateId) return null;
-  let template: TemplateRow;
+  let template: VisibleTemplate;
   try {
     template = await getTemplate(args.orgId, templateId, args.userId);
   } catch (error) {
     if (args.delegation && error instanceof HttpError && error.statusCode === 404) {
-      throw conflict("the template this pod launched from has been deleted, so it cannot launch child pods");
+      throw conflict(
+        "the template this pod launched from has been deleted or is no longer shared with its owner, so it cannot launch child pods",
+      );
     }
     throw error;
   }

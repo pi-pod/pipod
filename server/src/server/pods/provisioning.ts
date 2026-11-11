@@ -54,7 +54,7 @@ import {
   type LocalPiSettingsLayers,
   type PlannedPiSettings,
 } from "../settings/pi-settings.js";
-import { DEFAULT_TEMPLATE_NAME } from "../templates/store.js";
+import { DEFAULT_TEMPLATE_NAME, sharedTemplateAudit } from "../templates/store.js";
 import { acquireQuotaLocks, orgConcurrencyCapTx, assertConcurrencyRoom, assertQuotaRoomTx, countQuota } from "./concurrency.js";
 import { edition, ownedHosts } from "../edition.js";
 import { OWNED_BOAT_FRESH_DISK_RESERVATION_BYTES } from "./capacity.js";
@@ -632,6 +632,7 @@ export async function launchPod(
       targetId: podId,
       detail: {
         template: template?.id ?? (project ? `project:${project.name}` : DEFAULT_TEMPLATE_NAME),
+        ...sharedTemplateAudit(template),
         provider: providerName,
         secretKeys: report.secretKeys,
         clamps,

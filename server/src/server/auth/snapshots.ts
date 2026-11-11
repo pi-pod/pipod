@@ -29,7 +29,7 @@ export async function materializeIdentity(claims: AccessTokenClaims): Promise<vo
        updated_at = now()`,
     [org.id, org.name ?? org.alias, org.alias],
   );
-  // Who may be named in a credential share (model-credentials/sharing.ts): people seen signed
+  // Who may be named in a credential or template share (orgs/members.ts): people seen signed
   // in to this organization. Recorded, never consulted to authorize the signed-in person.
   await query(
     `INSERT INTO organization_members (org_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,

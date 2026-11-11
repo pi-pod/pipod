@@ -36,7 +36,9 @@ import {
  * @property {string} id
  * @property {string} name
  * @property {string | null} description
- * @property {"user" | "org"} scope
+ * @property {"user" | "org" | "shared"} scope "shared": another member's, shared with you
+ * @property {string | null} [sharedBy] for a shared template, its owner's email
+ * @property {string[]} [sharedWith] for your own, who you shared it with
  * @property {string | null} initScript
  * @property {string | null} bakeScript
  * @property {string} [agentInstructions] what the agent in its pods is told, chiefly the access they are meant to have
@@ -63,11 +65,13 @@ export function closeEditor() {
 
 /**
  * Who may change a template: anyone with templates:write for their own, and only an
- * organization manager for one the whole organization launches.
+ * organization manager for one the whole organization launches. Nobody but its owner changes a
+ * template shared with them.
  * @param {string[]} permissions
- * @param {"user" | "org"} scope
+ * @param {"user" | "org" | "shared"} scope
  */
 export function canWriteTemplate(permissions, scope) {
+  if (scope === "shared") return false;
   return permissions.includes("templates:write") && (scope === "user" || permissions.includes("org:manage"));
 }
 
@@ -591,17 +595,22 @@ export async function templateEditor(spec) {
       ? el("span", {}, "Launch it with ", command, ".")
       : "A named set of settings you choose at launch. It applies over the organization's defaults; a personal template also applies over your own settings.",
     notice: readOnly
-      ? scope === "org"
-        ? "Read only: changing an organization template requires templates:write and org:manage."
-        : "Read only: requires templates:write."
+      ? scope === "shared"
+        ? `Read only: ${existing?.sharedBy ?? "another member"} shared this template with you. You can launch it; only they can change it.`
+        : scope === "org"
+          ? "Read only: changing an organization template requires templates:write and org:manage."
+          : "Read only: requires templates:write."
       : scope === "org"
         ? `Shared with everyone in ${spec.organization}.`
-        : null,
+        : existing?.sharedWith?.length
+          ? `Shared with ${existing.sharedWith.join(", ")}. Change who with pipod templates share or unshare.`
+          : null,
     sections,
     value: existing
       ? withTextDefaults(existing)
       : { scope: "user", config: {}, piSettings: {} },
-    inherited: scope === "org" ? [spec.layers.org, defaults] : [spec.layers.mine, spec.layers.org, defaults],
+    // Your own template applies over your settings; the organization's and one shared with you under them.
+    inherited: scope === "user" ? [spec.layers.mine, spec.layers.org, defaults] : [spec.layers.org, defaults],
     readOnly,
     errorPrefix: "config.",
     saveLabel: existing ? "Save" : "Create template",
@@ -615,6 +624,8 @@ export async function templateEditor(spec) {
         name: doc["name"],
         description: doc["description"] ?? "",
         ...(existing?.scope === "org" ? {} : { scope: doc["scope"] ?? "user" }),
+        // The server makes a personal template organization-wide only when told so explicitly.
+        ...(shareNow ? { orgWide: true } : {}),
         config: doc["config"] ?? {},
         initScript: doc["initScript"] ?? "",
         bakeScript: doc["bakeScript"] ?? "",

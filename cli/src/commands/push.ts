@@ -4,6 +4,7 @@ import { isProviderCredentialVar } from "../providers/registry.js";
 import { confirm } from "../prompt.js";
 import type { AccountClient } from "../account/api.js";
 import { compileBundleSource, diffBundle, type EnvSnapshot } from "../account/bundle-source.js";
+import { assertOwnTemplate } from "../account/template-ref.js";
 import { syncEnvSecrets, writeTemplateSnapshot } from "./templates.js";
 import {
   fetchRemoteLayer,
@@ -31,6 +32,8 @@ export async function runPush(args: string[], flags: PushFlags): Promise<number>
     info(`${remote.label} is already up to date`);
     return 0;
   }
+  // A template another member shared with you is theirs to change; say so before asking.
+  if (remote.scope === "template") assertOwnTemplate(remote.template!, "push to it");
   const assumeYes = parsed.yes || flags.yes === true;
   if (!(await confirm("apply this bundle replacement?", { nonInteractiveDefault: false, assumeYes }))) return 1;
 

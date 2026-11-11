@@ -3,8 +3,13 @@
  *
  * New launches resolve org, positioned-template, and user rows from `secrets`; key rotation
  * therefore reaches a pod the next time anything starts in it. Request project env is retired,
- * so new launch-env rows are empty/deleted. The schema-1 encrypted reader remains for pods
+ * so new launch-env rows carry no project layer. The schema-1 encrypted reader remains for pods
  * created by older servers: resume must preserve the environment those historical pods ran.
+ *
+ * One layer is frozen instead: the secrets of a template another member shared with the pod's
+ * owner. The pod keeps the values it was launched with, so neither the owner's later rotation nor
+ * the end of the share reaches it — rotating is how the owner ends an old pod's access, and a
+ * share that has ended must not hand the pod the new values on its next start.
  *
  * {@link composePodEnv} retains the historical overlay operation for that read path. Current
  * launch callers always pass an empty project object.
@@ -12,11 +17,34 @@
 import { query } from "../db/index.js";
 import { decryptSecret, encryptSecret, type KekProvider } from "../secrets/crypto.js";
 import { podLaunchEnvContext } from "../secrets/context.js";
-import { resolveSecrets, withoutProviderCredentials } from "../secrets/store.js";
+import {
+  mergeSecretLayers,
+  readSecretLayers,
+  withoutProviderCredentials,
+  type SecretLayers,
+} from "../secrets/store.js";
+import type { TemplateAccess } from "../templates/store.js";
 
-/** Compatibility representation for encrypted pre-bundle launch env rows. */
+/** The env layers a pod stores at launch for its later starts. */
 export interface LaunchEnvLayers {
+  /** Historical pre-bundle project env; current launches pass an empty object. */
   project: Record<string, string>;
+  /**
+   * Set when the pod launched from a template shared with its owner by another member: that
+   * template's secrets as they were at launch (an empty object when it had none). Later starts
+   * use these instead of the template's current secrets.
+   */
+  sharedTemplate?: Record<string, string>;
+}
+
+/** What a launch stores: the shared template's secret layer when its template is shared. */
+export function launchEnvLayersFor(
+  layers: SecretLayers,
+  template: { access: TemplateAccess } | null,
+): LaunchEnvLayers {
+  return template?.access === "shared"
+    ? { project: {}, sharedTemplate: withoutProviderCredentials(layers.template) }
+    : { project: {} };
 }
 
 interface StoredLaunchEnv {
@@ -24,17 +52,27 @@ interface StoredLaunchEnv {
   /** Retained only so old encrypted rows remain readable; new writes always use an empty object. */
   host: Record<string, string>;
   repo: Record<string, string>;
+  /** See {@link LaunchEnvLayers.sharedTemplate}. Servers before it ignore the key. */
+  sharedTemplate?: Record<string, string>;
 }
 
 /** Keep schema 1 for rolling compatibility, but never persist retired machine env on new writes. */
-export function serializeLaunchEnvForStorage(project: Record<string, string>): string {
-  return JSON.stringify({ schema: 1, host: {}, repo: project } satisfies StoredLaunchEnv);
+export function serializeLaunchEnvForStorage(layers: LaunchEnvLayers): string {
+  return JSON.stringify({
+    schema: 1,
+    host: {},
+    repo: layers.project,
+    ...(layers.sharedTemplate ? { sharedTemplate: layers.sharedTemplate } : {}),
+  } satisfies StoredLaunchEnv);
 }
 
 /** Schema-1 rows predate the unified project layer, so both old local inputs remain frozen env. */
 export function deserializeLaunchEnvFromStorage(plaintext: string): LaunchEnvLayers {
   const bundle = JSON.parse(plaintext) as StoredLaunchEnv;
-  return { project: { ...(bundle.host ?? {}), ...(bundle.repo ?? {}) } };
+  return {
+    project: { ...(bundle.host ?? {}), ...(bundle.repo ?? {}) },
+    ...(bundle.sharedTemplate ? { sharedTemplate: bundle.sharedTemplate } : {}),
+  };
 }
 
 /**
@@ -49,14 +87,14 @@ export function composePodEnv(
   return withoutProviderCredentials({ ...serverEnv, ...layers.project });
 }
 
-/** Preserve the legacy writer shape; current launches pass empty and clear any prior row. */
+/** Store a launch's layers; a launch with nothing to keep clears any prior row. */
 export async function savePodLaunchEnv(args: {
   kek: KekProvider;
   podId: string;
   layers: LaunchEnvLayers;
 }): Promise<void> {
   const projectKeys = Object.keys(args.layers.project);
-  if (projectKeys.length === 0) {
+  if (projectKeys.length === 0 && !args.layers.sharedTemplate) {
     // Reuse replaces the previous launch contract; an empty project env must not resurrect
     // values from the pod's earlier launch after its next provider stop.
     await query("DELETE FROM pod_launch_env WHERE pod_id = $1", [args.podId]);
@@ -68,7 +106,7 @@ export async function savePodLaunchEnv(args: {
   // `encryption_version` (migration 049) so resume keeps reading pre-migration rows.
   const { ciphertext, keyId, encryptionVersion } = encryptSecret(
     args.kek,
-    serializeLaunchEnvForStorage(args.layers.project),
+    serializeLaunchEnvForStorage(args.layers),
     podLaunchEnvContext(args.podId),
   );
   await query(
@@ -104,7 +142,8 @@ export async function loadPodLaunchEnv(kek: KekProvider, podId: string): Promise
 
 /**
  * The full environment for a pod as it stands now: stored layers re-resolved so rotation
- * lands, with any historical encrypted launch env replayed for pre-bundle pods.
+ * lands, except a shared template's layer, which the pod keeps as it launched; any historical
+ * encrypted launch env is replayed for pre-bundle pods.
  */
 export async function resolvePodEnv(args: {
   kek: KekProvider;
@@ -115,8 +154,10 @@ export async function resolvePodEnv(args: {
   /** Frozen launch scope; false for pods created by organization-scoped jobs. */
   includeUserLayer?: boolean;
 }): Promise<Record<string, string>> {
-  const [secrets, layers] = await Promise.all([
-    resolveSecrets({
+  // Both reads run at once to keep cold attach to one round; for a pod with a frozen shared
+  // template the template's current layer is read and dropped.
+  const [current, stored] = await Promise.all([
+    readSecretLayers({
       kek: args.kek,
       orgId: args.orgId,
       userId: args.userId,
@@ -125,5 +166,6 @@ export async function resolvePodEnv(args: {
     }),
     loadPodLaunchEnv(args.kek, args.podId),
   ]);
-  return composePodEnv(secrets.env, layers);
+  const secrets = mergeSecretLayers({ ...current, template: stored.sharedTemplate ?? current.template });
+  return composePodEnv(secrets.env, stored);
 }

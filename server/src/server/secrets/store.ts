@@ -162,12 +162,14 @@ export interface ResolvedSecrets {
   origins: Record<string, SecretScope>;
 }
 
-/**
- * Org secrets → user secrets → template secrets, merged per key, later wins (spec §7) —
- * the CLI's user-env-under-repo-env rule with an org layer beneath; the template scope
- * replaces the repo scope. Provider credentials are stripped: pods never see provider keys.
- */
-export async function resolveSecrets(args: {
+/** The secret layers a launch reads, each as stored, before they are merged. */
+export interface SecretLayers {
+  org: Record<string, string>;
+  user: Record<string, string>;
+  template: Record<string, string>;
+}
+
+export interface ResolveSecretsArgs {
   kek: KekProvider;
   orgId: string;
   userId: string;
@@ -175,7 +177,10 @@ export async function resolveSecrets(args: {
   includeUserLayer?: boolean;
   /** Null for the built-in default template, which carries no extra secrets. */
   templateId: string | null;
-}): Promise<ResolvedSecrets> {
+}
+
+/** Read the org, user and template layers a launch uses; {@link mergeSecretLayers} combines them. */
+export async function readSecretLayers(args: ResolveSecretsArgs): Promise<SecretLayers> {
   // These scopes are independent rows. Reading them concurrently removes two database
   // round-trips from every launch and every cold gateway attach.
   const [org, user, template] = await Promise.all([
@@ -187,6 +192,15 @@ export async function resolveSecrets(args: {
       ? readScope(args.kek, args.orgId, "template", args.templateId)
       : Promise.resolve({} as Record<string, string>),
   ]);
+  return { org, user, template };
+}
+
+/**
+ * Org secrets → user secrets → template secrets, merged per key, later wins (spec §7) —
+ * the CLI's user-env-under-repo-env rule with an org layer beneath; the template scope
+ * replaces the repo scope. Provider credentials are stripped: pods never see provider keys.
+ */
+export function mergeSecretLayers({ org, user, template }: SecretLayers): ResolvedSecrets {
   const merged: Record<string, string> = { ...org, ...user, ...template };
   const env = withoutProviderCredentials(merged);
   const origins: Record<string, SecretScope> = {};
@@ -194,6 +208,11 @@ export async function resolveSecrets(args: {
     origins[name] = name in template ? "template" : name in user ? "user" : "org";
   }
   return { env, keys: Object.keys(env).sort(), origins };
+}
+
+export async function resolveSecrets(args: ResolveSecretsArgs): Promise<ResolvedSecrets & { layers: SecretLayers }> {
+  const layers = await readSecretLayers(args);
+  return { ...mergeSecretLayers(layers), layers };
 }
 
 /** Org-scoped provider credential (BYO), falling back to the platform account key. */

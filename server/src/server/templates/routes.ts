@@ -4,7 +4,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { requirePermission, type AuthContext } from "../auth/plugin.js";
 import { audit } from "../audit.js";
 import { query, tx } from "../db/index.js";
-import { badRequest, conflict, forbidden, notFound } from "../httperrors.js";
+import { HttpError, badRequest, conflict, forbidden, notFound } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
 import { limitRefusal } from "../auth/limited-sign-in.js";
 import { stripRetiredConfigKeys } from "../settings/merge.js";
@@ -17,10 +17,16 @@ import {
 import {
   assertScopeChange,
   assertValidTemplateConfig,
+  endTemplateShares,
   getTemplate,
+  listVisibleTemplates,
+  lockTemplateForChange,
+  sharedWith,
   DEFAULT_TEMPLATE_NAME,
   type TemplateRow,
+  type VisibleTemplate,
 } from "./store.js";
+import { shareTemplate, unshareTemplate } from "./sharing.js";
 
 // Strict: an agent that misspells a field would otherwise have it silently dropped and
 // believe it authored a template it did not (spec §8.5).
@@ -44,20 +50,46 @@ const TemplateBody = z
 const TemplateUpdateBody = TemplateBody.partial()
   .extend({
     expectedVersion: z.number().int().optional(),
+    // Making a personal template organization-wide cannot be undone, so the client confirms it
+    // means the whole organization. pipod 0.1.28 and older send `scope: "org"` alone, and they
+    // send it for `templates share <name> --with <email>` too: they ignore `--with`.
+    orgWide: z.literal(true).optional(),
   })
   .strict();
+
+/** A personal template becomes organization-wide only when the client says so in so many words. */
+function orgWideUnconfirmed(name: string): HttpError {
+  const message =
+    `${name} was not shared: making a template organization-wide cannot be undone, and this client ` +
+    "did not confirm it means the whole organization (pipod 0.1.28 and older ignore `--with`). " +
+    "Update pipod (`npm install -g @pipod/cli@latest`), then run `pipod templates share <name> --with <email>` " +
+    "to share it with one person, or `pipod templates share <name>` for the whole organization";
+  return new HttpError(409, message, { code: "org_wide_share_unconfirmed", message });
+}
+
+const ShareParams = z.object({
+  id: z.string().uuid(),
+  email: z.string().trim().email().max(320),
+});
 
 function isUniqueViolation(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: string }).code === "23505";
 }
 
-function toApi(row: TemplateRow) {
+/**
+ * A template as the caller sees it. `scope` is `user` (their own), `org` or `shared` (another
+ * member's, shared with them: `sharedBy` names its owner). Their own templates list who they
+ * are shared with in `sharedWith`.
+ */
+function toApi(row: VisibleTemplate, shares: readonly string[] = []) {
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     status: "active" as const,
-    scope: row.owner_user_id ? ("user" as const) : ("org" as const),
+    scope: row.access === "own" ? ("user" as const) : row.access,
+    ...(row.access === "shared" ? { sharedBy: row.shared_by } : {}),
+    ...(row.access === "own" ? { sharedWith: [...shares] } : {}),
     initScript: row.init_script,
     bakeScript: row.bake_script,
     agentInstructions: row.agent_instructions ?? "",
@@ -117,16 +149,17 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
     },
     async (req) => {
       const delegation = await podDelegation(req.auth);
-      const rows = await query<TemplateRow>(
-        `SELECT * FROM pod_templates WHERE org_id = $1 AND archived_at IS NULL
-           AND (owner_user_id IS NULL OR owner_user_id = $2)
-           AND ($3::timestamptz IS NULL OR created_at < $3)
-           AND ($5::uuid IS NULL OR id = $5)
-         ORDER BY created_at DESC LIMIT $4`,
+      const rows = await listVisibleTemplates({
+        orgId: req.auth.orgId,
+        userId: req.auth.userId,
+        limit: req.query.limit,
+        before: req.query.before ?? null,
         // A limited sign-in sees its own template and no other.
-        [req.auth.orgId, req.auth.userId, req.query.before ?? null, req.query.limit, req.auth.limitedTo?.templateId ?? null],
-      );
-      return { templates: rows.rows.filter((row) => delegatesTemplate(row, delegation)).map(toApi) };
+        templateId: req.auth.limitedTo?.templateId ?? null,
+      });
+      const listed = rows.filter((row) => delegatesTemplate(row, delegation));
+      const shares = await sharedWith(listed.filter((row) => row.access === "own").map((row) => row.id));
+      return { templates: listed.map((row) => toApi(row, shares.get(row.id))) };
     },
   );
 
@@ -180,6 +213,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
             : "a template with this name already exists in the org",
         );
       }
+      const created: VisibleTemplate = { ...row, access: owner ? "own" : "org", shared_by: null };
       await audit({
         orgId: req.auth.orgId,
         actorId: req.auth.userId,
@@ -194,7 +228,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
           ...(req.auth.podId ? { fromPod: req.auth.podId } : {}),
         },
       });
-      return reply.code(201).send(toApi(row));
+      return reply.code(201).send(toApi(created));
     },
   );
 
@@ -212,7 +246,8 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       }
       const template = await getTemplate(req.auth.orgId, req.params.id, req.auth.userId);
       if (!delegatesTemplate(template, await podDelegation(req.auth))) throw notFound("template not found");
-      return toApi(template);
+      const shares = template.access === "own" ? await sharedWith([template.id]) : new Map<string, string[]>();
+      return toApi(template, shares.get(template.id));
     },
   );
 
@@ -234,22 +269,21 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       req.body.piSettings === undefined
         ? null
         : canonicalizePiSettingsForStorage(req.body.piSettings);
-    const row = await tx(async (client) => {
-      const locked = await client.query<TemplateRow>(
-        `SELECT * FROM pod_templates
-         WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
-           AND (owner_user_id IS NULL OR owner_user_id = $3)
-         FOR UPDATE`,
-        [req.params.id, req.auth.orgId, req.auth.userId],
-      );
-      const existing = locked.rows[0];
-      if (!existing) throw notFound("template not found");
-      const shareWithOrg = assertScopeChange(existing, req.body.scope);
+    const { row, sharesEnded } = await tx(async (client) => {
       // Check the locked row so a concurrent update cannot race past the ownership gate.
+      const existing = await lockTemplateForChange(client, {
+        orgId: req.auth.orgId,
+        templateId: req.params.id,
+        userId: req.auth.userId,
+      });
+      const shareWithOrg = assertScopeChange(existing, req.body.scope);
       assertTemplateWrite(req.auth, existing, shareWithOrg);
+      if (shareWithOrg && req.body.orgWide !== true) throw orgWideUnconfirmed(existing.name);
       if (req.body.expectedVersion !== undefined && existing.version !== req.body.expectedVersion) {
         throw conflict("version conflict: template changed since you read it");
       }
+      // Shared with everyone now: the named shares would only restate it.
+      const sharesEnded = shareWithOrg ? await endTemplateShares(client, existing.id) : 0;
       const rows = await client
         .query<TemplateRow>(
           `UPDATE pod_templates SET
@@ -287,7 +321,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
           }
           throw e;
         });
-      return rows.rows[0]!;
+      return { row: rows.rows[0]!, sharesEnded };
     });
     await audit({
       orgId: req.auth.orgId,
@@ -297,12 +331,15 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       targetId: row.id,
       detail: {
         ...(req.body.scope === "org" ? { sharedWithOrg: true } : {}),
+        ...(sharesEnded > 0 ? { sharesEnded } : {}),
         ...(piSettings !== null ? { piSettingsChanged: true } : {}),
         ...(req.body.agentInstructions !== undefined ? { agentInstructionsChanged: true } : {}),
         ...(req.auth.podId ? { fromPod: req.auth.podId } : {}),
       },
     });
-    return toApi(row);
+    const updated: VisibleTemplate = { ...row, access: row.owner_user_id === null ? "org" : "own", shared_by: null };
+    const shares = updated.access === "own" ? await sharedWith([row.id]) : new Map<string, string[]>();
+    return toApi(updated, shares.get(row.id));
   };
   r.patch("/templates/:id", updateOpts, updateTemplate);
   r.put("/templates/:id", updateOpts, updateTemplate);
@@ -329,16 +366,13 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req, reply) => {
-      await tx(async (client) => {
-        const template = await client.query<Pick<TemplateRow, "id" | "created_from_pod" | "owner_user_id">>(
-          `SELECT id, created_from_pod, owner_user_id FROM pod_templates
-           WHERE id = $1 AND org_id = $2 AND archived_at IS NULL
-             AND (owner_user_id IS NULL OR owner_user_id = $3)
-           FOR UPDATE`,
-          [req.params.id, req.auth.orgId, req.auth.userId],
-        );
-        const existing = template.rows[0];
-        if (!existing) throw notFound("template not found");
+      const sharesEnded = await tx(async (client) => {
+        const existing = await lockTemplateForChange(client, {
+          orgId: req.auth.orgId,
+          templateId: req.params.id,
+          userId: req.auth.userId,
+          what: "delete it",
+        });
         assertTemplateWrite(req.auth, existing);
         const jobs = await client.query(
           `SELECT 1 FROM jobs
@@ -352,6 +386,8 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
           "UPDATE pod_templates SET archived_at = now(), updated_at = now() WHERE id = $1",
           [req.params.id],
         );
+        // Deleting a template ends its shares: nobody it was shared with launches it again.
+        return endTemplateShares(client, existing.id);
       });
       await audit({
         orgId: req.auth.orgId,
@@ -359,9 +395,95 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
         action: "template.archive",
         targetType: "template",
         targetId: req.params.id,
-        detail: req.auth.podId ? { fromPod: req.auth.podId } : {},
+        detail: {
+          ...(sharesEnded > 0 ? { sharesEnded } : {}),
+          ...(req.auth.podId ? { fromPod: req.auth.podId } : {}),
+        },
       });
       return reply.code(204).send();
     },
   );
+
+  // Sharing a personal template with one named member, and ending it. Only the owner does either:
+  // a person's own token, never a pod's or a limited sign-in's (neither route opts in). Sharing
+  // needs `templates:write`, the permission to manage your own templates; ending a share needs
+  // only ownership, so an owner can always take access back. See sharing.ts.
+  r.put(
+    "/templates/:id/shares/:email",
+    { preHandler: [app.authenticate], schema: { params: ShareParams } },
+    async (req) => {
+      const owner = { orgId: req.auth.orgId, userId: req.auth.userId };
+      try {
+        requirePermission(req.auth, "templates:write");
+        const { template, member, created } = await shareTemplate(owner, req.params.id, req.params.email);
+        await audit({
+          orgId: req.auth.orgId,
+          actorId: req.auth.userId,
+          action: "template.share",
+          targetType: "template",
+          targetId: template.id,
+          detail: {
+            name: template.name,
+            owner: req.auth.userId,
+            member: member.userId,
+            memberEmail: member.email,
+            outcome: created ? "shared" : "unchanged",
+          },
+        });
+        return { templateId: template.id, name: template.name, sharedWith: member.email, created };
+      } catch (error) {
+        await auditRefusal(req.auth, "template.share", req.params, error);
+        throw error;
+      }
+    },
+  );
+
+  r.delete(
+    "/templates/:id/shares/:email",
+    { preHandler: [app.authenticate], schema: { params: ShareParams } },
+    async (req) => {
+      const owner = { orgId: req.auth.orgId, userId: req.auth.userId };
+      try {
+        const { template, removed, memberUserId, pods } = await unshareTemplate(owner, req.params.id, req.params.email);
+        await audit({
+          orgId: req.auth.orgId,
+          actorId: req.auth.userId,
+          action: "template.unshare",
+          targetType: "template",
+          targetId: template.id,
+          detail: {
+            name: template.name,
+            owner: req.auth.userId,
+            ...(memberUserId ? { member: memberUserId } : {}),
+            memberEmail: req.params.email,
+            outcome: removed ? "removed" : "absent",
+            podsRemaining: pods.total,
+            podsRunning: pods.running,
+          },
+        });
+        return { templateId: template.id, name: template.name, member: req.params.email, removed, pods };
+      } catch (error) {
+        await auditRefusal(req.auth, "template.unshare", req.params, error);
+        throw error;
+      }
+    },
+  );
+}
+
+/** A refused share or unshare is audited too: who tried, on which template, and why not. */
+async function auditRefusal(
+  auth: AuthContext,
+  action: "template.share" | "template.unshare",
+  params: { id: string; email: string },
+  error: unknown,
+): Promise<void> {
+  if (!(error instanceof HttpError)) return;
+  await audit({
+    orgId: auth.orgId,
+    actorId: auth.userId,
+    action,
+    targetType: "template",
+    targetId: params.id,
+    detail: { memberEmail: params.email, outcome: "refused", reason: error.message },
+  }).catch(() => {});
 }

@@ -16,13 +16,13 @@
  * owner's own pods (lease.ts); the member's pods receive the same sanitized lease. Nothing in
  * this module reads or returns credential values.
  *
- * Membership comes from `organization_members`, the snapshot of people seen signing in to an
- * organization (auth/snapshots.ts). Removing a membership row, or the credential, deletes its
- * shares through the foreign keys in migration 007.
+ * Membership comes from orgs/members.ts. Removing a membership row, or the credential, deletes
+ * its shares through the foreign keys in migration 007.
  */
 import type pg from "pg";
 import { query, tx, type Queryable } from "../db/index.js";
 import { HttpError, badRequest, conflict } from "../httperrors.js";
+import { findMember, recordMember, type OrganizationMember } from "../orgs/members.js";
 import { classifyCredentialMeta } from "./login.js";
 import {
   credentialMetaColumns,
@@ -133,38 +133,6 @@ async function sharesGivenBy(owner: CredentialSubject): Promise<Map<string, stri
   return given;
 }
 
-export interface OrganizationMember {
-  userId: string;
-  email: string;
-}
-
-/**
- * The member of `orgId` with this email. Not found means nobody with it has signed in to the
- * organization yet; the server learns its members only from their sign-ins.
- */
-async function findMember(db: Queryable, orgId: string, email: string): Promise<OrganizationMember> {
-  const rows = await db.query<{ id: string; email: string }>(
-    `SELECT u.id, u.email
-       FROM organization_members m
-       JOIN users u ON u.id = m.user_id
-      WHERE m.org_id = $1 AND lower(u.email) = lower($2)`,
-    [orgId, email],
-  );
-  if (rows.rows.length === 0) {
-    throw new HttpError(404, "member_not_found", {
-      code: "member_not_found",
-      message: `${email} is not a member of this organization (members appear here once they have signed in with \`pipod login\`)`,
-    });
-  }
-  if (rows.rows.length > 1) {
-    throw conflict("member_ambiguous", {
-      code: "member_ambiguous",
-      message: `more than one member of this organization uses ${email}`,
-    });
-  }
-  return { userId: rows.rows[0]!.id, email: rows.rows[0]!.email };
-}
-
 function credentialNotOwned(providerId: string): HttpError {
   return new HttpError(404, "credential_not_found", {
     code: "credential_not_found",
@@ -199,11 +167,7 @@ export async function shareCredential(
           message: "a credential is already yours; share it with someone else",
         });
       }
-      // The caller's verified token names this organization; its snapshot row normally exists.
-      await c.query(
-        `INSERT INTO organization_members (org_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-        [owner.orgId, owner.userId],
-      );
+      await recordMember(c, owner.orgId, owner.userId);
       const inserted = await c.query(
         `INSERT INTO model_credential_shares (org_id, provider_id, member_user_id, owner_user_id)
          VALUES ($1, $2, $3, $4)
