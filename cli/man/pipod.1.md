@@ -289,6 +289,7 @@ every job it schedules uses the template that pod launched from; the server refu
 
 ```
 Usage: pipod login [--server <url>] [--issuer <url>] [--org <alias>] [--device] [--token <jwt>]
+       pipod login --device --template <name|id> [--server <url>]
 
 Sign this machine in to a pi pod server via Zitadel (authorization code + PKCE,
 in your browser). Where no browser can open here (over SSH, on a headless
@@ -296,16 +297,18 @@ server), it prints a page and a code to confirm on any other device instead.
 The session is stored in ~/.pi-pod/auth.json.
 
 Options:
-  --server <url>   Server to sign in to (default: the previous session's server,
-                   $PI_POD_ACCOUNT_URL, or the production server)
-  --issuer <url>   OIDC issuer (default: $PI_POD_ISSUER, else the one the
-                   server publishes); needed only for a server too old to
-                   publish its own
-  --org <alias>    Only sign in to the organization with this primary domain;
-                   omit it to sign in to your own organization
-  --device         Sign in with a code on another device even if a browser
-                   could open here
-  --token <jwt>    Use an existing access token instead of the browser flow (dev/CI)
+  --server <url>     Server to sign in to (default: the previous session's server,
+                     $PI_POD_ACCOUNT_URL, or the production server)
+  --issuer <url>     OIDC issuer (default: $PI_POD_ISSUER, else the one the
+                     server publishes); needed only for a server too old to
+                     publish its own
+  --org <alias>      Only sign in to the organization with this primary domain;
+                     omit it to sign in to your own organization
+  --device           Sign in with a code on another device even if a browser
+                     could open here
+  --template <name>  A limited sign-in: this machine can launch only from this
+                     template and reach only your pods launched from it
+  --token <jwt>      Use an existing access token instead of the browser flow (dev/CI)
 ```
 
 A person finishes the sign-in, in a browser or with the printed code; an agent can start
@@ -314,13 +317,41 @@ then nothing is permitted and `login` says access is pending organization member
 server's owner adds you (`selfhost/add-user` on a self-hosted host), or an organization owner
 grants you a role in the Zitadel Console (`pipod org-admin`).
 
+A sign-in with a code is for your whole account: the machine can do everything you can.
+`--device` prints a page on the server that says so before it sends you on to Zitadel to
+confirm the code.
+
+`--template` gives a machine less: a **limited sign-in**. It can launch only from that
+template (by id: a deleted template launches nothing, and a new template with the old name
+is a different one), and its forks and co-located pods stay on it. It can see and manage
+your pods launched from that template — however they were launched — and read your settings,
+your organization's defaults and the template itself (secret names, never values). Everything
+else is refused, whatever roles your account holds: other pods (yours from other templates,
+anyone else's), other templates, secrets, settings, policy, model credentials, jobs, the audit
+log and billing. You confirm it on the server's own page, which names the template before you
+allow it; Zitadel's device page never confirms a limited sign-in, so a code that leads there
+is for the whole account.
+
+A limited sign-in keeps no Zitadel token on the machine: the server holds your session and
+issues the machine its own tokens, which nothing but this server accepts. It lasts as long as
+your own sign-in would (30 days without use, 90 at most, on a default self-hosted server) and
+ends when your account is removed. `pipod logout` ends it.
+
+`~/.pi-pod/auth.json` keeps its shape for a limited sign-in: `serverUrl`, `accessToken` and
+`refreshToken` are where they were, and two fields are added, `limitedTo` (`templateId`,
+`templateName`) and `tokenEndpoint`; `issuer`, `clientId` and `idToken` are absent. The access
+token is a bearer token for this server like any other and lasts five minutes. A script that
+renews it itself posts `grant_type=refresh_token&refresh_token=<refreshToken>`
+(form-encoded) to `tokenEndpoint` and reads `access_token`; the refresh token does not change.
+
 ### pipod logout
 
 ```
 Usage: pipod logout
 
 Revoke the current account session and delete ~/.pi-pod/auth.json. Pod
-operations are unavailable until the next `pipod login`.
+operations are unavailable until the next `pipod login`. A limited sign-in is
+ended on the server: its tokens stop working at once.
 ```
 
 ### pipod whoami
@@ -328,8 +359,8 @@ operations are unavailable until the next `pipod login`.
 ```
 Usage: pipod whoami
 
-Show the signed-in server, user, permissions, active organization, and console
-links. Exits 1 when signed out.
+Show the signed-in server, user, limit, permissions, active organization, and
+console links. Exits 1 when signed out.
 ```
 
 ### pipod account

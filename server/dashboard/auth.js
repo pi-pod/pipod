@@ -55,12 +55,20 @@ function provider() {
   return providerPromise;
 }
 
+/**
+ * What this server publishes about signing in: its identity provider (`issuer`) and the
+ * clients that sign in to it.
+ * @returns {Promise<{ issuer: string, dashboardClientId?: string, serverUrl?: string }>}
+ */
+export async function signInConfig() {
+  const res = await fetch("/v1/auth/config");
+  if (!res.ok) throw new SignInError(`this server did not say where to sign in (HTTP ${res.status})`);
+  return res.json();
+}
+
 /** @returns {Promise<Provider>} */
 async function discover() {
-  const config = await fetch("/v1/auth/config").then((res) => {
-    if (!res.ok) throw new SignInError(`this server did not say where to sign in (HTTP ${res.status})`);
-    return res.json();
-  });
+  const config = await signInConfig();
   if (!config.dashboardClientId) {
     throw new SignInError(
       "this server has no dashboard sign-in configured: set ZITADEL_DASHBOARD_CLIENT_ID " +
@@ -244,6 +252,20 @@ export async function accessToken() {
   if (!session) return null;
   if (session.expiresAt - Date.now() > REFRESH_MARGIN_MS) return session.accessToken;
   return refreshedAccessToken();
+}
+
+/**
+ * Give this tab's sign-in away (to confirm a machine's limited sign-in, which keeps it): its
+ * current tokens, forgotten here first, so this tab can never renew — and so spend — the refresh
+ * token the recipient now holds. Null when there is no sign-in to give.
+ * @returns {Promise<{ accessToken: string, refreshToken: string } | null>}
+ */
+export async function handOverSession() {
+  const access = await accessToken();
+  const session = readSession();
+  if (!access || !session?.refreshToken) return null;
+  endSession();
+  return { accessToken: access, refreshToken: session.refreshToken };
 }
 
 /** @returns {null} */

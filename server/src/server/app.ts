@@ -11,6 +11,7 @@ import {
 import { pino } from "pino";
 import { makeAuthHook } from "./auth/plugin.js";
 import { registerAuthRoutes } from "./auth/routes.js";
+import { auditLimitRefusal, registerLimitedSignInRoutes } from "./auth/limited-sign-in-routes.js";
 import { registerVersionRoute } from "./release.js";
 import { registerOrgRoutes } from "./orgs/routes.js";
 import { registerSettingsDefaultsRoute, registerSettingsRoutes } from "./settings/routes.js";
@@ -268,7 +269,7 @@ export async function buildApp(deps: AppDeps) {
       info: {
         title: "pi pod server",
         description:
-          "Hosted control plane for pi pod (server-spec §10). All routes under /v1, bearer-authenticated with a Zitadel access token. Tenant scope is the token's single organization claim.",
+          "Hosted control plane for pi pod (server-spec §10). All routes under /v1, bearer-authenticated with a Zitadel access token, a pod token, or a limited sign-in's token (refused wherever a route does not allow it). Tenant scope is the token's single organization claim.",
         version: "0.1.0",
       },
       components: {
@@ -282,6 +283,7 @@ export async function buildApp(deps: AppDeps) {
   await app.register(websocket);
 
   app.decorate("authenticate", makeAuthHook(deps.env, { warn: (m) => app.log.warn(m) }));
+  app.addHook("onError", auditLimitRefusal);
 
   if (deps.roles.api) {
     // Edition routes live outside the /v1 prefix in their own encapsulated plugins, so
@@ -303,6 +305,7 @@ export async function buildApp(deps: AppDeps) {
   await app.register(async (v1) => {
     if (deps.roles.api) {
       registerAuthRoutes(v1, deps.env, dashboardUrl);
+      registerLimitedSignInRoutes(v1, { env: deps.env, kek: deps.kek });
       registerVersionRoute(v1);
       registerOrgRoutes(v1, deps.env);
       registerSettingsRoutes(v1);

@@ -2,12 +2,14 @@
 /**
  * The dashboard: the settings a launch is built from — your own settings, the organization's
  * defaults and policy, and templates. Pages are hash routes (#/me, #/org, #/policy,
- * #/templates, #/templates/<id>), so the server serves one document.
+ * #/templates, #/templates/<id>), so the server serves one document. Machines signing in with a
+ * code send people to #/sign-in/<code> and #/device/<code> (signin.js).
  */
 import { completeSignIn, signIn, signOut, signedIn, SignInError } from "./auth.js";
 import { api, ApiError } from "./api.js";
 import { button, el } from "./dom.js";
 import { canWriteTemplate, closeEditor, hasUnsavedChanges, layerEditor, policyEditor, templateEditor } from "./editors.js";
+import { limitedSignInPage, wholeAccountPage } from "./signin.js";
 
 /**
  * @typedef {object} Me
@@ -35,8 +37,11 @@ function show(...content) {
   main.replaceChildren(...content.filter((node) => node !== null && node !== false));
 }
 
-/** @param {string} [message] why the person has to sign in, when it is not the first time */
-function showSignIn(message) {
+/**
+ * @param {string} [message] why the person has to sign in, when it is not the first time
+ * @param {string} [purpose] what signing in is for, when it is not the settings
+ */
+function showSignIn(message, purpose) {
   me = null;
   nav.hidden = true;
   account.replaceChildren();
@@ -45,7 +50,7 @@ function showSignIn(message) {
       "section",
       { class: "card narrow" },
       el("h2", {}, "Sign in"),
-      el("p", {}, "Choose the settings your pods start with, and manage your templates, on this pi pod server."),
+      el("p", {}, purpose ?? "Choose the settings your pods start with, and manage your templates, on this pi pod server."),
       message ? el("p", { class: "status error" }, message) : null,
       button("Sign in", async () => {
         try {
@@ -256,6 +261,7 @@ async function route(who) {
     link.classList.toggle("current", link.getAttribute("href") === `#/${page}`);
   }
   if (!who.organization) return noOrganizationPage(who);
+  if (page === "sign-in") return limitedSignInPage(who, id);
   if (page === "org") return organizationPage(who);
   if (page === "policy") return policyPage(who);
   if (page === "templates" && id === "new") return templatePage(who, null);
@@ -265,7 +271,24 @@ async function route(who) {
 }
 
 async function render() {
-  if (!signedIn()) return showSignIn();
+  const page = location.hash.replace(/^#\/?/, "").split("/")[0];
+  // A full sign-in's statement needs nobody signed in here: the identity provider asks next.
+  if (page === "device") {
+    closeEditor();
+    nav.hidden = true;
+    try {
+      const [, code] = location.hash.replace(/^#\/?/, "").split("/");
+      return show(...(await wholeAccountPage(code)));
+    } catch (e) {
+      return showError(e);
+    }
+  }
+  if (!signedIn()) {
+    return showSignIn(
+      undefined,
+      page === "sign-in" ? "Sign in to see what the machine is asking for. Nothing is granted until you allow it." : undefined,
+    );
+  }
   closeEditor();
   try {
     me ??= /** @type {Me} */ (await api("GET", "/me"));

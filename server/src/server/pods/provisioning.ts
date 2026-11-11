@@ -339,6 +339,8 @@ export async function launchPod(
     workspaceSeed?: boolean;
     /** Client launch identity; admission commits atomically with the pod row. */
     launchOperation?: LaunchOperationClaim;
+    /** The limited sign-in that asked for this launch, recorded in its audit entry. */
+    limitedSignInId?: string | null;
   },
 ): Promise<PodLaunchResult> {
   assertLaunchContextSupported(args.launchContext);
@@ -634,6 +636,7 @@ export async function launchPod(
         secretKeys: report.secretKeys,
         clamps,
         ...(args.parentPodId ? { fromPod: args.parentPodId } : {}),
+        ...(args.limitedSignInId ? { limitedSignIn: args.limitedSignInId } : {}),
         ...(forkSeed ? { forkedFromPodId: forkSeed.sourcePodId, sourcePath: forkSeed.sourcePath } : {}),
       },
     }),

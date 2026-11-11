@@ -75,10 +75,13 @@ export async function planAccountLaunch(
   const projectTaken = takeClientOnlyKeys(projectRawFull);
   const machineTaken = takeClientOnlyKeys(machineRaw);
   const projectConfig = podSourceConfig(projectTaken.config);
-  const templateRef = resolveLaunchTemplateRef(flags, {
-    project: projectTaken.template,
-    machine: machineTaken.template,
-  });
+  // A limited sign-in launches from its own template; a project's or machine's pin does not move it.
+  const templateRef = client.limitedTo
+    ? (flags.template ?? client.limitedTo.templateId)
+    : resolveLaunchTemplateRef(flags, {
+        project: projectTaken.template,
+        machine: machineTaken.template,
+      });
   const template = templateRef ? await resolveTemplate(client, templateRef) : undefined;
   const templateId = template?.id;
   const bootstrapPreview = templateId === undefined && projectRoot !== null && options.bootstrapPreview !== false;
@@ -325,6 +328,17 @@ export async function resolveTemplate(client: AccountClient, ref: string): Promi
     .filter((template) => template.name.toLowerCase() === ref.toLowerCase())
     .sort((a, b) => (a.scope === "user" ? 0 : 1) - (b.scope === "user" ? 0 : 1));
   const found = byId ?? named[0];
+  const limit = client.limitedTo;
+  if (!found && limit) {
+    if (ref === limit.templateId || ref.toLowerCase() === limit.templateName.toLowerCase()) {
+      throw new PiPodError(`template ${limit.templateName} (${limit.templateId}) is gone, so this sign-in can launch nothing`, {
+        hint: "a template made again under the same name is a different one: sign in again with `pipod login --device --template <name>`",
+      });
+    }
+    throw new PiPodError(`this sign-in is limited to template ${limit.templateName}; it cannot use ${ref}`, {
+      hint: "launch without --template, or sign in with `pipod login` for the whole account",
+    });
+  }
   if (!found) {
     const names = templates.map((template) => template.name);
     throw new PiPodError(`template not found: ${ref}`, {

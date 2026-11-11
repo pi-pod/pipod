@@ -48,8 +48,8 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       {
         preHandler: [app.authenticate],
         // Pods read org defaults through /settings/layers; this older path stays readable for
-        // agents whose skill predates it. Policy stays out of pods' reach.
-        ...(scopeType === "org_defaults" ? { config: { allowPodToken: true } } : {}),
+        // agents whose skill predates it, and for limited sign-ins. Policy stays out of both's reach.
+        ...(scopeType === "org_defaults" ? { config: { allowPodToken: true, allowLimitedSignIn: true } } : {}),
         schema: { params: z.object({ id: IdentityId }) },
       },
       async (req) => {
@@ -91,6 +91,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     "/users/:id/settings",
     {
       preHandler: [app.authenticate],
+      config: { allowLimitedSignIn: true },
       schema: { params: z.object({ id: IdentityId }) },
     },
     async (req) => {
@@ -130,22 +131,25 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
 
   /**
    * The layers a launch builds on, read-only: org defaults, the caller's own user layer, and
-   * for a pod token the template that pod launched from, as stored now. This is how the agent
+   * for a pod token the template that pod launched from (for a limited sign-in, the template it
+   * is limited to), as stored now. This is how the agent
    * in a pod sees what it runs with; pods never write the org or user layers, whose scripts
    * run in every later launch, so the agent hands the change to its person instead. A pod
    * launched without its owner's bundle (an org-scoped job, and pods it launches) gets no user
    * layer, just as it gets none of their personal templates. `template` is null when the pod
    * launched without one or it has since been deleted.
    */
-  r.get("/settings/layers", { preHandler: [app.authenticate], config: { allowPodToken: true } }, async (req) => {
+  r.get("/settings/layers", { preHandler: [app.authenticate], config: { allowPodToken: true, allowLimitedSignIn: true } }, async (req) => {
     const { orgId, userId, podId } = req.auth;
     const [delegation, pod] = podId
       ? await Promise.all([parentDelegation({ query }, { orgId, parentPodId: podId }), getPod(orgId, podId)])
       : [null, null];
+    // A pod's template is the one it launched from; a limited sign-in's is the one it is limited to.
+    const templateId = pod?.template_id ?? req.auth.limitedTo?.templateId ?? null;
     const [org, user, template] = await Promise.all([
       readLayer("org_defaults", orgId, orgId),
       delegation?.includeUserBundle === false ? null : readLayer("user_defaults", userId, orgId),
-      pod?.template_id ? findTemplate(orgId, pod.template_id, userId) : null,
+      templateId ? findTemplate(orgId, templateId, userId) : null,
     ]);
     return {
       org,

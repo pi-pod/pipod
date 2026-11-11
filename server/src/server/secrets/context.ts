@@ -13,11 +13,12 @@
  * - pi_auth (legacy):  (org_id, user_id) — whole-file custody
  * - pi_settings (legacy; table dropped by 012): (org_id, scope_type, scope_id)
  * - pod_launch_env:    (pod_id) only
+ * - limited_sign_in_identities: (sign_in_id) only
  *
  * The canonical AAD encoding is JSON of a fixed-shape array:
  *   ["<domain label>", 2, ...identityFields]
  * JSON arrays are unambiguous here (no field can collide with a frame boundary the
- * way naive string joining can), and the domain label keeps the five record types
+ * way naive string joining can), and the domain label keeps the record types
  * cryptographically separated even when field values coincide.
  */
 
@@ -63,8 +64,15 @@ export interface SandboxHostEncryptionContext {
   readonly ownerUserId: string;
 }
 
+/** The identity-provider session a limited sign-in holds (auth/limited-sign-in.ts). */
+export interface LimitedSignInEncryptionContext {
+  readonly kind: "limited_sign_in";
+  readonly signInId: string;
+}
+
 export type EncryptionContext =
   | SandboxHostEncryptionContext
+  | LimitedSignInEncryptionContext
   | SecretEncryptionContext
   | ModelCredentialEncryptionContext
   | PiAuthEncryptionContext
@@ -81,6 +89,7 @@ const DOMAIN_LABELS = {
   pi_auth: "pipod-pi-auth",
   pi_settings: "pipod-pi-settings",
   pod_launch_env: "pipod-pod-launch-env",
+  limited_sign_in: "pipod-limited-sign-in",
 } as const;
 
 function identityFields(context: EncryptionContext): readonly string[] {
@@ -97,6 +106,8 @@ function identityFields(context: EncryptionContext): readonly string[] {
       return [context.orgId, context.scopeType, context.scopeId];
     case "pod_launch_env":
       return [context.podId];
+    case "limited_sign_in":
+      return [context.signInId];
   }
 }
 
@@ -161,4 +172,9 @@ export function piSettingsContext(
 /** Trusted row identity for one `pod_launch_env` row. */
 export function podLaunchEnvContext(podId: string): PodLaunchEnvEncryptionContext {
   return { kind: "pod_launch_env", podId };
+}
+
+/** Trusted row identity for one `limited_sign_in_identities` row. */
+export function limitedSignInContext(signInId: string): LimitedSignInEncryptionContext {
+  return { kind: "limited_sign_in", signInId };
 }

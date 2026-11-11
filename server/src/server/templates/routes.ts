@@ -6,6 +6,7 @@ import { audit } from "../audit.js";
 import { query, tx } from "../db/index.js";
 import { badRequest, conflict, forbidden, notFound } from "../httperrors.js";
 import { uuidv7 } from "../ids.js";
+import { limitRefusal } from "../auth/limited-sign-in.js";
 import { stripRetiredConfigKeys } from "../settings/merge.js";
 import { delegatesTemplate, parentDelegation, type ParentDelegation } from "../pods/lineage.js";
 import {
@@ -106,7 +107,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
     "/templates",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: {
         querystring: z.object({
           limit: z.coerce.number().int().min(1).max(200).default(100),
@@ -120,8 +121,10 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
         `SELECT * FROM pod_templates WHERE org_id = $1 AND archived_at IS NULL
            AND (owner_user_id IS NULL OR owner_user_id = $2)
            AND ($3::timestamptz IS NULL OR created_at < $3)
+           AND ($5::uuid IS NULL OR id = $5)
          ORDER BY created_at DESC LIMIT $4`,
-        [req.auth.orgId, req.auth.userId, req.query.before ?? null, req.query.limit],
+        // A limited sign-in sees its own template and no other.
+        [req.auth.orgId, req.auth.userId, req.query.before ?? null, req.query.limit, req.auth.limitedTo?.templateId ?? null],
       );
       return { templates: rows.rows.filter((row) => delegatesTemplate(row, delegation)).map(toApi) };
     },
@@ -199,10 +202,14 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
     "/templates/:id",
     {
       preHandler: [app.authenticate],
-      config: { allowPodToken: true },
+      config: { allowPodToken: true, allowLimitedSignIn: true },
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req) => {
+      const limit = req.auth.limitedTo;
+      if (limit && req.params.id.toLowerCase() !== limit.templateId) {
+        throw limitRefusal(limit, "it can read only its own template");
+      }
       const template = await getTemplate(req.auth.orgId, req.params.id, req.auth.userId);
       if (!delegatesTemplate(template, await podDelegation(req.auth))) throw notFound("template not found");
       return toApi(template);

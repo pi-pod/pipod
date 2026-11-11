@@ -130,7 +130,7 @@ export interface ParsedArgs {
 const SELF_PARSING_SUBCOMMANDS = new Set<Subcommand>(["credentials", "secrets", "templates", "push", "pull", "diff", "settings", "billing"]);
 const UNIVERSAL_FLAGS = new Set(["--verbose", "--version", "--help"]);
 const FLAG_SCOPE: Record<string, ReadonlySet<string>> = {
-  "--template": new Set(["launch", "list", "doctor", "fork", "archive"]),
+  "--template": new Set(["launch", "list", "doctor", "fork", "archive", "login"]),
   "--project": new Set(["jobs"]),
   "--on": new Set(["launch"]),
   "--reuse": new Set(["launch"]),
@@ -335,7 +335,14 @@ export async function main(argv: string[]): Promise<number> {
     case "init":
       return runInit(flags);
     case "login":
-      return runLogin({ server: flags.server, org: flags.org, token: flags.token, issuer: flags.issuer, device: flags.device });
+      return runLogin({
+        server: flags.server,
+        org: flags.org,
+        token: flags.token,
+        issuer: flags.issuer,
+        device: flags.device,
+        template: flags.template,
+      });
     case "whoami":
       return runWhoami({});
     case "logout":

@@ -133,6 +133,25 @@ shows: an `--owner` changes everything; a member edits their own settings and pe
 templates and reads the rest. People and organizations stay in the Zitadel Console, which the
 dashboard links to.
 
+### Signing a machine in to one template
+
+A machine that works for you — an agent, a CI runner — can sign in with less than your whole
+account:
+
+```bash
+pipod login --device --template <name|id>
+```
+
+It prints a page on the dashboard and a code. You sign in to the dashboard there, see the
+template the machine asks for, and allow it or decline. The machine can then launch only from
+that template, and see and manage only your pods launched from it; every other route is
+closed to it, whatever your roles (`pipod help login`). The server holds your session for it
+and gives the machine tokens of its own, which work nowhere else — not at Zitadel — and end
+with `pipod logout`, when your session would (30 days unused, 90 at most), or when your
+account is removed. A sign-in without `--template` is for your whole account, and `--device`
+shows a dashboard page that says so before Zitadel's. Both need the dashboard's sign-in
+(`ZITADEL_DASHBOARD_CLIENT_ID`, recorded by `selfhost/upgrade --apply-zitadel`).
+
 ### The phone apps
 
 The iOS and Android apps sign in to your server too, once it is [public](#going-public):

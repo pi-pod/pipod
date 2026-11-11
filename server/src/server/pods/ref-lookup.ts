@@ -15,6 +15,8 @@ export async function lookupPodRef(args: {
   orgId: string;
   userId: string;
   lineageRootPodId: string | null;
+  /** A limited sign-in's template: only pods launched from it match. */
+  templateId?: string | null;
   ref: string;
 }): Promise<{ matches: PodRefMatch[]; total: number }> {
   let pattern: RefPattern | null = null;
@@ -39,6 +41,7 @@ export async function lookupPodRef(args: {
          FROM pods p
         WHERE p.org_id=$1 AND p.user_id=$2 AND p.provider_state<>'gone'
           AND ($6::uuid IS NULL OR p.id IN (SELECT id FROM subtree))
+          AND ($9::uuid IS NULL OR p.template_id=$9)
           AND (($8::uuid IS NOT NULL AND p.id=$8) OR
                ($8::uuid IS NULL AND (p.name=$3 OR
                  ($4::text IS NOT NULL AND
@@ -53,7 +56,7 @@ export async function lookupPodRef(args: {
     [args.orgId, args.userId, args.ref,
       pattern && pattern.kind !== "uuid" ? pattern.value : null,
       pattern?.kind === "hex", args.lineageRootPodId, MAX_LINEAGE_DEPTH,
-      pattern?.kind === "uuid" ? pattern.value : null],
+      pattern?.kind === "uuid" ? pattern.value : null, args.templateId ?? null],
   );
   if (rows.rows.length === 0 && invalid) {
     throw new HttpError(400, invalid.message, { hint: invalid.hint });

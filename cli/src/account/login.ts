@@ -6,12 +6,22 @@
  * and project-role scopes, and exchanges the code itself. Where no browser can open on
  * this machine, the device flow (RFC 8628) asks for the same scopes and the person finishes
  * on any other device with a short code. The server never sees a code, verifier, or refresh token.
+ *
+ * `--template` signs in differently: a limited sign-in (limited-sign-in.ts) is the server's to
+ * issue, confirmed on the server's own page, which names the template. A full device sign-in is
+ * sent to the server's page first too, where it says it is for the whole account.
  */
 import * as http from "node:http";
 import { spawn } from "node:child_process";
 import { PiPodError } from "../errors.js";
 import { hint, info } from "../log.js";
 import { AccountClient } from "./api.js";
+import {
+  awaitLimitedSignIn,
+  endLimitedSignIn,
+  limitedTokenEndpoint,
+  startLimitedSignIn,
+} from "./limited-sign-in.js";
 import {
   accountConsoleUrl,
   adminConsoleUrl,
@@ -55,6 +65,8 @@ export interface LoginFlags {
   issuer?: string | undefined;
   /** Sign in with a code on another device even where a browser could open here. */
   device?: boolean | undefined;
+  /** A limited sign-in: launch only from this template (a name or an id), reach only its pods. */
+  template?: string | undefined;
   home?: string | undefined;
 }
 
@@ -66,6 +78,7 @@ export async function runLogin(flags: LoginFlags): Promise<number> {
   // A session with another server says nothing about this one's identity provider.
   const previous = stored?.serverUrl === serverUrl ? stored : null;
   const published = await fetchSignInConfig(serverUrl);
+  if (flags.template !== undefined) return limitedLogin(flags, serverUrl, published);
   const issuerInput =
     flags.issuer ??
     process.env["PI_POD_ISSUER"] ??
@@ -87,7 +100,13 @@ export async function runLogin(flags: LoginFlags): Promise<number> {
   if (flags.token) {
     accessToken = flags.token;
   } else {
-    const pair = await interactiveLogin({ issuer, clientId, orgAlias: flags.org, device: flags.device === true });
+    const pair = await interactiveLogin({
+      issuer,
+      clientId,
+      orgAlias: flags.org,
+      device: flags.device === true,
+      statementPage: published?.dashboardUrl ? new URL(published.dashboardUrl, serverUrl).toString() : undefined,
+    });
     accessToken = pair.accessToken;
     refreshToken = pair.refreshToken;
     idToken = pair.idToken;
@@ -177,6 +196,17 @@ export async function runLogout(flags: { home?: string | undefined }): Promise<n
   if (auth.podToken) {
     throw new PiPodError("a pod-scoped server token is not a revocable login session");
   }
+  if (auth.limitedTo) {
+    // The server ends the sign-in (and the identity-provider session it held for it).
+    const ended = auth.refreshToken ? await endLimitedSignIn(auth.serverUrl, auth.refreshToken) : false;
+    clearAccountAuth(flags.home);
+    info(
+      ended
+        ? `signed out of ${auth.serverUrl}; the sign-in limited to template ${auth.limitedTo.templateName} is ended`
+        : `removed the local sign-in; ${auth.serverUrl} could not be reached to end it, so it ends when it expires`,
+    );
+    return 0;
+  }
   if (auth.issuer && !auth.podToken) {
     try {
       const meta = await discover(auth.issuer);
@@ -211,6 +241,16 @@ export async function runWhoami(flags: { home?: string | undefined }): Promise<n
   info(`server  ${auth.serverUrl}`);
   if (auth.issuer) info(`issuer  ${auth.issuer}`);
   info(`user    ${me.user.email ?? (auth.user.email || "(no email)")} (${me.user.id})`);
+  // One line scripts can rely on: `limit   template <name> — <id>` for a limited sign-in, and
+  // `limit   none — …` for one that is the whole account.
+  if (me.limitedTo) {
+    const deleted = me.limitedTo.templateDeleted ? " (deleted: this sign-in launches nothing)" : "";
+    info(`limit   template ${me.limitedTo.templateName} — ${me.limitedTo.templateId}${deleted}`);
+  } else if (auth.podToken) {
+    info("limit   this pod's token — it reaches only the pods this pod launched");
+  } else {
+    info("limit   none — this sign-in is for the whole account");
+  }
   const perms = me.permissions ?? [];
   info(`perms   ${perms.length ? perms.join(", ") : "(none)"}`);
   if (me.organization) {
@@ -218,6 +258,8 @@ export async function runWhoami(flags: { home?: string | undefined }): Promise<n
   } else {
     info("org     (none) — access is pending Zitadel membership");
   }
+  // A limited sign-in can open neither console.
+  if (me.limitedTo) return 0;
   info(`account ${me.accountConsoleUrl ?? (auth.issuer ? accountConsoleUrl(auth.issuer) : "")}`);
   info(`org-admin ${me.adminConsoleUrl ?? (auth.issuer ? adminConsoleUrl(auth.issuer) : "")}`);
   return 0;
@@ -253,15 +295,24 @@ async function interactiveLogin(args: {
   clientId: string;
   orgAlias?: string | undefined;
   device: boolean;
+  /** The server's dashboard, whose #/device page says a code is for the whole account. */
+  statementPage?: string | undefined;
 }): Promise<TokenSet> {
   const meta = await discover(args.issuer);
   const browserHere = canOpenBrowserHere();
   if (args.device || !browserHere) {
     const authorization = await startDeviceAuthorization(meta, { clientId: args.clientId, orgAlias: args.orgAlias });
     if (authorization) {
-      const page = authorization.verificationUriComplete ?? authorization.verificationUri;
-      const verb = authorization.verificationUriComplete ? "confirm" : "enter";
-      info(`to sign in, open this page on any device and ${verb} the code ${authorization.userCode}:\n  ${page}`);
+      // The person reads that this is the whole account before the identity provider's page,
+      // which says nothing about it.
+      const statement = args.statementPage
+        ? `${args.statementPage.replace(/#.*$/, "")}#/device/${encodeURIComponent(authorization.userCode)}`
+        : null;
+      const page = statement ?? authorization.verificationUriComplete ?? authorization.verificationUri;
+      const verb = statement || authorization.verificationUriComplete ? "confirm" : "enter";
+      info(
+        `to sign in with your whole account, open this page on any device and ${verb} the code ${authorization.userCode}:\n  ${page}`,
+      );
       info("waiting for you to finish signing in…");
       return awaitDeviceTokens(meta, { clientId: args.clientId, authorization });
     }
@@ -396,7 +447,16 @@ function openBrowser(url: string): void {
  * The sign-in settings a server publishes at GET /v1/auth/config; null from a server that
  * predates it. Failing to reach the server at all stops the login here, before the browser.
  */
-async function fetchSignInConfig(serverUrl: string): Promise<{ issuer?: string; cliClientId?: string } | null> {
+interface SignInConfig {
+  issuer?: string;
+  cliClientId?: string;
+  /** The server's dashboard (absolute, or relative to the server). */
+  dashboardUrl?: string;
+  /** The server issues sign-ins limited to one template. */
+  limitedSignIn?: boolean;
+}
+
+async function fetchSignInConfig(serverUrl: string): Promise<SignInConfig | null> {
   let res: Response;
   try {
     res = await fetch(`${serverUrl}/v1/auth/config`, {
@@ -409,7 +469,12 @@ async function fetchSignInConfig(serverUrl: string): Promise<{ issuer?: string; 
     });
   }
   if (!res.ok) return null;
-  const body = (await res.json().catch(() => null)) as { issuer?: unknown; cliClientId?: unknown } | null;
+  const body = (await res.json().catch(() => null)) as {
+    issuer?: unknown;
+    cliClientId?: unknown;
+    dashboardUrl?: unknown;
+    limitedSignIn?: unknown;
+  } | null;
   const issuer = typeof body?.issuer === "string" ? body.issuer : undefined;
   // A token from the hosted service's identity provider is good at api.pipod.dev: no other
   // server gets to ask for one.
@@ -421,7 +486,58 @@ async function fetchSignInConfig(serverUrl: string): Promise<{ issuer?: string; 
   return {
     ...(issuer ? { issuer } : {}),
     ...(typeof body?.cliClientId === "string" ? { cliClientId: body.cliClientId } : {}),
+    ...(typeof body?.dashboardUrl === "string" ? { dashboardUrl: body.dashboardUrl } : {}),
+    ...(body?.limitedSignIn === true ? { limitedSignIn: true } : {}),
   };
+}
+
+/**
+ * A sign-in limited to one template: the server issues it once a person confirms on the server's
+ * page, which names the template. Nothing stored here works at the identity provider.
+ */
+async function limitedLogin(flags: LoginFlags, serverUrl: string, published: SignInConfig | null): Promise<number> {
+  const template = flags.template?.trim() ?? "";
+  if (!template) throw new PiPodError("--template needs a template name or id");
+  if (flags.token !== undefined || flags.issuer !== undefined || flags.org !== undefined) {
+    throw new PiPodError("--template cannot be combined with --token, --issuer or --org", {
+      hint: "a limited sign-in is confirmed on the server's own page; the organization is the confirming person's",
+    });
+  }
+  if (!published?.limitedSignIn) {
+    throw new PiPodError(`${serverUrl} does not offer sign-ins limited to a template`, {
+      hint: "the server needs an upgrade (and its dashboard sign-in configured)",
+    });
+  }
+  const authorization = await startLimitedSignIn(serverUrl, template);
+  info(
+    `to sign this machine in limited to template ${template}, open this page on any device and confirm the code ` +
+      `${authorization.userCode}:\n  ${authorization.verificationUriComplete}`,
+  );
+  info("the page names the template before anything is granted; waiting for you to finish…");
+  if (flags.device !== true && canOpenBrowserHere()) openBrowser(authorization.verificationUriComplete);
+  const tokens = await awaitLimitedSignIn(serverUrl, authorization);
+
+  const auth: AccountAuth = {
+    serverUrl,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    tokenEndpoint: limitedTokenEndpoint(serverUrl),
+    limitedTo: { templateId: tokens.templateId, templateName: tokens.templateName },
+    user: { id: "", email: "" },
+    orgId: "",
+  };
+  const me = await new AccountClient(auth, { home: flags.home }).me();
+  auth.user = { id: me.user.id, email: me.user.email ?? "" };
+  auth.orgId = me.currentOrgId ?? me.organization?.id ?? "";
+  if (me.organization?.alias) auth.orgAlias = me.organization.alias;
+  const file = writeAccountAuth(auth, flags.home);
+  const orgName = me.organization?.name ?? me.organization?.alias ?? auth.orgId;
+  info(
+    `signed in to ${serverUrl} as ${auth.user.email || auth.user.id} (org: ${orgName}), ` +
+      `limited to template ${tokens.templateName} (${tokens.templateId})`,
+  );
+  info(`this sign-in launches only from ${tokens.templateName} and reaches only your pods from it; stored in ${file}`);
+  return 0;
 }
 
 function normalizeServerUrl(raw: string | undefined): string {
