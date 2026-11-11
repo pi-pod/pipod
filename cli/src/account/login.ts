@@ -78,7 +78,7 @@ export async function runLogin(flags: LoginFlags): Promise<number> {
   // A session with another server says nothing about this one's identity provider.
   const previous = stored?.serverUrl === serverUrl ? stored : null;
   const published = await fetchSignInConfig(serverUrl);
-  if (flags.template !== undefined) return limitedLogin(flags, serverUrl, published);
+  if (flags.template !== undefined) return limitedLogin(flags, serverUrl, published, stored);
   const issuerInput =
     flags.issuer ??
     process.env["PI_POD_ISSUER"] ??
@@ -198,7 +198,7 @@ export async function runLogout(flags: { home?: string | undefined }): Promise<n
   }
   if (auth.limitedTo) {
     // The server ends the sign-in (and the identity-provider session it held for it).
-    const ended = auth.refreshToken ? await endLimitedSignIn(auth.serverUrl, auth.refreshToken) : false;
+    const ended = await endStoredSession(auth);
     clearAccountAuth(flags.home);
     info(
       ended
@@ -209,11 +209,9 @@ export async function runLogout(flags: { home?: string | undefined }): Promise<n
   }
   if (auth.issuer && !auth.podToken) {
     try {
+      await endStoredSession(auth);
       const meta = await discover(auth.issuer);
       const clientId = auth.clientId ?? DEFAULT_CLIENT_ID;
-      if (auth.refreshToken) {
-        await revokeToken(meta, { clientId, token: auth.refreshToken, tokenTypeHint: "refresh_token" });
-      }
       const url = endSessionUrl(meta, { idToken: auth.idToken, clientId });
       if (url) {
         const endpoint = new URL(url);
@@ -492,10 +490,33 @@ async function fetchSignInConfig(serverUrl: string): Promise<SignInConfig | null
 }
 
 /**
- * A sign-in limited to one template: the server issues it once a person confirms on the server's
- * page, which names the template. Nothing stored here works at the identity provider.
+ * End a stored sign-in where it was issued: a limited one at its server, a full one by revoking its
+ * refresh token at the identity provider. Best effort; false when it could not be confirmed.
  */
-async function limitedLogin(flags: LoginFlags, serverUrl: string, published: SignInConfig | null): Promise<number> {
+async function endStoredSession(auth: AccountAuth): Promise<boolean> {
+  if (auth.podToken || !auth.refreshToken) return false;
+  if (auth.limitedTo) return endLimitedSignIn(auth.serverUrl, auth.refreshToken);
+  if (!auth.issuer) return false;
+  try {
+    const meta = await discover(auth.issuer);
+    await revokeToken(meta, { clientId: auth.clientId ?? DEFAULT_CLIENT_ID, token: auth.refreshToken, tokenTypeHint: "refresh_token" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A sign-in limited to one template: the server issues it once a person confirms on the server's
+ * page, which names the template. Nothing stored here works at the identity provider — and the
+ * sign-in it replaces, if any, is ended, so no wider token outlives it in an old copy of the file.
+ */
+async function limitedLogin(
+  flags: LoginFlags,
+  serverUrl: string,
+  published: SignInConfig | null,
+  replaced: AccountAuth | null,
+): Promise<number> {
   const template = flags.template?.trim() ?? "";
   if (!template) throw new PiPodError("--template needs a template name or id");
   if (flags.token !== undefined || flags.issuer !== undefined || flags.org !== undefined) {
@@ -537,6 +558,14 @@ async function limitedLogin(flags: LoginFlags, serverUrl: string, published: Sig
       `limited to template ${tokens.templateName} (${tokens.templateId})`,
   );
   info(`this sign-in launches only from ${tokens.templateName} and reaches only your pods from it; stored in ${file}`);
+  if (replaced && !replaced.podToken && replaced.refreshToken) {
+    const what = replaced.limitedTo ? `limited to template ${replaced.limitedTo.templateName}` : "for the whole account";
+    info(
+      (await endStoredSession(replaced))
+        ? `ended the sign-in this machine had before (${what}, ${replaced.serverUrl})`
+        : `could not end the sign-in this machine had before (${what}, ${replaced.serverUrl}); it was removed from this machine and ends when it expires`,
+    );
+  }
   return 0;
 }
 
