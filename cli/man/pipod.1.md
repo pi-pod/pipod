@@ -535,9 +535,10 @@ its owner. Only you change it, its secrets, or who it is shared with, and your c
 reach their next pod. A name finds their own template first, then the organization's,
 then one shared with them; when two members share templates of the same name with
 them, they name it by id. `unshare` stops their launches and their pods' forks,
-child pods, co-located pods and jobs from it. The pods they already have stay theirs
-and keep the template's secrets they were launched with: to end that access, stop
-those pods and rotate the template's secrets. Deleting the template ends its shares.
+child pods, co-located pods and jobs from it, and pauses their scheduled jobs from it.
+The pods they already have stay theirs and keep the template's secrets they were
+launched with: to end that access, stop those pods and rotate the template's secrets.
+Deleting the template ends its shares and pauses their jobs from it the same way.
 
 ### pipod push
 

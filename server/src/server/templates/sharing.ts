@@ -6,9 +6,9 @@
  *
  * Ending a share stops everything new: the member's launches, and their pods' forks, child pods,
  * co-located pods and job runs, all resolve the template through store.ts and stop seeing it.
- * Pods the member already launched keep the template's secrets they were launched with
- * (pods/launchenv.ts), so the answer counts them: ending their access means stopping them and
- * rotating the template's secrets.
+ * The member's scheduled jobs from it are paused (pauseMemberJobs). Pods the member already
+ * launched keep the template's secrets they were launched with (pods/launchenv.ts), so the answer
+ * counts them: ending their access means stopping them and rotating the template's secrets.
  */
 import { tx } from "../db/index.js";
 import { HttpError, badRequest } from "../httperrors.js";
@@ -79,7 +79,13 @@ export async function unshareTemplate(
   owner: TemplateOwner,
   templateId: string,
   email: string,
-): Promise<{ template: VisibleTemplate; removed: boolean; memberUserId: string | null; pods: RemainingPods }> {
+): Promise<{
+  template: VisibleTemplate;
+  removed: boolean;
+  memberUserId: string | null;
+  pods: RemainingPods;
+  jobsPaused: number;
+}> {
   return tx(async (client) => {
     const template = await ownTemplate(client, owner, templateId, "change who it is shared with");
     const deleted = await client.query<{ member_user_id: string }>(
@@ -99,8 +105,34 @@ export async function unshareTemplate(
       memberUserId = known.rows.length === 1 ? known.rows[0]!.id : null;
     }
     const pods = memberUserId ? await remainingPods(client, template.id, memberUserId) : { total: 0, running: 0 };
-    return { template, removed: deleted.rows.length > 0, memberUserId, pods };
+    const jobsPaused = memberUserId ? await pauseMemberJobs(client, template, memberUserId) : 0;
+    return { template, removed: deleted.rows.length > 0, memberUserId, pods, jobsPaused };
   });
+}
+
+/**
+ * Pause the scheduled jobs that people other than its owner run from a personal template, or
+ * only `memberUserId`'s. Once their share has ended (unshared, or the template deleted) such a
+ * job can never launch again, so every run would fail; and an active job on a template is what
+ * keeps a template from being deleted, which must stay its owner's to decide. Resuming a paused
+ * job asks for a template its owner can launch from (jobs/routes.ts), so it stays paused until
+ * the template is shared with them again or they pick another. The template row is locked by
+ * the caller, and job writes lock it too, so no job can slip in between.
+ */
+export async function pauseMemberJobs(
+  client: Parameters<typeof lockTemplateForChange>[0],
+  template: { id: string; owner_user_id: string | null },
+  memberUserId?: string,
+): Promise<number> {
+  if (template.owner_user_id === null) return 0;
+  const paused = await client.query(
+    `UPDATE jobs SET status = 'paused', next_run_at = NULL, updated_at = now()
+      WHERE template_id = $1 AND status = 'active' AND archived_at IS NULL
+        AND user_id <> $2 AND ($3::text IS NULL OR user_id = $3)
+      RETURNING id`,
+    [template.id, template.owner_user_id, memberUserId ?? null],
+  );
+  return paused.rowCount ?? 0;
 }
 
 async function remainingPods(

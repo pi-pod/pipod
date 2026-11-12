@@ -861,6 +861,8 @@ export class AccountClient {
     member: string;
     removed: boolean;
     pods: { total: number; running: number };
+    /** Their active scheduled jobs from it, now paused; absent from servers before 2026-11-12. */
+    jobsPaused?: number;
   }> {
     return this.request(`/templates/${id}/shares/${encodeURIComponent(email)}`, { method: "DELETE" });
   }

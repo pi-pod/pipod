@@ -532,7 +532,7 @@ other person's pods receive the template's secret values, and so does any code i
 which runs the template's scripts with their own credentials. They cannot read a value
 through the API, change the template or its secrets, or share it further. `unshare` stops
 every new launch from it — theirs, and their pods' forks, child pods, co-located pods and
-jobs — but the pods they already have keep the template secrets they were launched with,
+jobs, whose schedules it pauses — but the pods they already have keep the template secrets they were launched with,
 even across restarts; stop those pods and rotate the template's secrets to end that
 access (`unshare` counts them). Someone removed in the Zitadel Console can no longer sign
 in, but the server cannot see the removal, so their existing pods' tokens and their
