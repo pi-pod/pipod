@@ -26,7 +26,7 @@ import {
   type TemplateRow,
   type VisibleTemplate,
 } from "./store.js";
-import { shareTemplate, unshareTemplate } from "./sharing.js";
+import { pauseMemberJobs, shareTemplate, unshareTemplate } from "./sharing.js";
 
 // Strict: an agent that misspells a field would otherwise have it silently dropped and
 // believe it authored a template it did not (spec §8.5).
@@ -366,7 +366,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
       schema: { params: z.object({ id: z.string().uuid() }) },
     },
     async (req, reply) => {
-      const sharesEnded = await tx(async (client) => {
+      const { sharesEnded, jobsPaused } = await tx(async (client) => {
         const existing = await lockTemplateForChange(client, {
           orgId: req.auth.orgId,
           templateId: req.params.id,
@@ -374,6 +374,10 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
           what: "delete it",
         });
         assertTemplateWrite(req.auth, existing);
+        // Jobs of the people it was shared with cannot launch from it once it is gone, and must
+        // not keep its owner from deleting it: they are paused. The owner's own active jobs
+        // still block the delete, as before.
+        const jobsPaused = await pauseMemberJobs(client, existing);
         const jobs = await client.query(
           `SELECT 1 FROM jobs
            WHERE template_id = $1 AND status = 'active' AND archived_at IS NULL LIMIT 1`,
@@ -387,7 +391,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
           [req.params.id],
         );
         // Deleting a template ends its shares: nobody it was shared with launches it again.
-        return endTemplateShares(client, existing.id);
+        return { sharesEnded: await endTemplateShares(client, existing.id), jobsPaused };
       });
       await audit({
         orgId: req.auth.orgId,
@@ -397,6 +401,7 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
         targetId: req.params.id,
         detail: {
           ...(sharesEnded > 0 ? { sharesEnded } : {}),
+          ...(jobsPaused > 0 ? { jobsPaused } : {}),
           ...(req.auth.podId ? { fromPod: req.auth.podId } : {}),
         },
       });
@@ -444,7 +449,11 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
     async (req) => {
       const owner = { orgId: req.auth.orgId, userId: req.auth.userId };
       try {
-        const { template, removed, memberUserId, pods } = await unshareTemplate(owner, req.params.id, req.params.email);
+        const { template, removed, memberUserId, pods, jobsPaused } = await unshareTemplate(
+          owner,
+          req.params.id,
+          req.params.email,
+        );
         await audit({
           orgId: req.auth.orgId,
           actorId: req.auth.userId,
@@ -459,9 +468,10 @@ export function registerTemplateRoutes(app: FastifyInstance): void {
             outcome: removed ? "removed" : "absent",
             podsRemaining: pods.total,
             podsRunning: pods.running,
+            ...(jobsPaused > 0 ? { jobsPaused } : {}),
           },
         });
-        return { templateId: template.id, name: template.name, member: req.params.email, removed, pods };
+        return { templateId: template.id, name: template.name, member: req.params.email, removed, pods, jobsPaused };
       } catch (error) {
         await auditRefusal(req.auth, "template.unshare", req.params, error);
         throw error;

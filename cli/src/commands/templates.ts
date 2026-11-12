@@ -578,6 +578,11 @@ async function unshareCmd(client: AccountClient, args: string[]): Promise<number
       ? `stopped sharing ${result.name} with ${email}: they cannot launch from it any more, and nor can their pods' forks, child pods, co-located pods or jobs`
       : `${result.name} was not shared with ${email}`,
   );
+  const paused = result.jobsPaused ?? 0;
+  if (paused > 0) {
+    const jobs = paused === 1 ? "their scheduled job" : `their ${paused} scheduled jobs`;
+    info(`paused ${jobs} from ${result.name}: ${paused === 1 ? "it" : "they"} cannot run without the template`);
+  }
   const { total, running } = result.pods;
   if (total > 0) {
     info(
