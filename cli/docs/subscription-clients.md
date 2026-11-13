@@ -14,7 +14,7 @@ Account-level `pipod credentials` sharing is intentionally not offered for these
 
 Under allowlist egress, the package-provider registry identifies the clients' inference and account hosts for planning. Installer/download hosts still need explicit admission when an init script downloads binaries. Do not change an allowlist to open egress to conceal a missing host.
 
-Antigravity keeps native shell and filesystem tools. Pi hooks cover its bridged Pi tools, not native Antigravity operations. The pi-pod fork defaults to ACP permission prompts and leaves `AskAntigravity` disabled. These are permission policies, not a sandbox. Confirm subscription access and billing with the official products; a successful connection marker or zero displayed API cost is not billing evidence.
+Antigravity keeps native shell and filesystem tools. Pi hooks cover its bridged Pi tools, not native Antigravity operations. The pi-pod fork defaults to ACP permission prompts and leaves `AskAntigravity` disabled. These are permission policies, not a sandbox. Confirm subscription access and billing with the official products; a successful connection marker or zero displayed API cost is not billing evidence. Muse refuses new inference when its saved client metadata explicitly marks the subscription inactive; missing metadata is not proof of entitlement.
 
 ## Separate pod execution from launcher rendering
 
@@ -42,6 +42,6 @@ Without `pipod.clientExtensions`, existing Pi entrypoint discovery is unchanged.
 
 ## Qualification
 
-The extension forks are developed against Pi 1.5.2, Muse Code 1.4.18, and Antigravity CLI 1.5.8. Muse's private settings and raw-session log are experimental. Its complete-batch path is qualified only on known client versions; unknown builds retain the stable single-tool path. Repeat the real-client checks after client or Pi upgrades.
+The extension forks are developed against Pi 1.5.2, Muse Code 1.4.18 / 1.4.20, and Antigravity CLI 1.5.8. Muse's private settings and raw-session log are experimental. Its complete-batch path is qualified only on known client versions; unknown builds retain the stable single-tool path. Repeat the real-client checks after client or Pi upgrades.
 
 Useful acceptance checks include a real tool result reaching the model, parallel calls, steering, resume/branch/reload, abort recovery, long parked tools, remote-auth notifications and cancellation, and launcher-side rendering without runtime registrations. Local RPC acceptance is not evidence of deployed server revision, native pod lifecycle behavior, model entitlement, or subscription billing.
