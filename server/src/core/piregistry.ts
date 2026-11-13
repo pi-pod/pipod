@@ -157,6 +157,8 @@ export interface PackageProvider {
    * The Claude bridge registers `claude-bridge` but authenticates through Pi's `anthropic` entry.
    */
   credentialProviders?: string[];
+  /** Official-client login performed inside the pod; Pi credential markers are not portable. */
+  clientLogin?: string;
   facts: ProviderFacts;
 }
 
@@ -176,6 +178,23 @@ export const PACKAGE_PROVIDERS: PackageProvider[] = [
     providers: ["claude-bridge"],
     credentialProviders: ["anthropic"],
     facts: { envKeys: ["ANTHROPIC_API_KEY"], endpoints: ["api.anthropic.com", "platform.claude.com"] },
+  },
+  {
+    package: "pi-muse-subscription",
+    providers: ["muse-sdk"],
+    credentialProviders: [],
+    clientLogin: "/login muse-sdk (the official Muse client must be installed in the pod)",
+    facts: { envKeys: [], endpoints: ["api.meta.ai", "auth.meta.com"] },
+  },
+  {
+    package: "pi-antigravity-bridge",
+    providers: ["antigravity"],
+    credentialProviders: [],
+    clientLogin: "/login antigravity (the official agy CLI must be installed in the pod)",
+    facts: {
+      envKeys: [],
+      endpoints: ["daily-cloudcode-pa.googleapis.com", "cloudcode-pa.googleapis.com", "antigravity-pa.googleapis.com", "accounts.google.com", "oauth2.googleapis.com", "www.googleapis.com"],
+    },
   },
   {
     package: "pi-meta-oauth",
