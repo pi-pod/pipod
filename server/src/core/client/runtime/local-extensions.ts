@@ -29,6 +29,7 @@ import {
 import type { RpcClientBase } from "../rpc.js";
 import type { HostBridge } from "./bridge.js";
 import { findTreeNode, type RemoteStateCache } from "./state.js";
+import { extensionEntriesOf } from "./extension-entries.js";
 
 // ---------------------------------------------------------------------------
 // Resolution: config names → loadable paths
@@ -45,37 +46,6 @@ export interface ResolvedClientExtensions {
 function looksLikePath(name: string): boolean {
   if (name.startsWith("@")) return false; // scoped npm package
   return path.isAbsolute(name) || name.startsWith(".") || name.startsWith("~") || name.includes("/") || name.includes("\\");
-}
-
-/**
- * A directory's extension entry files, the way pi's own discovery resolves them: the
- * package.json `pi.extensions` manifest first, else an `index.ts`/`index.js`. Mirrored here
- * because pi exposes this resolution only inside `discoverAndLoadExtensions`, whose
- * project/agent-dir sweep would drag in extensions nobody listed; `loadExtensions` itself
- * loads files and fails outright on a directory.
- */
-function extensionEntriesOf(dir: string): string[] {
-  const manifestPath = path.join(dir, "package.json");
-  if (fs.existsSync(manifestPath)) {
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
-        pi?: { extensions?: unknown };
-      };
-      const declared = Array.isArray(manifest.pi?.extensions) ? manifest.pi.extensions : [];
-      const entries = declared
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => path.resolve(dir, entry))
-        .filter((entry) => fs.existsSync(entry));
-      if (entries.length > 0) return entries;
-    } catch {
-      // Malformed manifest: fall through to the index convention.
-    }
-  }
-  for (const index of ["index.ts", "index.js"]) {
-    const candidate = path.join(dir, index);
-    if (fs.existsSync(candidate)) return [candidate];
-  }
-  return [];
 }
 
 /**

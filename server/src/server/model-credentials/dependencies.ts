@@ -102,7 +102,9 @@ async function loadPinnedPiProviders(): Promise<ReadonlyMap<string, PinnedPiProv
 
 /** Credential provider ids for a model/package provider. Unknown ids default to themselves. */
 export function credentialProvidersFor(providerId: string): readonly string[] {
-  return MODEL_CREDENTIAL_DEPENDENCIES[providerId] ?? [providerId];
+  return MODEL_CREDENTIAL_DEPENDENCIES[providerId] ??
+    PACKAGE_PROVIDERS.find((entry) => entry.providers.includes(providerId))?.credentialProviders ??
+    [providerId];
 }
 
 /** {@link brokerCapability} for a provider already looked up in {@link pinnedPiProviders}. */

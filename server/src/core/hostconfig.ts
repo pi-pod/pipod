@@ -668,6 +668,15 @@ export function checkModelCredentials(
   // "host" leads, because that is the fact the user is missing: this came from their laptop,
   // not from the repo they ran the command in.
   const label = `host pi settings select ${model.provider}${model.model ? `/${model.model}` : ""}`;
+  const clientLogin = PACKAGE_PROVIDERS.find((entry) => entry.providers.includes(model.provider))?.clientLogin;
+  if (clientLogin) {
+    return {
+      ok: true,
+      level: "warn",
+      message: `${label}; its official-client sign-in belongs to the pod, not the launcher`,
+      hint: `Inside the pod, run ${clientLogin}. A copied Pi auth.json marker does not carry the client's credentials.`,
+    };
+  }
 
   // 1. auth.json — a stored credential owns the provider, exactly as in pi. Package providers
   // can declare that they authenticate through a different Pi provider (claude-bridge uses
