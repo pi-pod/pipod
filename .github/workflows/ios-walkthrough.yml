@@ -1,0 +1,93 @@
+name: ios-walkthrough (temporary)
+
+# Throwaway: uses the Debug app by hand-style remote control on a hosted simulator against the
+# fake-provider server, and uploads screenshots to look at. Lives only on this branch.
+
+on:
+  push:
+    branches: [tmp/ios-walkthrough]
+
+permissions:
+  contents: read
+
+jobs:
+  walk:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      ROLE: all
+      HOST: 127.0.0.1
+      PORT: "18081"
+      DATABASE_URL: postgres://pipod@127.0.0.1:5432/pipod
+      ZITADEL_ISSUER: http://127.0.0.1:9999
+      ZITADEL_API_AUDIENCE: pipod-api
+      ZITADEL_JWKS_URL: http://127.0.0.1:9999/jwks
+      ZITADEL_MOBILE_CLIENT_ID: "388199923079774215"
+      SECRETS_KEK_ID: walkthrough
+      PUBLIC_URL: http://127.0.0.1:18081
+      WALK_TOKEN_FILE: ${{ github.workspace }}/.walkthrough/token
+      FAKE_MODEL_CATALOG: large
+      FAKE_ENABLED_MODELS: "fake/careful,acme/sonnet-5,globex/*,hosted/qwen-3-coder-5:high"
+      WALK_TOKEN_FILE: ${{ github.workspace }}/.walkthrough/token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tools
+        run: |
+          brew install xcodegen postgresql@17 cameroncooke/axe/axe
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)/Contents/Developer"
+          xcodebuild -version
+      - name: Database
+        run: |
+          PG=$(brew --prefix postgresql@17)/bin
+          "$PG/initdb" -U pipod --auth=trust -D "$RUNNER_TEMP/pg" >/dev/null
+          "$PG/pg_ctl" -D "$RUNNER_TEMP/pg" -o "-c listen_addresses=127.0.0.1" -l "$RUNNER_TEMP/pg.log" -w start
+          "$PG/createdb" -h 127.0.0.1 -U pipod pipod
+      - name: Server
+        working-directory: server
+        run: |
+          set -euo pipefail
+          export SECRETS_KEK="$(openssl rand -base64 32)"
+          npm ci --no-audit --no-fund >/dev/null
+          node --import tsx src/server/db/migrate-main.ts | tail -1
+          "$(brew --prefix postgresql@17)/bin/psql" -h 127.0.0.1 -U pipod -d pipod -v ON_ERROR_STOP=1 -f dev/dev-seed.sql >/dev/null
+          nohup node dev/jwks-server.mjs > "$RUNNER_TEMP/jwks.log" 2>&1 &
+          nohup node --import tsx dev/main-fake.mts > "$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 1 90); do curl -sf http://127.0.0.1:18081/v1/openapi.json >/dev/null && break; sleep 1; done
+          curl -sf -o /dev/null http://127.0.0.1:18081/v1/openapi.json
+          node dev/mint.mjs 018f0000-0000-7000-8000-000000000001 018f0000-0000-7000-8000-000000000010 > "$WALK_TOKEN_FILE"
+          cp ../.walkthrough/drive.mts dev/zz-drive.mts
+          POD_A=$(node --import tsx dev/zz-drive.mts new)
+          node --import tsx dev/zz-drive.mts fill "$POD_A" 6
+          node --import tsx dev/zz-drive.mts say "$POD_A" "MARKDOWN what did you find"
+          node --import tsx dev/zz-drive.mts say "$POD_A" "THINK TOOLS why does the build fail"
+          POD_B=$(node --import tsx dev/zz-drive.mts new)
+          node --import tsx dev/zz-drive.mts say "$POD_B" "THINK hello"
+          node --import tsx dev/zz-drive.mts stop "$POD_B"
+          echo "POD_A=$POD_A" >> "$GITHUB_ENV"; echo "POD_B=$POD_B" >> "$GITHUB_ENV"
+      - name: Build the Debug app
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodegen generate >/dev/null
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; c=[x for k in sorted(d) if "iOS" in k for x in d[k] if x["name"].startswith("iPhone 16") or x["name"].startswith("iPhone 17")]; print((c or [x for k in d for x in d[k] if x["name"].startswith("iPhone")])[-1]["udid"])')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b | tail -1
+          xcodebuild -project PiPod.xcodeproj -scheme PiPod -configuration Debug \
+            -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES build | tail -3
+      - name: Use the app
+        run: |
+          xcrun simctl install "$UDID" "$RUNNER_TEMP/dd/Build/Products/Debug-iphonesimulator/PiPod.app"
+          xcrun simctl launch "$UDID" com.pipod.app -PIPOD_SERVER_URL http://127.0.0.1:18081 -PIPOD_DEV_TOKEN "$(cat "$WALK_TOKEN_FILE")"
+          ./.walkthrough/walk.sh "$UDID" "$RUNNER_TEMP/walk" "$POD_A" "$POD_B"
+          grep -c '"url":"/v1/pods' "$RUNNER_TEMP/server.log" || true
+          grep -o '"url":"/v1/pods[^"]*"' "$RUNNER_TEMP/server.log" | sed -E 's/[0-9a-f-]{36}/<id>/g' | sort | uniq -c | sort -rn | head -20 > "$RUNNER_TEMP/walk/requests.txt" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-walkthrough
+          path: ${{ runner.temp }}/walk
+          retention-days: 3
