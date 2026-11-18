@@ -623,6 +623,9 @@ private fun PodTile(
         pod.projectName?.let { add(it) }
         add(activity)
         if (subtitleHasLocation) add(location)
+        // Last, so the words a person scans for come first; it is here to be matched against
+        // what a terminal printed, not read.
+        add(pod.ref)
     }.joinToString(" · ")
     val reason = presentation.userFacingReason
     val isStoppedOrProviderArchived = pod.state == "active" &&
@@ -640,6 +643,7 @@ private fun PodTile(
         if (pod.provider != location) add(pod.provider)
         pod.projectName?.let { add(it) }
         add(activity)
+        add("reference ${pod.ref}")
         if (showsOwner) add("Owned by another organization member")
         reason?.let { add(it) }
     }.joinToString(", ")

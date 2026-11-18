@@ -9,6 +9,46 @@ AuthGate/SessionStore integration smoke alongside a production startup check.
 This file records what was visually inspected.
 
 
+## Session screen pass (2026-11-17)
+
+Used by hand on an owned emulator (`pipod-mobileux-36`, API 36 x86_64, emulator-5584) against
+the fake-provider server (`dev/main-fake.mts`) with `FAKE_MODEL_CATALOG=large` and
+`FAKE_ENABLED_MODELS` set, debug build with a dev token. Every screenshot was looked at.
+
+- Opening a 45-turn conversation (389 events) issues one `conversation/events?limit=200`
+  request and shows the newest turns; **Load earlier messages** at the top fetches the page
+  before it and leaves the reader on the turn they were on, with the jump button counting
+  only rows that are actually new.
+- The pod list asks for `view=summary`; a pod's detail and session screens read the whole
+  record themselves.
+- A reply's reasoning (`THINK`) is a collapsed **Thought** row that opens on a tap; the
+  toolbar toggle opens every one and is remembered across pods and launches
+  ([transcript](screenshots/session-ux-transcript.png)).
+- A run of tool calls (`TOOLS`) is one card naming the count, failures and the latest call;
+  it opens to one line per call (tool + command or path) and each call opens to its input and
+  output ([tools](screenshots/session-ux-tools.png)). Before this pass a card never opened
+  at all: its expansion state was read through a function reference Compose could not observe.
+- The model and thinking level sit above the message field. The picker has the thinking
+  levels and an always-visible search at the top, **Scoped models** (the pod's
+  `enabledModels`, read from `get_tui_manifest`) before **All models**, and one search over
+  names, providers and ids ([picker](screenshots/session-ux-model-picker.png)).
+- With the pod stopped the picker still lists the last catalog seen on this server and says
+  the choice applies on connection
+  ([disconnected](screenshots/session-ux-model-picker-disconnected.png)); choosing Sonnet 5,
+  then sending, woke the pod, switched ("Model switched to Sonnet 5.") and only then
+  delivered the message.
+- The pod reference (`p-…`, the CLI's) is under the session title, on each list row, findable
+  from the list search, and a tap-to-copy row on the detail screen ("Copied").
+- An editor-role remote-UI surface is no longer drawn: the composer is the editor. Header,
+  footer, widget and overlay surfaces are unchanged.
+- Server, same backend: after choosing `fake/careful` + `high`, `POST /pods/:id/stop` and a
+  re-attach reported `fake/careful thinking=high` (on `main` the same steps report
+  `fake/fast thinking=off`); three `BRIDGE` turns stored three `extension_ui_request` rows
+  (393 KB) and the conversation route returned none of them.
+
+Not exercised: a real model's thinking blocks, a real pod's `enabledModels`, a release build,
+dark appearance and large font scale for the new rows, TalkBack.
+
 ## Session usage pass (2026-10-04)
 
 Exercised by hand on an owned API 36 x86_64 emulator against the isolated fake-provider server

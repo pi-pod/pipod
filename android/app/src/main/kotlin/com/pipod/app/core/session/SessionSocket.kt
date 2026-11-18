@@ -110,6 +110,13 @@ sealed interface SessionServerMessage {
         val thinkingLevels: List<String>,
     ) : SessionServerMessage
 
+    /**
+     * The pod's model scope (pi's `enabledModels` patterns), read from the manifest the pod
+     * describes its pi configuration with. Null when the pod did not say: an older pod, or
+     * a manifest this client already holds.
+     */
+    data class ModelScope(val patterns: List<String>?) : SessionServerMessage
+
     /** pi's answer to an `rpc` command this client sent, under the client's id. */
     data class RpcResult(val id: String, val response: JsonObject?) : SessionServerMessage
 
@@ -155,6 +162,9 @@ interface SessionTransport {
     fun prompt(text: String, images: List<SessionImage>? = null): Boolean
     fun interrupt(): Boolean
     fun requestModels(): Boolean
+
+    /** Asks the pod which models its user keeps in scope; answered as [SessionServerMessage.ModelScope]. */
+    fun requestModelScope(): Boolean = false
     fun uiResponse(response: JsonObject): Boolean
     fun set(model: Map<String, String>? = null, thinkingLevel: String? = null): Boolean
 
@@ -291,6 +301,8 @@ class SessionSocket(
 
     override fun requestModels(): Boolean = send(buildJsonObject { put("type", "get_models") })
 
+    override fun requestModelScope(): Boolean = send(buildJsonObject { put("type", "get_tui_manifest") })
+
     /**
      * Answers an extension UI request the pod is blocking on: a dialog, or a
      * remote-UI surface. The gateway forwards the response to pi verbatim, so it
@@ -406,6 +418,13 @@ class SessionSocket(
             thinkingLevels = (obj["thinkingLevels"] as? JsonArray)
                 ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
                 ?: emptyList(),
+        )
+
+        // Only the model scope is read; the rest of the manifest styles a terminal.
+        "tui_manifest" -> SessionServerMessage.ModelScope(
+            patterns = (((obj["manifest"] as? JsonObject)?.get("uiSettings") as? JsonObject)
+                ?.get("enabledModels") as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content },
         )
 
         "rpc_result" -> obj.string("id")?.let { id ->

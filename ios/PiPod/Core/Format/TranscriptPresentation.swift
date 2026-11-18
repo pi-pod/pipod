@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Which side of the conversation a transcript row belongs to.
 public enum StreamItemStyle: String, Hashable, Sendable {
@@ -76,6 +77,16 @@ public struct StreamItem: Identifiable, Hashable, Sendable {
     public var isError: Bool
     public var delivery: StreamItemDelivery
     public var attachments: [StreamImageAttachment]
+    /// The model's reasoning for an assistant turn, kept apart from the reply
+    /// it led to.
+    public var thinking: String
+    /// A tool row's tool (`bash`, `read`, …); empty for every other style.
+    public var toolName: String
+    /// What the tool was asked to do, in one line: a command, a path, a pattern.
+    public var toolSummary: String
+    /// Everything the tool was given: the whole command for `bash`, the
+    /// arguments otherwise.
+    public var toolInput: String
 
     public init(
         id: String,
@@ -86,7 +97,11 @@ public struct StreamItem: Identifiable, Hashable, Sendable {
         isInProgress: Bool = false,
         isError: Bool = false,
         delivery: StreamItemDelivery = .delivered,
-        attachments: [StreamImageAttachment] = []
+        attachments: [StreamImageAttachment] = [],
+        thinking: String = "",
+        toolName: String = "",
+        toolSummary: String = "",
+        toolInput: String = ""
     ) {
         self.id = id
         self.style = style
@@ -97,6 +112,36 @@ public struct StreamItem: Identifiable, Hashable, Sendable {
         self.isError = isError
         self.delivery = delivery
         self.attachments = attachments
+        self.thinking = thinking
+        self.toolName = toolName
+        self.toolSummary = toolSummary
+        self.toolInput = toolInput
+    }
+}
+
+/// How the reader likes a transcript shown, remembered across pods and launches.
+///
+/// There is one choice: whether a reply's reasoning is laid out in full or kept
+/// to a line that opens on a tap. It is a reading preference, not a property of
+/// a pod, so it lives here rather than in any one session.
+@MainActor
+@Observable
+public final class TranscriptPreferences {
+    public static let shared = TranscriptPreferences()
+
+    private static let showsThinkingKey = "pipod.transcript.showsThinking"
+
+    /// True when every reply's reasoning is expanded unless that reply was
+    /// closed by hand.
+    public private(set) var showsThinking: Bool
+
+    private init() {
+        showsThinking = UserDefaults.standard.bool(forKey: Self.showsThinkingKey)
+    }
+
+    public func setShowsThinking(_ shows: Bool) {
+        showsThinking = shows
+        UserDefaults.standard.set(shows, forKey: Self.showsThinkingKey)
     }
 }
 
@@ -137,6 +182,17 @@ public enum TranscriptRow: Identifiable, Hashable, Sendable {
         case .day(let dayID, _): return "day-\(dayID)"
         case .item(let item, _): return item.id
         case .tools(let items): return "tools-\(items.first?.id ?? "")"
+        }
+    }
+
+    /// Whether this row draws the item with the given id. A row's own id is not
+    /// enough to find an item again: a run of tools is keyed by its first call,
+    /// and that changes when earlier calls join the run.
+    public func contains(itemID: String) -> Bool {
+        switch self {
+        case .day: return false
+        case .item(let item, _): return item.id == itemID
+        case .tools(let items): return items.contains { $0.id == itemID }
         }
     }
 }

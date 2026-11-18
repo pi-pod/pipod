@@ -80,7 +80,21 @@ export function conversationPageFromRows(
   };
 }
 
-/** SQL + params for a newest-first page of pod events, optionally strictly before a cursor. */
+/**
+ * Pod extensions answer the CLI's bridge commands with notifications whose message is an opaque
+ * `pi-pod-internal/…` blob. Those rows are protocol traffic between one client and the pod, not
+ * conversation, and each can be the size of a whole provider catalog: on a busy pod they were
+ * 97% of the bytes a phone downloaded to show its transcript. The CASE keeps the payload from
+ * being read for every other kind of row.
+ */
+const NOT_BRIDGE_TRAFFIC = `NOT (CASE WHEN e.kind = 'extension_ui_request'
+                   THEN starts_with(coalesce(e.payload->>'message', ''), 'pi-pod-internal/')
+                   ELSE false END)`;
+
+/**
+ * SQL + params for a newest-first page of a pod's conversation, optionally strictly before a
+ * cursor. Internal bridge traffic is left out; see {@link NOT_BRIDGE_TRAFFIC}.
+ */
 export function conversationEventsQuery(args: {
   podId: string;
   before: ConversationCursor | null;
@@ -95,6 +109,7 @@ export function conversationEventsQuery(args: {
              WHERE s.pod_id = $1
                AND (s.started_at, e.session_id, e.seq)
                  < (cursor_s.started_at, cursor_s.id, $3::bigint)
+               AND ${NOT_BRIDGE_TRAFFIC}
              ORDER BY s.started_at DESC, e.session_id DESC, e.seq DESC
              LIMIT $4`,
       params: [args.podId, args.before.sessionId, args.before.seq, args.limit],
@@ -105,6 +120,7 @@ export function conversationEventsQuery(args: {
            FROM session_events e
            JOIN sessions s ON s.id = e.session_id
            WHERE s.pod_id = $1
+             AND ${NOT_BRIDGE_TRAFFIC}
            ORDER BY s.started_at DESC, e.session_id DESC, e.seq DESC
            LIMIT $2`,
     params: [args.podId, args.limit],

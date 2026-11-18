@@ -65,4 +65,12 @@ data class StreamItem(
     val isError: Boolean = false,
     val delivery: StreamItemDelivery = StreamItemDelivery.DELIVERED,
     val attachments: List<StreamImageAttachment> = emptyList(),
+    /** The model's reasoning for an assistant turn, kept apart from the reply it led to. */
+    val thinking: String = "",
+    /** A tool row's tool (`bash`, `read`, …); empty for every other style. */
+    val toolName: String = "",
+    /** What the tool was asked to do, in one line: a command, a path, a pattern. */
+    val toolSummary: String = "",
+    /** Everything the tool was given: the whole command for `bash`, the arguments otherwise. */
+    val toolInput: String = "",
 )

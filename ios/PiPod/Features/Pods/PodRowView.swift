@@ -87,6 +87,9 @@ struct PodRowView: View {
         if let project = pod.projectName { parts.append(project) }
         parts.append(activity)
         if showsLocation || pod.isHostChild { parts.append(pod.displayLocation) }
+        // Last, so the words a person scans for come first; it is here to be
+        // matched against what a terminal printed, not read.
+        parts.append(pod.ref)
         return parts.joined(separator: " · ")
     }
 
@@ -100,6 +103,7 @@ struct PodRowView: View {
         }
         if let project = pod.projectName { parts.append(project) }
         parts.append(activity)
+        parts.append("reference \(pod.ref)")
         if showsStorageDetail, let detail = presentation.statusDetail {
             parts.append(detail)
         }

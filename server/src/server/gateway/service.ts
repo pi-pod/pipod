@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentSessionEvent, RpcExtensionUIResponse } from "@earendil-works/pi-coding-agent";
 import type WebSocket from "ws";
-import { RemoteRpcClient, type FrameChannel, type ImageContent } from "../../core/client/rpc.js";
+import { RemoteRpcClient, type FrameChannel, type ImageContent, type ThinkingLevel } from "../../core/client/rpc.js";
 import { bundledPiVersion } from "../../core/client/piversion.js";
 import { verifyHello } from "../../core/client/session.js";
 import {
@@ -170,10 +170,34 @@ export function isCurrentGatewaySession(
   return !session.closed && current === session;
 }
 
+/** The parts of pi's `get_state` answer the gateway keeps a durable copy of. */
+export interface PiStateSnapshot {
+  sessionFile?: unknown;
+  model?: unknown;
+  thinkingLevel?: unknown;
+}
+
+/** `provider/id` for a model as pi reports it, or null when either half is missing. */
+export function piModelRef(model: unknown): string | null {
+  const m = model as { provider?: unknown; id?: unknown } | null | undefined;
+  return typeof m?.provider === "string" && m.provider !== "" && typeof m.id === "string" && m.id !== ""
+    ? `${m.provider}/${m.id}`
+    : null;
+}
+
+/** Splits `provider/id` at the first slash: model ids contain slashes, provider ids do not. */
+export function parsePiModelRef(ref: string | null | undefined): { provider: string; id: string } | null {
+  if (!ref) return null;
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1) return null;
+  return { provider: ref.slice(0, slash), id: ref.slice(slash + 1) };
+}
+
 /** Read and send one fresh semantic model snapshot. */
 export async function sendModelCatalogSnapshot(args: {
   rpc: Pick<RemoteRpcClient, "getAvailableModels" | "getState" | "getAvailableThinkingLevels">;
-  mirrorPiSessionFile: (sessionFile: unknown) => void;
+  /** Receives the state the snapshot was read from, to mirror onto the durable pod row. */
+  mirrorPiState: (state: PiStateSnapshot) => void;
   send: (frame: Extract<ServerMessage, { type: "models" }>) => void;
   requestId?: string;
   isCurrent?: () => boolean;
@@ -186,7 +210,7 @@ export async function sendModelCatalogSnapshot(args: {
     args.rpc.getAvailableThinkingLevels().catch(() => []),
   ]);
   if (args.isCurrent && !args.isCurrent()) return;
-  args.mirrorPiSessionFile(state.sessionFile);
+  args.mirrorPiState(state);
   if (args.isCurrent && !args.isCurrent()) return;
   args.send({
     type: "models",
@@ -1044,6 +1068,8 @@ export class GatewayService {
       lastDecodedShimSeq: 0,
       readyProbe: null,
       piSessionFile: pod.pi_session_file,
+      selectionRestored: Promise.resolve(),
+      restoringSelection: false,
       bashSnapshots: new Map(),
       auxInFlight: new Map(),
     };
@@ -1184,6 +1210,9 @@ export class GatewayService {
       session,
       gatewaySessionReadyTimeoutMs(session.freshSpawn),
     );
+    // Not awaited, for the same reason: clients attach now, and their first model snapshot and
+    // first prompt queue behind this.
+    session.selectionRestored = this.restorePiSelection(session);
     void seedGatewaySessionActivity({
       rpc,
       activity: session.activity,
@@ -1287,35 +1316,100 @@ export class GatewayService {
    * credential lease unlocks, so the model gets a few seconds to appear in pi's catalog.
    */
   private async switchToQueuedModel(session: ActiveSession, model: string): Promise<void> {
-    const slash = model.indexOf("/");
-    if (slash <= 0 || slash === model.length - 1) return;
-    const provider = model.slice(0, slash);
-    const id = model.slice(slash + 1);
-    const offered = (entry: unknown): boolean => {
-      const m = entry as { provider?: unknown; id?: unknown } | null;
-      return m?.provider === provider && m?.id === id;
-    };
+    const wanted = parsePiModelRef(model);
+    if (!wanted) return;
+    if (!(await this.setModelOnceOffered(session, wanted, "queued prompt model"))) return;
+    // Clients already attached read the model when they connected; tell them it moved.
+    await sendModelCatalogSnapshot({
+      rpc: session.rpc,
+      mirrorPiState: (state) => this.mirrorPiState(session, state),
+      isCurrent: () => isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null),
+      send: (frame) => this.fanOut(session, frame),
+    }).catch(() => {});
+  }
+
+  /**
+   * Switches pi to `wanted` once its catalog offers it; false when it never does or pi refuses.
+   *
+   * A pi that has just started has not yet loaded the models its credential lease unlocks, so
+   * the model gets a few seconds to appear before this gives up and leaves pi on its own.
+   */
+  private async setModelOnceOffered(
+    session: ActiveSession,
+    wanted: { provider: string; id: string },
+    what: string,
+  ): Promise<boolean> {
+    const ref = `${wanted.provider}/${wanted.id}`;
     for (let attempt = 0; attempt < QUEUED_MODEL_WAIT_ATTEMPTS && !session.closed; attempt++) {
       const models = await session.rpc.getAvailableModels().catch(() => [] as unknown[]);
-      if (models.some(offered)) {
+      if (models.some((entry) => piModelRef(entry) === ref)) {
         try {
-          await session.rpc.setModel(provider, id);
+          await session.rpc.setModel(wanted.provider, wanted.id);
+          return true;
         } catch (e) {
-          this.deps.log.warn(`queued prompt model ${model} refused on ${session.pod.id}: ${e instanceof Error ? e.message : e}`);
-          return;
+          this.deps.log.warn(`${what} ${ref} refused on ${session.pod.id}: ${e instanceof Error ? e.message : e}`);
+          return false;
         }
-        // Clients already attached read the model when they connected; tell them it moved.
-        await sendModelCatalogSnapshot({
-          rpc: session.rpc,
-          mirrorPiSessionFile: (sessionFile) => this.mirrorPiSessionFile(session, sessionFile),
-          isCurrent: () => isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null),
-          send: (frame) => this.fanOut(session, frame),
-        }).catch(() => {});
-        return;
       }
       await new Promise((resolve) => setTimeout(resolve, QUEUED_MODEL_WAIT_MS));
     }
-    this.deps.log.warn(`queued prompt model ${model} not offered on ${session.pod.id}; using pi's own`);
+    this.deps.log.warn(`${what} ${ref} not offered on ${session.pod.id}; using pi's own`);
+    return false;
+  }
+
+  /**
+   * Puts a freshly spawned pi back on the model and thinking level this pod was last seen on.
+   *
+   * Every wake starts a new pi, and it starts on the launch configuration's defaults: `pi.model`
+   * and `pi.thinking` reach it as flags, and pi lets a flag override what its session file
+   * recorded. Without this, a pod that slept came back on the configured model whatever its
+   * user had chosen. The selection is restored over RPC rather than by rewriting those flags
+   * because a flag naming a model pi can no longer resolve stops pi from starting at all,
+   * while a refused RPC only leaves it on the default.
+   *
+   * Runs as a model-catalog operation, so the first snapshot any client reads already shows the
+   * restored selection. Never rejects: failing to restore must not fail the session.
+   */
+  private async restorePiSelection(session: ActiveSession): Promise<void> {
+    const wantedModel = parsePiModelRef(session.pod.pi_model);
+    const wantedThinking = session.pod.pi_thinking;
+    if (!session.freshSpawn || (!wantedModel && !wantedThinking)) return;
+    // Until this settles pi reports the configured default, which is not a choice to record.
+    session.restoringSelection = true;
+    try {
+      await enqueueModelCatalogOperation(session, async () => {
+        try {
+          await session.readyProbe;
+          const before = await requestGatewaySessionState(session.rpc);
+          if (wantedModel && piModelRef(before.model) !== session.pod.pi_model) {
+            await this.setModelOnceOffered(session, wantedModel, "restored model");
+          }
+          // After the model: switching models re-clamps the thinking level to what it supports.
+          if (wantedThinking) {
+            const current = (await requestGatewaySessionState(session.rpc)).thinkingLevel;
+            if (current !== wantedThinking) {
+              await session.rpc.setThinkingLevel(wantedThinking as ThinkingLevel);
+            }
+          }
+        } finally {
+          // Before the queue moves on: the next snapshot is read from the restored pi.
+          session.restoringSelection = false;
+        }
+      });
+    } catch (e) {
+      session.restoringSelection = false;
+      this.deps.log.warn(
+        `could not restore the model selection on ${session.pod.id}: ${e instanceof Error ? e.message : e}`,
+      );
+    }
+    // Record where pi actually ended up, so a model it no longer offers is not waited for again.
+    await requestGatewaySessionState(session.rpc)
+      .then((state) => {
+        if (isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) {
+          this.mirrorPiSelection(session, state);
+        }
+      })
+      .catch(() => {});
   }
 
   private async drainQueuedPrompts(session: ActiveSession): Promise<void> {
@@ -1347,6 +1441,7 @@ export class GatewayService {
           if (status) this.notifyQueuedPromptStatus(session, prompt.id, status);
           return;
         }
+        await session.selectionRestored;
         if (prompt.model) await this.switchToQueuedModel(session, prompt.model);
         // request() transmits synchronously. A rejected promise is an unknown
         // transport outcome; a resolved success:false is Pi's preflight refusal.
@@ -1651,6 +1746,36 @@ export class GatewayService {
     this.fanOut(session, { type: "pod_updated", id: podId, name });
   }
 
+  /** Mirrors what a `get_state` answer says about the session file and the selection. */
+  private mirrorPiState(session: ActiveSession, state: PiStateSnapshot): void {
+    this.mirrorPiSessionFile(session, state.sessionFile);
+    this.mirrorPiSelection(session, state);
+  }
+
+  /**
+   * Durably note the model and thinking level pi is on, so the next pi this pod starts can be
+   * put back on them (see {@link restorePiSelection}). Skipped while that restore is running:
+   * what pi reports then is the default it started on.
+   */
+  private mirrorPiSelection(session: ActiveSession, state: PiStateSnapshot): void {
+    if (session.restoringSelection) return;
+    const model = piModelRef(state.model);
+    const thinking = typeof state.thinkingLevel === "string" && state.thinkingLevel !== "" ? state.thinkingLevel : null;
+    if (model === null && thinking === null) return;
+    const nextModel = model ?? session.pod.pi_model;
+    const nextThinking = thinking ?? session.pod.pi_thinking;
+    if (nextModel === session.pod.pi_model && nextThinking === session.pod.pi_thinking) return;
+    session.pod.pi_model = nextModel;
+    session.pod.pi_thinking = nextThinking;
+    void query(
+      `UPDATE pods SET pi_model = $2, pi_thinking = $3, updated_at = now()
+       WHERE id = $1 AND gateway_id = $4`,
+      [session.pod.id, nextModel, nextThinking, this.deps.env.GATEWAY_ID],
+    ).catch((e) =>
+      this.deps.log.warn(`pi selection mirror failed for ${session.pod.id}: ${e instanceof Error ? e.message : e}`),
+    );
+  }
+
   /** Durably note which session file pi has open, so a later restart pins it with `--session`. */
   private mirrorPiSessionFile(session: ActiveSession, sessionFile: unknown): void {
     if (typeof sessionFile !== "string" || sessionFile === "" || sessionFile === session.piSessionFile) return;
@@ -1675,14 +1800,20 @@ export class GatewayService {
     if ((response as { success?: unknown }).success !== true) return;
     switch (command["type"]) {
       case "get_state": {
-        const data = (response as { data?: { sessionFile?: unknown } }).data;
-        this.mirrorPiSessionFile(session, data?.sessionFile);
+        const data = (response as { data?: PiStateSnapshot }).data;
+        if (data) this.mirrorPiState(session, data);
         return;
       }
+      // A full client changes the selection with pi's own commands rather than the gateway's
+      // `set` frame; either way the pod row has to learn where pi ended up.
+      case "set_model":
+      case "cycle_model":
+      case "set_thinking_level":
+      case "cycle_thinking_level":
       case "switch_session":
       case "new_session":
         void requestGatewaySessionState(session.rpc)
-          .then((state) => this.mirrorPiSessionFile(session, state.sessionFile))
+          .then((state) => this.mirrorPiState(session, state))
           .catch(() => {});
         return;
     }
@@ -2303,6 +2434,9 @@ export class GatewayService {
           // Validate before taking the dispatch lease: a rejected turn must cost no
           // work-lease write and no busy mark on the session.
           const { text, images } = preparePromptIngress({ text: message.text, images: message.images });
+          // A pi that has just started must be back on this pod's model before it takes a turn.
+          await session.selectionRestored;
+          if (!isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) return;
           await session.activity.grantDispatchLease();
           await deliverUserPrompt({
             text,
@@ -2363,9 +2497,9 @@ export class GatewayService {
               && session.clients.has(clientSink)) {
               await sendModelCatalogSnapshot({
                 rpc: session.rpc,
-                mirrorPiSessionFile: (sessionFile) => {
+                mirrorPiState: (state) => {
                   if (isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) {
-                    this.mirrorPiSessionFile(session, sessionFile);
+                    this.mirrorPiState(session, state);
                   }
                 },
                 requestId: message.requestId,
@@ -2387,9 +2521,9 @@ export class GatewayService {
             && session.clients.has(clientSink)) {
             await sendModelCatalogSnapshot({
               rpc: session.rpc,
-              mirrorPiSessionFile: (sessionFile) => {
+              mirrorPiState: (state) => {
                 if (isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) {
-                  this.mirrorPiSessionFile(session, sessionFile);
+                  this.mirrorPiState(session, state);
                 }
               },
               isCurrent: () => isCurrentGatewaySession(
@@ -2458,6 +2592,9 @@ export class GatewayService {
             command["type"] === "steer" ||
             command["type"] === "follow_up"
           ) {
+            // As for the first-class prompt frame: not before a restarted pi is back on its model.
+            await session.selectionRestored;
+            if (!isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) return;
             try {
               const ingress = preparePromptIngress({ text: command["message"], images: command["images"] });
               command["message"] = ingress.text;

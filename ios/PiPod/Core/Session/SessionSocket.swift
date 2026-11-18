@@ -110,6 +110,10 @@ public enum SessionServerMessage: Sendable {
         requestID: String, models: [JSONValue], current: JSONValue?, thinkingLevel: String?,
         thinkingLevels: [String]
     )
+    /// The pod's model scope (pi's `enabledModels` patterns), read from the
+    /// manifest the pod describes its pi configuration with. Nil when the pod
+    /// did not say: an older pod, or a manifest this client already holds.
+    case modelScope(patterns: [String]?)
     /// pi's answer to an `rpc` command this client sent, under the client's id.
     case rpcResult(id: String, response: JSONValue)
     case pong
@@ -138,11 +142,19 @@ public protocol SessionTransport: AnyObject {
     @discardableResult func prompt(_ text: String, images: [SessionImage]) -> Bool
     @discardableResult func interrupt() -> Bool
     @discardableResult func requestModels() -> Bool
+    /// Asks the pod which models its user keeps in scope; answered as
+    /// `SessionServerMessage.modelScope`.
+    @discardableResult func requestModelScope() -> Bool
     @discardableResult func uiResponse(_ response: JSONValue) -> Bool
     @discardableResult func set(
         model: [String: String]?, thinkingLevel: String?, requestID: String?
     ) -> Bool
     @discardableResult func rpc(id: String, command: JSONValue) -> Bool
+}
+
+extension SessionTransport {
+    /// A transport that cannot ask simply never reports a scope.
+    @discardableResult public func requestModelScope() -> Bool { false }
 }
 
 /// One open WebSocket, narrow enough that a test double is a dozen lines.
@@ -296,6 +308,11 @@ public final class SessionSocket: SessionTransport {
     @discardableResult
     public func requestModels() -> Bool { send(.object(["type": .string("get_models")])) }
 
+    @discardableResult
+    public func requestModelScope() -> Bool {
+        send(.object(["type": .string("get_tui_manifest")]))
+    }
+
     /// Answers an extension UI request the pod is blocking on: a dialog, or a
     /// remote-UI surface. The gateway forwards it to pi verbatim, so it must
     /// already be a complete `extension_ui_response` frame.
@@ -424,6 +441,11 @@ public final class SessionSocket: SessionTransport {
                 models: models, current: current,
                 thinkingLevel: thinkingLevel, thinkingLevels: thinkingLevels
             )
+        case "tui_manifest":
+            // Only the model scope is read; the rest of the manifest styles a terminal.
+            let patterns = object["manifest"]?["uiSettings"]?["enabledModels"]?.arrayValue?
+                .compactMap(\.stringValue)
+            return .modelScope(patterns: patterns)
         case "rpc_result":
             guard let id = object["id"]?.stringValue, let response = map(object["response"])
             else { return nil }

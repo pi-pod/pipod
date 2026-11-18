@@ -153,6 +153,12 @@ data class Pod(
     val projectName: String? get() = project?.trim()?.takeIf { it.isNotEmpty() }
 
     /**
+     * The short reference the CLI prints and accepts for this pod (`p-` and the last ten hex
+     * digits of its id), so a pod on the phone can be named in a terminal and found again.
+     */
+    val ref: String get() = "p-" + id.replace("-", "").takeLast(10).lowercase()
+
+    /**
      * Where the pod lives: the provider for a machine-backed pod, `on <host>`
      * for a co-located child. Prefers the server's derived field and falls back
      * so an older payload still has something to print.

@@ -297,6 +297,17 @@ public struct Pod: Codable, Hashable, Sendable, Identifiable {
         return trimmed
     }
 
+    /// The short reference the CLI prints and accepts for this pod (`p-` and the
+    /// last ten hex digits of its id), so a pod on the phone can be named in a
+    /// terminal and found again.
+    public var ref: String { Pod.ref(forID: id) }
+
+    /// The reference for a pod known only by its id, as a screen opened from a
+    /// link is before the pod record arrives.
+    public static func ref(forID id: String) -> String {
+        "p-" + id.replacingOccurrences(of: "-", with: "").suffix(10).lowercased()
+    }
+
     /// Where the pod lives: the provider for a machine-backed pod, `on <host>`
     /// for a co-located child. Prefers the server's derived field and falls back
     /// so an older payload still has something to print.

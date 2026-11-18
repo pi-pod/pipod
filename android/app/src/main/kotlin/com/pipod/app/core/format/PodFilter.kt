@@ -53,7 +53,7 @@ data class PodFilter(
     }
 
     /**
-     * One field searches pod names and project names together, and every word has
+     * One field searches pod names, project names and pod references together, and every word has
      * to land somewhere: typing "acme auth" finds the auth pod in the acme
      * project.
      */
@@ -61,7 +61,10 @@ data class PodFilter(
         val words = normalized(search).split(' ').filter { it.isNotEmpty() }
         if (words.isEmpty()) return true
         val haystack = normalized(
-            "${pod.name} ${pod.projectName ?: ""} ${pod.displayLocation} ${pod.hostPodName ?: ""}",
+            // The reference and the id are how a pod is named in a terminal; pasting either
+            // into the search field finds it here.
+            "${pod.name} ${pod.projectName ?: ""} ${pod.displayLocation} ${pod.hostPodName ?: ""} " +
+                "${pod.ref} ${pod.id}",
         )
         return words.all { haystack.contains(it) }
     }

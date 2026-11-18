@@ -1,5 +1,6 @@
 package com.pipod.app.features.session
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -145,6 +146,8 @@ fun SessionRoute(
             // live stream, which does not survive a navigation, and the
             // transcript keeps streaming behind it.
             if (isPickingModel) {
+                // Back closes the picker, not the conversation under it.
+                BackHandler { isPickingModel = false }
                 ModelPickerScreen(
                     stream = viewModel.stream,
                     onDone = { isPickingModel = false },
