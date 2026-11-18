@@ -11,6 +11,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import kotlinx.coroutines.launch
 
 /**
  * Confirms something small that already happened, such as a copy.
@@ -52,4 +56,21 @@ val LocalAppToastHost = compositionLocalOf { SnackbarHostState() }
  */
 suspend fun showAppToast(host: SnackbarHostState, message: String) {
     host.showSnackbar(message = message, duration = SnackbarDuration.Short)
+}
+
+/**
+ * An action that puts [text] on the clipboard and says so. One implementation, so every
+ * copy in the app confirms itself the same way.
+ */
+@Composable
+fun rememberCopyAction(text: String): () -> Unit {
+    val clipboard = LocalClipboardManager.current
+    val toastHost = LocalAppToastHost.current
+    val scope = rememberCoroutineScope()
+    return remember(text, clipboard, toastHost, scope) {
+        {
+            clipboard.setText(AnnotatedString(text))
+            scope.launch { showAppToast(toastHost, "Copied") }
+        }
+    }
 }

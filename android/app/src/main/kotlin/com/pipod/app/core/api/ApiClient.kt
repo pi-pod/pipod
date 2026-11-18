@@ -274,6 +274,10 @@ class ApiClient(
         val query = buildMap {
             state?.let { put("state", it) }
             if (mine) put("mine", "true")
+            // A roster needs no launch reports: with them a page of pods is megabytes, without
+            // them kilobytes. Whoever opens a pod reads the whole record then. A server that
+            // predates the parameter ignores it and answers in full.
+            put("view", "summary")
         }
         // Billing rides the same envelope as the rows; capture it from the
         // first page so the walk below never fetches twice.

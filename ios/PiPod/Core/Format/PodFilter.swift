@@ -63,8 +63,11 @@ public struct PodFilter: Equatable, Sendable {
             .split(separator: " ", omittingEmptySubsequences: true)
             .map(String.init)
         guard !words.isEmpty else { return true }
+        // The reference and the id are how a pod is named in a terminal; pasting
+        // either into the search field finds it here.
         let haystack = Self.normalized(
-            "\(pod.name) \(pod.projectName ?? "") \(pod.displayLocation) \(pod.hostPodName ?? "")"
+            "\(pod.name) \(pod.projectName ?? "") \(pod.displayLocation) \(pod.hostPodName ?? "") "
+                + "\(pod.ref) \(pod.id)"
         )
         return words.allSatisfy { haystack.contains($0) }
     }

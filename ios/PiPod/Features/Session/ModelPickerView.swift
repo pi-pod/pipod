@@ -28,7 +28,7 @@ struct ModelPickerButton: View {
                         .lineLimit(modelLineLimit)
                         .truncationMode(.middle)
                         .fixedSize(horizontal: false, vertical: wrapsComposerLabel)
-                    if let level = model.currentThinkingLevel, level != "off" {
+                    if let level = model.selectedThinkingLevel, level != "off" {
                         Text("· \(ThinkingLevelChoice.label(level))")
                             .foregroundStyle(AppColors.secondaryLabel)
                             .lineLimit(1)
@@ -61,9 +61,10 @@ struct ModelPickerButton: View {
         if let pending = model.pendingThinkingLevel {
             return "Changing thinking to \(ThinkingLevelChoice.label(pending))"
         }
-        if let current = model.currentModel { return current.name }
-        if model.hasModelSnapshot { return "Choose model" }
-        return model.isConnected ? "Loading models…" : "Models after connection"
+        // A choice waiting for the pod is what the next message will run on.
+        if let selected = model.selectedModel { return selected.name }
+        if model.isConnected, !model.hasModelSnapshot { return "Loading models…" }
+        return "Choose model"
     }
 
     static func accessibilityLabel(_ model: any ModelSelecting) -> String {
@@ -71,18 +72,22 @@ struct ModelPickerButton: View {
         if model.selectionNeedsAttention { parts.append("Model change needs attention") }
         if let pending = model.pendingModel {
             parts.append("Switching to model: \(pending.name)")
-        } else if let current = model.currentModel {
-            parts.append("Model: \(current.name)")
+        } else if let selected = model.selectedModel {
+            parts.append("Model: \(selected.name)")
         } else {
-            parts.append(model.hasModelSnapshot ? "Choose provider and model"
-                         : (model.isConnected ? "Loading models" : "Models after connection"))
+            parts.append(
+                model.isConnected && !model.hasModelSnapshot ? "Loading models" : "Choose model"
+            )
         }
         if let pending = model.pendingThinkingLevel {
             parts.append("Changing thinking to \(ThinkingLevelChoice.label(pending))")
-        } else if let level = model.currentThinkingLevel {
+        } else if let level = model.selectedThinkingLevel {
             parts.append("Thinking: \(ThinkingLevelChoice.label(level))")
         }
-        if model.currentModel != nil { parts.append("Choose provider and model") }
+        if model.deferredModel != nil || model.deferredThinkingLevel != nil {
+            parts.append("Applies when the pod connects")
+        }
+        if model.selectedModel != nil { parts.append("Choose model and thinking level") }
         return parts.joined(separator: ". ")
     }
 }
@@ -115,8 +120,19 @@ private struct ModelSelectionRecoveryActions: View {
     }
 }
 
-/// One searchable model list, with the selected model first and thinking
-/// controls progressively disclosed below it.
+/// The model and thinking level the next message runs on.
+///
+/// One list, top to bottom in the order a choice is made: the thinking level, a
+/// search field that is always there, the models the pod's user keeps in scope,
+/// then every other model. A catalog is dozens of models across several
+/// providers, so the handful in scope lead and one search covers names,
+/// providers and ids together. Choosing a model closes the picker, because that
+/// is what the reader came to do; choosing a thinking level does not, because
+/// it usually goes with a model.
+///
+/// Nothing here needs the pod to be connected. Until it is, the list is the
+/// last catalog seen on this server and a choice is kept by the stream, which
+/// makes the switch as soon as the pod's own catalog arrives.
 struct ModelPickerView: View {
     let model: any ModelSelecting
     var onDone: (() -> Void)?
@@ -124,49 +140,85 @@ struct ModelPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppRouter.self) private var router
     @State private var query = ""
-    @State private var showsThinking = false
-    @State private var toast: String?
 
-    private var visibleModels: [ModelChoice] {
-        ModelCatalog.modelsMatching(
-            query, available: model.availableModels, current: model.currentModel
-        )
+    private var allModels: [ModelChoice] {
+        ModelCatalog.models(available: model.availableModels, current: model.selectedModel)
+    }
+
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// A switch in flight freezes the rows: a second one on top of it would
+    /// race. Being disconnected does not, because a choice made then is simply
+    /// kept until the pod connects.
+    private var rowsEnabled: Bool {
+        !model.isModelSwitchInFlight && !model.isThinkingSwitchInFlight
     }
 
     var body: some View {
+        let models = allModels
         List {
             noticeSection
             credentialSettingsSection
-            modelSection
             thinkingSection
+            if models.isEmpty {
+                emptySection
+            } else if isSearching {
+                let matches = ModelCatalog.search(query, in: models)
+                if matches.isEmpty {
+                    Section {
+                        EmptyStateView(
+                            title: "No matching models",
+                            message: "No model matches “\(query)”. Search by name, provider or ID.",
+                            systemImage: "magnifyingglass"
+                        )
+                    }
+                } else {
+                    modelSection(
+                        "\(matches.count) \(matches.count == 1 ? "match" : "matches")",
+                        matches, idPrefix: "match"
+                    )
+                }
+            } else {
+                let scoped = model.scopedModels.filter { models.contains($0) }
+                // What is selected is always in the first screenful, even when
+                // it is outside the scope that would otherwise lead the list.
+                if let selected = model.selectedModel, !scoped.isEmpty, !scoped.contains(selected) {
+                    modelSection("Selected", [selected], idPrefix: "selected")
+                }
+                if !scoped.isEmpty {
+                    modelSection("Scoped models", scoped, idPrefix: "scoped")
+                }
+                modelSection(scoped.isEmpty ? "Models" : "All models", models, idPrefix: "all")
+            }
         }
         .listStyle(.insetGrouped)
-        .searchable(text: $query, prompt: "Search models, providers, or IDs")
-        .navigationTitle("Choose model")
+        // Always showing: a search field that appears only after pulling the
+        // list down is one most people never find.
+        .searchable(
+            text: $query,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Search models, providers or IDs"
+        )
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+        .navigationTitle("Model & Thinking")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Done") {
-                    if let onDone { onDone() } else { dismiss() }
-                }
-                .accessibilityLabel("Done choosing model and thinking level")
+                Button("Done") { done() }
+                    .accessibilityLabel("Done choosing model and thinking level")
             }
         }
         .task { model.refreshModels() }
-        .overlay(alignment: .bottom) {
-            if let toast {
-                Text(toast)
-                    .font(.footnote)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(AppColors.card, in: Capsule())
-                    .overlay(Capsule().stroke(AppColors.separator))
-                    .padding(.bottom, 24)
-                    .transition(.opacity)
-                    .accessibilityAddTraits(.updatesFrequently)
-            }
-        }
     }
+
+    private func done() {
+        if let onDone { onDone() } else { dismiss() }
+    }
+
+    // MARK: Notices
 
     @ViewBuilder
     private var noticeSection: some View {
@@ -191,7 +243,7 @@ struct ModelPickerView: View {
         } else if let pending = model.pendingModel {
             Section {
                 Label(
-                    "Switching to \(pending.name)… You can keep editing your prompt, but send becomes available after the server confirms it.",
+                    "Switching to \(pending.name)… Sending waits until the pod confirms it.",
                     systemImage: "arrow.triangle.2.circlepath"
                 )
                 .font(.footnote)
@@ -207,21 +259,24 @@ struct ModelPickerView: View {
                 .font(.footnote)
                 .foregroundStyle(AppColors.notice)
             }
+        } else if !model.isConnected {
+            Section {
+                Label(
+                    model.availableModels.isEmpty
+                        ? "This pod isn’t connected yet. Its models appear once it is."
+                        : "This pod isn’t connected yet. Choose now and it switches as soon as it connects.",
+                    systemImage: "clock"
+                )
+                .font(.footnote)
+                .foregroundStyle(AppColors.secondaryLabel)
+                .accessibilityIdentifier("modelPicker.deferredNotice")
+            }
         } else if let error = model.error {
             Section {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
                     .foregroundStyle(AppColors.destructive)
                     .accessibilityLabel("Model catalog error: \(error)")
-            }
-        } else if !model.isConnected, model.hasModelSnapshot {
-            Section {
-                Label(
-                    "The pod is disconnected. Reconnect before switching models.",
-                    systemImage: "wifi.slash"
-                )
-                .font(.footnote)
-                .foregroundStyle(AppColors.secondaryLabel)
             }
         }
     }
@@ -246,153 +301,125 @@ struct ModelPickerView: View {
         }
     }
 
-    @ViewBuilder
-    private var modelSection: some View {
-        Section("Models") {
-            if !model.hasModelSnapshot {
-                Label(
-                    model.isConnected
-                        ? "Loading available models…"
-                        : "Connect to the pod to load its models.",
-                    systemImage: model.isConnected
-                        ? "arrow.triangle.2.circlepath" : "wifi.slash"
-                )
-                .font(.footnote)
-                .foregroundStyle(AppColors.secondaryLabel)
-                .accessibilityIdentifier("modelPicker.loading")
-            } else if visibleModels.isEmpty {
-                EmptyStateView(
-                    title: query.isEmpty ? "No models available" : "No matching models",
-                    message: emptyModelsMessage,
-                    systemImage: "magnifyingglass"
-                )
-                Button("Refresh models") { model.checkModelStatus() }
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("modelPicker.refresh")
-            } else {
-                ForEach(visibleModels) { choice in
-                    Button {
-                        if model.selectModel(choice) {
-                            show(toast: "Switching to \(choice.name)…")
-                        }
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(choice.name)
-                                Text("\(choice.provider) · \(choice.modelId)")
-                                    .font(.footnote)
-                                    .foregroundStyle(AppColors.secondaryLabel)
-                                    .lineLimit(2)
-                            }
-                            Spacer()
-                            if choice == model.pendingModel {
-                                ProgressView().controlSize(.small)
-                            } else if choice == model.currentModel {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(AppColors.accent)
-                            }
-                        }
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isEnabled(choice))
-                    .accessibilityLabel(
-                        "Model \(choice.name), provider \(choice.provider), ID \(choice.modelId). "
-                            + (choice == model.pendingModel
-                                ? "Switching to this model"
-                                : (choice == model.currentModel
-                                    ? "Currently selected" : "Switch to this model"))
-                    )
-                    .accessibilityIdentifier("modelPicker.model.\(choice.id)")
-                }
-                Text("\(visibleModels.count) \(visibleModels.count == 1 ? "model" : "models")")
-                    .font(.footnote)
-                    .foregroundStyle(AppColors.secondaryLabel)
-            }
-        }
-    }
+    // MARK: Thinking
 
+    /// The thinking levels as one row of chips: few, short, and chosen together
+    /// with a model, so they sit above the list rather than after it.
+    @ViewBuilder
     private var thinkingSection: some View {
-        Section {
-            DisclosureGroup(isExpanded: $showsThinking) {
-                if model.availableThinkingLevels.isEmpty {
-                    DetailRow(
-                        "Thinking",
-                        value: model.currentThinkingLevel.map(ThinkingLevelChoice.label)
-                            ?? "Not available"
-                    )
-                } else {
-                    ForEach(model.availableThinkingLevels, id: \.self) { level in
-                        Button {
-                            if model.selectThinkingLevel(level) {
-                                show(toast: "Changing thinking to \(ThinkingLevelChoice.label(level))…")
-                            }
-                        } label: {
-                            HStack {
-                                Text(ThinkingLevelChoice.label(level))
-                                Spacer()
-                                if level == model.pendingThinkingLevel {
-                                    ProgressView().controlSize(.small)
-                                } else if level == model.currentThinkingLevel {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(AppColors.accent)
-                                }
-                            }
-                            .frame(minHeight: 44)
-                            .contentShape(Rectangle())
+        let levels = model.availableThinkingLevels
+        if !levels.isEmpty {
+            Section("Thinking") {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(levels, id: \.self) { level in
+                            thinkingChip(level)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!isThinkingEnabled(level))
-                        .accessibilityLabel(
-                            "Thinking \(ThinkingLevelChoice.label(level)). "
-                                + (level == model.pendingThinkingLevel
-                                    ? "Changing to this thinking level"
-                                    : (level == model.currentThinkingLevel
-                                        ? "Currently selected" : "Use this thinking level"))
-                        )
                     }
+                    .padding(.horizontal, 16)
                 }
-            } label: {
-                LabeledContent(
-                    "Thinking",
-                    value: model.currentThinkingLevel.map(ThinkingLevelChoice.label)
-                        ?? "Not available"
-                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
             .accessibilityIdentifier("modelPicker.thinking")
         }
     }
 
-    private var emptyModelsMessage: String {
-        if !query.isEmpty {
-            return "No model from any provider matches “\(query)”. Search by provider, model name, or ID."
+    private func thinkingChip(_ level: String) -> some View {
+        let isSelected = level == model.selectedThinkingLevel
+        let isPending = level == model.pendingThinkingLevel
+        return Button {
+            _ = model.selectThinkingLevel(level)
+        } label: {
+            HStack(spacing: 6) {
+                if isPending { ProgressView().controlSize(.mini) }
+                Text(ThinkingLevelChoice.label(level))
+                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .foregroundStyle(isSelected ? AppColors.onAccent : AppColors.label)
+            .background(isSelected ? AppColors.accent : AppColors.card, in: Capsule())
+            .contentShape(Capsule())
         }
-        if !model.isConnected {
-            return "The pod is disconnected. Reconnect and refresh its catalog."
-        }
-        return "This pod did not report any available models. Refresh or ask its owner to check the pod configuration."
+        .buttonStyle(.plain)
+        .disabled(!rowsEnabled || isSelected)
+        .accessibilityLabel("Thinking \(ThinkingLevelChoice.label(level))")
+        .accessibilityValue(isSelected ? "Selected" : "")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("modelPicker.thinking.\(level)")
     }
 
-    /// The current row stays tappable while disconnected so the confirmed
-    /// selection remains legible; other rows require a live socket.
-    private func isEnabled(_ choice: ModelChoice) -> Bool {
-        (model.isConnected && !model.isModelSwitchInFlight && !model.isThinkingSwitchInFlight)
-            || (choice == model.currentModel
-                && !model.isModelSwitchInFlight && !model.isThinkingSwitchInFlight)
-    }
+    // MARK: Models
 
-    private func isThinkingEnabled(_ level: String) -> Bool {
-        (model.isConnected && !model.isModelSwitchInFlight && !model.isThinkingSwitchInFlight)
-            || (level == model.currentThinkingLevel
-                && !model.isModelSwitchInFlight && !model.isThinkingSwitchInFlight)
-    }
-
-    private func show(toast message: String) {
-        toast = message
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if toast == message { toast = nil }
+    private var emptySection: some View {
+        Section {
+            EmptyStateView(
+                title: "No models yet",
+                message: model.isConnected
+                    ? "This pod did not report any models. Check its model providers in Settings."
+                    : "This pod’s models appear once it connects.",
+                systemImage: "cpu"
+            )
+            if model.isConnected {
+                Button("Refresh models") { model.checkModelStatus() }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("modelPicker.refresh")
+            }
         }
+    }
+
+    private func modelSection(
+        _ title: String, _ models: [ModelChoice], idPrefix: String
+    ) -> some View {
+        Section(title) {
+            ForEach(models) { choice in
+                modelRow(choice)
+                    .accessibilityIdentifier("modelPicker.\(idPrefix).\(choice.id)")
+            }
+        }
+    }
+
+    private func modelRow(_ choice: ModelChoice) -> some View {
+        let isSelected = choice == model.selectedModel
+        return Button {
+            // The model already in use is a no-op, not a switch to announce.
+            if isSelected || model.selectModel(choice) { done() }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(choice.name)
+                        .fontWeight(isSelected ? .semibold : .regular)
+                    Text("\(choice.provider) · \(choice.modelId)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(AppColors.secondaryLabel)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                if choice == model.pendingModel {
+                    ProgressView().controlSize(.small)
+                } else if choice == model.deferredModel {
+                    Image(systemName: "clock").foregroundStyle(AppColors.accent)
+                } else if isSelected {
+                    Image(systemName: "checkmark").foregroundStyle(AppColors.accent)
+                }
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!rowsEnabled)
+        .accessibilityLabel(
+            "Model \(choice.name), provider \(choice.provider), ID \(choice.modelId). "
+                + rowAction(choice, isSelected: isSelected)
+        )
+    }
+
+    /// What tapping a model row would do, for VoiceOver.
+    private func rowAction(_ choice: ModelChoice, isSelected: Bool) -> String {
+        if choice == model.pendingModel { return "Switching to this model" }
+        if isSelected { return "Currently selected" }
+        return model.isConnected ? "Switch to this model" : "Use this model when the pod connects"
     }
 }

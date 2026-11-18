@@ -43,6 +43,9 @@ export interface PodRow {
   last_pod_seq: string | number | null;
   /** Session file last observed open in pi; a restart pins it instead of trusting `--continue`. */
   pi_session_file: string | null;
+  /** Model (`provider/id`) and thinking level pi was last seen on; restored after a restart. */
+  pi_model: string | null;
+  pi_thinking: string | null;
   /** Server-maintained set of account credential providers this pod may lease. */
   credential_providers: string[] | null;
   created_at: string;

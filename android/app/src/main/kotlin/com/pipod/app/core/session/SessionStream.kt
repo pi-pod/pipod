@@ -44,6 +44,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 
 /**
  * Narrow session-only API surface, so lifecycle and replay tests can use fakes
@@ -114,6 +116,15 @@ data class SessionStreamState(
     val hasModelSnapshot: Boolean = false,
     val isModelSwitchInFlight: Boolean = false,
     val isThinkingSwitchInFlight: Boolean = false,
+    /** The models this pod's user keeps to hand (pi's model scope), in the order they listed them. */
+    val scopedModels: List<ModelChoice> = emptyList(),
+    /**
+     * A model or thinking level chosen while the pod was not connected. It is what the next
+     * message will run on: the stream makes the switch as soon as the pod's catalog arrives,
+     * ahead of anything waiting to be sent.
+     */
+    val deferredModel: ModelChoice? = null,
+    val deferredThinkingLevel: String? = null,
     /**
      * Two catalogs can be equal in selection yet differ in content. The counter
      * makes every refresh observable, which the Dart original achieved with a
@@ -123,6 +134,9 @@ data class SessionStreamState(
     val preparingPod: Pod? = null,
     val podRecord: Pod? = null,
     val isLoadingHistory: Boolean = true,
+    /** Older turns exist on the server that the transcript has not loaded yet. */
+    val hasEarlierHistory: Boolean = false,
+    val isLoadingEarlierHistory: Boolean = false,
     val sessionEnded: Boolean = false,
     val sessionEndedMessage: String = "",
     val historyLoadFailed: Boolean = false,
@@ -184,6 +198,12 @@ class SessionStream(
      * connectivity and [setOffline] is the only way in.
      */
     connectivity: StateFlow<Boolean>? = null,
+    /**
+     * Prefix for the ids of rows this reducer invents (status lines, optimistic sends). The
+     * live stream uses `local`; a page of earlier history is reduced on its own and needs
+     * ids that cannot collide with the rows already on screen.
+     */
+    private val localIdPrefix: String = "local",
 ) {
 
     private val ownsScope = scope == null
@@ -245,6 +265,11 @@ class SessionStream(
     private var currentModel: ModelChoice? = null
     private var currentThinkingLevel: String? = null
     private var hasModelSnapshot = false
+    /** pi's `enabledModels` patterns for this pod; resolved against the catalog as [scopedModels]. */
+    private var modelScopePatterns: List<String> = emptyList()
+    private var scopedModels: List<ModelChoice> = emptyList()
+    private var deferredModel: ModelChoice? = null
+    private var deferredThinkingLevel: String? = null
     private var modelCatalogRevision = 0
 
     /**
@@ -258,6 +283,9 @@ class SessionStream(
     private var preparingPod: Pod? = null
     private var podRecord: Pod? = null
     private var isLoadingHistory = true
+    /** Cursor for the page before the oldest one loaded; null once the beginning is reached. */
+    private var earlierHistoryCursor: String? = null
+    private var isLoadingEarlierHistory = false
     private var sessionEnded = false
     private var sessionEndedMessage = ""
     private var historyLoadFailed = false
@@ -375,9 +403,13 @@ class SessionStream(
     init {
         remoteUi.responder = ::sendUiResponse
         remoteUi.onControl = ::applyRemoteUiControl
-        // An extension-owned editor submits the same way pi's own does: the text
-        // becomes a user prompt.
-        remoteUi.onEditorSubmit = { _, text -> if (text.trim().isNotEmpty()) send(text) }
+        // Until this pod reports its own catalog, the picker offers the last one seen on this
+        // server, so a model can be chosen while the pod is still starting or asleep.
+        val cached = ModelCatalogCache.read()
+        availableModels += cached.models
+        availableThinkingLevels += cached.thinkingLevels
+        modelScopePatterns = cached.scopePatterns
+        refreshScopedModels()
         publish()
     }
 
@@ -400,32 +432,29 @@ class SessionStream(
 
     suspend fun openWithClient(client: ApiClient) = open(ApiClientSessionApi(client))
 
-    suspend fun open(api: SessionApi) {
+    suspend fun open(api: SessionApi): Unit = coroutineScope {
         synchronized(lock) { activeApi = api }
-        try {
-            val current = api.pod(podId)
-            val branch = synchronized(lock) {
-                setPodRecord(current)
+        // The transcript does not depend on the pod record, so it is fetched alongside it
+        // rather than after it: one round trip to a readable screen instead of two. Whether
+        // to attach still waits on both.
+        val history = async { loadHistory(api) }
+        val (current, branch) = try {
+            val pod = api.pod(podId)
+            pod to synchronized(lock) {
+                setPodRecord(pod)
                 when {
                     // A launch the server refused after admitting it (a full host, say) is
                     // over before the screen opens; attaching would only fail less usefully.
-                    current.didFail -> {
-                        isLoadingHistory = false
-                        val reason = current.friendlyStateReason
-                        setError(if (reason == null) "This pod couldn’t start." else FriendlyError.message(reason))
-                        publish()
-                        OpenBranch.FAILED
-                    }
+                    pod.didFail -> OpenBranch.FAILED
 
-                    current.initializing -> {
-                        preparingPod = current
-                        isLoadingHistory = false
+                    pod.initializing -> {
+                        preparingPod = pod
                         publish()
                         OpenBranch.PREPARING
                     }
 
-                    current.isAsleep -> {
-                        asleep = current.sandboxState
+                    pod.isAsleep -> {
+                        asleep = pod.sandboxState
                         publish()
                         OpenBranch.ASLEEP
                     }
@@ -433,35 +462,38 @@ class SessionStream(
                     else -> OpenBranch.ATTACH
                 }
             }
-            when (branch) {
-                OpenBranch.PREPARING -> {
-                    waitForPreparation(api)
-                    return
-                }
-
-                OpenBranch.ASLEEP -> {
-                    loadHistory(api)
-                    return
-                }
-
-                OpenBranch.FAILED -> return
-
-                OpenBranch.ATTACH -> Unit
-            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
             // The attach path remains authoritative when the pod snapshot is
             // temporarily unreachable.
+            null to OpenBranch.ATTACH
         }
-        loadHistory(api)
-        synchronized(lock) {
-            sessionEnded = false
-            sessionEndedMessage = ""
-            asleep = null
-            publish()
+        history.await()
+        when (branch) {
+            OpenBranch.FAILED -> synchronized(lock) {
+                // After the history, whose own failure would otherwise replace the reason
+                // the launch failed.
+                val reason = current?.friendlyStateReason
+                setError(if (reason == null) "This pod couldn’t start." else FriendlyError.message(reason))
+                publish()
+            }
+
+            OpenBranch.PREPARING -> waitForPreparation(api)
+
+            // Waking costs someone compute: it waits for a message or the Wake button.
+            OpenBranch.ASLEEP -> Unit
+
+            OpenBranch.ATTACH -> {
+                synchronized(lock) {
+                    sessionEnded = false
+                    sessionEndedMessage = ""
+                    asleep = null
+                    publish()
+                }
+                attach(api)
+            }
         }
-        attach(api)
     }
 
     private enum class OpenBranch { FAILED, PREPARING, ASLEEP, ATTACH }
@@ -510,20 +542,25 @@ class SessionStream(
         }
     }
 
+    /**
+     * Loads the newest page of the conversation and remembers where the rest begins.
+     *
+     * A long conversation is thousands of events. Fetching all of it before showing any of it
+     * made opening a pod take as long as its whole history took to download; the end of the
+     * conversation is what the reader came for, and [loadEarlierHistory] fetches what is above
+     * it when they ask.
+     */
     private suspend fun loadHistory(api: SessionApi) {
         synchronized(lock) {
             historyLoadFailed = false
             publish()
         }
         try {
-            val pages = mutableListOf<ConversationEventsPage>()
-            var before: String? = null
-            for (count in 0 until MAX_HISTORY_PAGES) {
-                val page = api.conversationEvents(podId = podId, before = before, limit = 200)
-                pages += page
-                before = page.nextBefore ?: break
+            val page = api.conversationEvents(podId = podId, before = null, limit = HISTORY_PAGE_SIZE)
+            synchronized(lock) {
+                ingestHistory(page.events)
+                earlierHistoryCursor = page.nextBefore
             }
-            synchronized(lock) { pages.asReversed().forEach { ingestHistory(it.events) } }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
@@ -535,6 +572,42 @@ class SessionStream(
             synchronized(lock) {
                 isLoadingHistory = false
                 publish()
+            }
+        }
+    }
+
+    /**
+     * Puts the page before the oldest loaded one above the transcript. Does nothing when the
+     * beginning is already on screen or a page is already on its way.
+     */
+    fun loadEarlierHistory() {
+        val api: SessionApi
+        val cursor: String
+        synchronized(lock) {
+            if (isLoadingEarlierHistory) return
+            cursor = earlierHistoryCursor ?: return
+            api = activeApi ?: return
+            isLoadingEarlierHistory = true
+            publish()
+        }
+        scope.launch {
+            try {
+                val page = api.conversationEvents(podId = podId, before = cursor, limit = HISTORY_PAGE_SIZE)
+                val earlier = reduceHistoryPage(podId, page.events, idPrefix = "earlier:$cursor")
+                synchronized(lock) {
+                    val shown = transcript.mapTo(HashSet()) { it.id }
+                    transcript.addAll(0, earlier.filter { it.id !in shown })
+                    earlierHistoryCursor = page.nextBefore
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                synchronized(lock) { setError("Earlier messages couldn’t be loaded. Try again.") }
+            } finally {
+                synchronized(lock) {
+                    isLoadingEarlierHistory = false
+                    publish()
+                }
             }
         }
     }
@@ -974,7 +1047,7 @@ class SessionStream(
 
     fun send(text: String, attachments: List<ChatAttachment> = emptyList()) {
         val id = synchronized(lock) {
-            val itemId = "local:$syntheticId"
+            val itemId = "$localIdPrefix:$syntheticId"
             syntheticId -= 1
             val staged = attachments.map {
                 StreamImageAttachment(id = it.id, name = it.name, mimeType = it.mimeType, bytes = it.bytes)
@@ -1085,7 +1158,7 @@ class SessionStream(
             return
         }
         try {
-            api.queuePrompt(podId = podId, text = text, model = ModelMemory.startingModel(podId))
+            api.queuePrompt(podId = podId, text = text, model = startingModelRef())
             synchronized(lock) {
                 setDelivery(id, StreamItemDelivery.SAVED_ON_SERVER)
                 setError(null)
@@ -1102,7 +1175,7 @@ class SessionStream(
                 synchronized(lock) {
                     setDelivery(id, StreamItemDelivery.WAITING_FOR_CONNECTION)
                     startWorkstationWaitLocked(sendWait, api, demand, request = {
-                        api.queuePrompt(podId = podId, text = text, model = ModelMemory.startingModel(podId))
+                        api.queuePrompt(podId = podId, text = text, model = startingModelRef())
                     }, onReady = {
                         setDelivery(id, StreamItemDelivery.SAVED_ON_SERVER)
                     })
@@ -1235,7 +1308,17 @@ class SessionStream(
         synchronized(lock) { if (isConnected) socket?.requestModels() }
     }
 
+    /**
+     * Switches the pod to [model]. While the pod is not connected the choice is kept and made
+     * as soon as its catalog arrives, so nobody has to wait for a pod to start before saying
+     * what it should run.
+     */
     fun selectModel(model: ModelChoice): Boolean = synchronized(lock) {
+        if (!isConnected) {
+            deferredModel = model.takeIf { it != currentModel }
+            publish()
+            return true
+        }
         if (model == currentModel) return true
         val transport = socket
         if (!isConnected ||
@@ -1254,7 +1337,13 @@ class SessionStream(
         true
     }
 
+    /** As [selectModel]: kept while the pod is not connected, and made when it is. */
     fun selectThinkingLevel(level: String): Boolean = synchronized(lock) {
+        if (!isConnected) {
+            deferredThinkingLevel = level.takeIf { it != currentThinkingLevel }
+            publish()
+            return true
+        }
         if (level == currentThinkingLevel) return true
         val transport = socket
         if (!isConnected ||
@@ -1268,7 +1357,7 @@ class SessionStream(
         }
         pendingThinkingSwitch = level
         currentThinkingLevel = level
-        appendStatus("Thinking level changed to $level.")
+        appendStatus("Thinking level changed to ${thinkingLabel(level)}.")
         transport.requestModels()
         true
     }
@@ -1565,6 +1654,8 @@ class SessionStream(
 
             is SessionServerMessage.Models -> handleModels(message)
 
+            is SessionServerMessage.ModelScope -> message.patterns?.let(::handleModelScope)
+
             is SessionServerMessage.RpcResult -> usageTracker.accept(message.id, message.response)
 
             is SessionServerMessage.Error -> {
@@ -1667,10 +1758,14 @@ class SessionStream(
         // anything answered elsewhere while detached is gone from this list.
         dialogs.clear()
         socket?.requestModels()
+        socket?.requestModelScope()
         usageTracker.attached()
-        // A pod this app just launched first switches to the remembered model, which needs the
-        // catalog: its parked messages wait for that (see [startOnRememberedModel]).
-        if (ModelMemory.startingModel(podId) == null) flushQueuedOffline()
+        // A model chosen before this connection, or remembered for a pod this app just launched,
+        // is switched to once the catalog arrives; parked messages wait for that so they run on
+        // it. [handleModels] sends them.
+        val awaitsSelection = ModelMemory.startingModel(podId) != null ||
+            deferredModel != null || deferredThinkingLevel != null
+        if (!awaitsSelection) flushQueuedOffline()
         scope.launch { refreshPodRecord() }
     }
 
@@ -1697,11 +1792,68 @@ class SessionStream(
             currentThinkingLevel = message.thinkingLevel
         }
         modelCatalogRevision += 1
-        if (ModelMemory.startingModel(podId) != null && choices.isNotEmpty()) {
-            startOnRememberedModel(choices)
-            // The socket keeps order, so these follow the switch.
-            flushQueuedOffline()
+        refreshScopedModels()
+        if (choices.isNotEmpty()) {
+            ModelCatalogCache.write(
+                ModelCatalogCache.Snapshot(choices, message.thinkingLevels, modelScopePatterns),
+            )
         }
+        if (deferredModel != null || deferredThinkingLevel != null) {
+            // A choice made by hand outranks the model remembered for a new pod.
+            ModelMemory.settled(podId)
+            applyDeferredSelection(choices)
+        } else if (ModelMemory.startingModel(podId) != null && choices.isNotEmpty()) {
+            startOnRememberedModel(choices)
+        }
+        // The socket keeps order, so anything parked follows the switch.
+        flushQueuedOffline()
+    }
+
+    /** Makes the choice that was waiting for a connection, now that the pod says what it offers. */
+    private fun applyDeferredSelection(choices: List<ModelChoice>) {
+        val model = deferredModel
+        val thinking = deferredThinkingLevel
+        deferredModel = null
+        deferredThinkingLevel = null
+        val transport = socket ?: return
+        var switched = false
+        if (model != null && model != currentModel) {
+            val offered = choices.firstOrNull { it == model }
+            if (offered == null) {
+                appendStatus("${model.name} isn’t available in this pod, so the model was not changed.")
+            } else if (transport.set(model = mapOf("provider" to offered.provider, "id" to offered.modelId))) {
+                pendingModelSwitch = offered
+                currentModel = offered
+                ModelMemory.remember(offered)
+                appendStatus("Model switched to ${offered.name}.")
+                switched = true
+            }
+        }
+        if (thinking != null && thinking != currentThinkingLevel && thinking in availableThinkingLevels &&
+            transport.set(thinkingLevel = thinking)
+        ) {
+            pendingThinkingSwitch = thinking
+            currentThinkingLevel = thinking
+            appendStatus("Thinking level changed to ${thinkingLabel(thinking)}.")
+            switched = true
+        }
+        if (switched) transport.requestModels()
+    }
+
+    private fun handleModelScope(patterns: List<String>) {
+        if (patterns == modelScopePatterns) return
+        modelScopePatterns = patterns
+        refreshScopedModels()
+        if (hasModelSnapshot) {
+            ModelCatalogCache.write(
+                ModelCatalogCache.Snapshot(availableModels.toList(), availableThinkingLevels.toList(), patterns),
+            )
+        }
+        publish()
+    }
+
+    private fun refreshScopedModels() {
+        scopedModels = ModelScope.resolve(modelScopePatterns, availableModels)
     }
 
     /**
@@ -1810,24 +1962,29 @@ class SessionStream(
                 if (messageRole(payload) != "assistant") return
                 val itemId = activeAssistantItemId ?: id
                 activeAssistantItemId = itemId
-                upsertAssistant(itemId, visibleMessageText(payload), timestamp, inProgress = true)
+                upsertAssistant(
+                    itemId, visibleMessageText(payload), visibleThinkingText(payload), timestamp, inProgress = true,
+                )
             }
 
             "message_end" -> {
                 if (messageRole(payload) != "assistant") return
                 val itemId = activeAssistantItemId ?: id
                 val text = visibleMessageText(payload)
+                val thinking = visibleThinkingText(payload)
                 val failure = messageFailure(payload)
                 when {
                     failure != null ->
-                        upsertAssistant(itemId, failure, timestamp, inProgress = false, isError = true)
+                        upsertAssistant(itemId, failure, thinking, timestamp, inProgress = false, isError = true)
 
-                    text.isBlank() -> {
+                    // A turn that only called tools says nothing of its own; one that reasoned
+                    // first still has that reasoning to show.
+                    text.isBlank() && thinking.isBlank() -> {
                         transcript.removeAll { it.id == itemId }
                         bump()
                     }
 
-                    else -> upsertAssistant(itemId, text, timestamp, inProgress = false)
+                    else -> upsertAssistant(itemId, text, thinking, timestamp, inProgress = false)
                 }
                 activeAssistantItemId = null
                 // Each finished reply is priced, so a long tool-calling turn
@@ -1870,6 +2027,13 @@ class SessionStream(
         if (!isRunning) isInterrupting = false
     }
 
+    /**
+     * `provider/id` a message queued for a pod that is still starting should run on: the model
+     * chosen here while waiting, else the one remembered for a pod this app just launched.
+     */
+    private fun startingModelRef(): String? =
+        synchronized(lock) { deferredModel?.id } ?: ModelMemory.startingModel(podId)
+
     private fun flushQueuedOffline() {
         val parked = transcript.filter { it.delivery == StreamItemDelivery.WAITING_FOR_CONNECTION }
         for (row in parked) deliver(row.id, row.text)
@@ -1880,6 +2044,7 @@ class SessionStream(
     private fun upsertAssistant(
         id: String,
         text: String,
+        thinking: String,
         timestamp: Instant?,
         inProgress: Boolean,
         isError: Boolean = false,
@@ -1889,6 +2054,7 @@ class SessionStream(
             val existing = transcript[index]
             transcript[index] = existing.copy(
                 text = text,
+                thinking = thinking,
                 isInProgress = inProgress,
                 isError = isError,
                 timestamp = existing.timestamp ?: timestamp,
@@ -1903,6 +2069,7 @@ class SessionStream(
                 style = StreamItemStyle.ASSISTANT,
                 title = "pi",
                 text = text,
+                thinking = thinking,
                 timestamp = timestamp,
                 isInProgress = inProgress,
                 isError = isError,
@@ -1923,12 +2090,17 @@ class SessionStream(
             "Running $toolName"
         }
         val text = toolText(payload, isEnd, isError)
+        val input = toolInput(toolName, payload)
+        val summary = toolSummary(payload)
         val index = transcript.indexOfFirst { it.id == itemId }
         if (index >= 0) {
             val existing = transcript[index]
             transcript[index] = existing.copy(
                 title = title,
                 text = if (text.isNotEmpty()) text else existing.text,
+                // Only the start names the arguments; the end must not erase them.
+                toolSummary = summary.ifEmpty { existing.toolSummary },
+                toolInput = input.ifEmpty { existing.toolInput },
                 isInProgress = !isEnd,
                 isError = isError,
             )
@@ -1945,6 +2117,9 @@ class SessionStream(
                 timestamp = timestamp,
                 isInProgress = !isEnd,
                 isError = isError,
+                toolName = toolName,
+                toolSummary = summary,
+                toolInput = input,
             ),
         )
     }
@@ -2000,6 +2175,7 @@ class SessionStream(
                 text = "",
                 timestamp = now(),
                 isInProgress = true,
+                toolName = "bash",
             ),
         )
         return itemId
@@ -2040,7 +2216,7 @@ class SessionStream(
     private fun appendStatus(text: String) {
         append(
             StreamItem(
-                id = "local:$syntheticId",
+                id = "$localIdPrefix:$syntheticId",
                 style = StreamItemStyle.STATUS,
                 title = "",
                 text = text,
@@ -2056,7 +2232,7 @@ class SessionStream(
      */
     private fun appendSessionBoundary() {
         val item = StreamItem(
-            id = "local:$syntheticId",
+            id = "$localIdPrefix:$syntheticId",
             style = StreamItemStyle.STATUS,
             title = "",
             text = sessionBoundaryMessage(waking || asleep != null),
@@ -2230,24 +2406,56 @@ class SessionStream(
             .joinToString("")
     }
 
+    /** The reasoning blocks of an assistant message, in order. Redacted blocks carry no text. */
+    private fun visibleThinkingText(payload: JsonObject): String {
+        val message = payload["message"] as? JsonObject ?: return ""
+        val blocks = message["content"] as? JsonArray ?: return ""
+        return redactingSecrets(
+            blocks.filterIsInstance<JsonObject>()
+                .mapNotNull { block -> if (block.string("type") == "thinking") block.string("thinking") else null }
+                .filter { it.isNotBlank() }
+                .joinToString("\n\n"),
+        )
+    }
+
+    /** What the tool has produced so far. Its arguments are [toolInput], not this. */
     private fun toolText(payload: JsonObject, ended: Boolean, isError: Boolean): String {
-        var resultText = ""
-        val result = payload["result"] as? JsonObject
-        val content = result?.get("content") as? JsonArray
-        if (content != null) {
-            resultText = content.filterIsInstance<JsonObject>()
-                .mapNotNull { it.string("text") }
-                .joinToString("\n")
-        }
-        if (ended && resultText.isNotEmpty()) {
-            val visible = redactingSecrets(resultText)
-            return truncated(if (isError) FriendlyError.message(visible) else visible)
-        }
-        val args = payload["args"] as? JsonObject
-        if (args != null) {
-            return truncated(redactingSecrets(PRETTY_JSON.encodeToString(JsonElement.serializer(), args)))
-        }
-        return truncated(redactingSecrets(resultText))
+        val result = (payload["result"] ?: payload["partialResult"]) as? JsonObject
+        val content = result?.get("content") as? JsonArray ?: return ""
+        val resultText = content.filterIsInstance<JsonObject>()
+            .mapNotNull { it.string("text") }
+            .joinToString("\n")
+        if (resultText.isEmpty()) return ""
+        val visible = redactingSecrets(resultText)
+        return truncated(if (ended && isError) FriendlyError.message(visible) else visible)
+    }
+
+    /**
+     * One line naming what the tool was pointed at: the argument a person would say first (a
+     * command, a path, a pattern), else the first argument there is. Empty without arguments.
+     */
+    private fun toolSummary(payload: JsonObject): String {
+        val args = payload["args"] as? JsonObject ?: return ""
+        val named = TOOL_SUMMARY_ARGUMENTS.firstNotNullOfOrNull { key -> args.string(key)?.takeIf { it.isNotBlank() } }
+        val line = named
+            ?: args.entries.firstOrNull()?.let { (key, value) ->
+                "$key: ${(value as? JsonPrimitive)?.content ?: value.toString()}"
+            }
+            ?: return ""
+        val firstLine = line.trim().lineSequence().first()
+        return redactingSecrets(if (firstLine.length <= 200) firstLine else firstLine.take(200) + "…")
+    }
+
+    /**
+     * Everything the tool was given, as a person would read it: the command itself for `bash`,
+     * the arguments otherwise. Empty when the frame names no arguments, as the end frame does.
+     */
+    private fun toolInput(toolName: String, payload: JsonObject): String {
+        val args = payload["args"] as? JsonObject ?: return ""
+        if (args.isEmpty()) return ""
+        val command = args.string("command")
+        if (toolName == "bash" && command != null) return truncated(redactingSecrets(command))
+        return truncated(redactingSecrets(PRETTY_JSON.encodeToString(JsonElement.serializer(), args)))
     }
 
     private fun truncated(text: String, limit: Int = 4000): String =
@@ -2282,12 +2490,17 @@ class SessionStream(
             currentModel = currentModel,
             currentThinkingLevel = currentThinkingLevel,
             hasModelSnapshot = hasModelSnapshot,
+            scopedModels = scopedModels,
+            deferredModel = deferredModel,
+            deferredThinkingLevel = deferredThinkingLevel,
             isModelSwitchInFlight = pendingModelSwitch != null,
             isThinkingSwitchInFlight = pendingThinkingSwitch != null,
             modelCatalogRevision = modelCatalogRevision,
             preparingPod = preparingPod,
             podRecord = podRecord,
             isLoadingHistory = isLoadingHistory,
+            hasEarlierHistory = earlierHistoryCursor != null,
+            isLoadingEarlierHistory = isLoadingEarlierHistory,
             sessionEnded = sessionEnded,
             sessionEndedMessage = sessionEndedMessage,
             historyLoadFailed = historyLoadFailed,
@@ -2319,10 +2532,46 @@ class SessionStream(
          */
         const val EPHEMERAL_SEQ: Long = 9007199254740991L
 
-        private const val MAX_HISTORY_PAGES = 25
+        /**
+         * Events per history request. One page is what opening a conversation costs, so it is
+         * sized to cover the last few turns of a tool-heavy session without the payload a phone
+         * on a cellular connection would notice.
+         */
+        private const val HISTORY_PAGE_SIZE = 200
+
+        /**
+         * Reduces one page of earlier history into transcript rows, apart from the live stream.
+         *
+         * A page boundary can fall between the start and the end of a reply or a tool call.
+         * Rows the page leaves unfinished are dropped rather than shown: the event that finishes
+         * each of them is in the next page, which is already on screen and drew the finished
+         * row itself.
+         */
+        internal fun reduceHistoryPage(
+            podId: String,
+            events: List<ConversationEventRecord>,
+            idPrefix: String,
+        ): List<StreamItem> {
+            val reducer = SessionStream(podId = podId, fromSeq = null, localIdPrefix = idPrefix)
+            try {
+                synchronized(reducer.lock) { reducer.ingestHistory(events) }
+                return reducer.transcript.filterNot { it.isInProgress }
+            } finally {
+                reducer.dispose()
+            }
+        }
 
         private val ARCHIVED_REASONS =
             setOf("archived", "archive", "provider_archived", "host_archived")
+
+        /** A thinking level as the picker names it, for the transcript's own status lines. */
+        private fun thinkingLabel(level: String): String =
+            level.replace("xhigh", "extra high").replaceFirstChar { it.uppercase() }
+
+        /** The arguments that say what a tool call is about, most telling first. */
+        private val TOOL_SUMMARY_ARGUMENTS = listOf(
+            "command", "path", "file_path", "filePath", "pattern", "query", "url", "prompt", "description", "name",
+        )
 
         /** Prefix of a card this reducer opened for a bare `!command`. */
         private const val BASH_ITEM_PREFIX = "bash:"

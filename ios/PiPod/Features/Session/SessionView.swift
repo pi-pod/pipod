@@ -32,14 +32,19 @@ public struct SessionView: View {
     @State private var attachError: String?
     @State private var isPicking = false
     @State private var launchReport: LaunchReport?
-    @State private var showsEditorReplayNotice = false
     @State private var shouldFocusFreshComposer = false
     @State private var followsLatest = true
     /// Whether the transcript's bottom sentinel is on screen. The drag gesture
     /// reads it so a rubber-band bounce at the end of the conversation is not
     /// mistaken for scrolling away from it.
     @State private var bottomIsVisible = true
-    @State private var readThroughCount = 0
+    /// The last row that was on screen when the reader left the bottom. An id
+    /// rather than a count: earlier history arriving above the transcript is
+    /// not news.
+    @State private var readThroughID: String?
+    /// The row that was first when earlier history was asked for, so the list
+    /// can be brought back to it once the older rows are above it.
+    @State private var earlierAnchorID: String?
     @State private var loadedDraft = false
     /// Rows are derived from `stream.items`, and the reducer bumps a revision
     /// many times a second while a turn streams. Deriving them in `body` rebuilt
@@ -47,6 +52,8 @@ public struct SessionView: View {
     /// items at all.
     @State private var rowCache = TranscriptRowCache()
     @FocusState private var composerFocused: Bool
+
+    private var preferences: TranscriptPreferences { .shared }
 
     public init(
         podId: String,
@@ -146,29 +153,14 @@ public struct SessionView: View {
             let rows = AnsiCellMetrics.rows(in: proxy.size.height, typeSize: typeSize)
             let header = stream.remoteUI.withRole(.header).last
             let footer = stream.remoteUI.withRole(.footer).last
-            let editor = stream.remoteUI.withRole(.editor).last
+            // An editor-role surface is deliberately not drawn. A pod extension
+            // replaces pi's editor to change how a terminal keyboard drives it;
+            // on a phone the composer below is the editor, and a second text
+            // field beside it only asks which one to type in.
             let overlays = stream.remoteUI.withRole(.custom)
 
             VStack(spacing: 0) {
                 workstationBand(stream)
-
-                if showsEditorReplayNotice {
-                    HStack(alignment: .top, spacing: 8) {
-                        Label(
-                            "Recovered editor text may already have been submitted. Review it before sending.",
-                            systemImage: "questionmark.circle"
-                        )
-                        .font(.footnote)
-                        .foregroundStyle(AppColors.notice)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Dismiss") { showsEditorReplayNotice = false }
-                            .font(.footnote.weight(.semibold))
-                            .frame(minWidth: 44, minHeight: 44)
-                    }
-                    .padding(.horizontal, 12)
-                    .background(AppColors.noticeFill)
-                    .accessibilityIdentifier("session.editorReplayNotice")
-                }
 
                 if let launchReport, LaunchPodView.hasSomethingToSay(launchReport) {
                     SessionLaunchReportNotice(report: launchReport)
@@ -181,9 +173,7 @@ public struct SessionView: View {
                 ZStack(alignment: .bottomTrailing) {
                     transcript(stream)
                     if !followsLatest {
-                        JumpToLatestButton(
-                            newMessageCount: max(0, stream.items.count - readThroughCount)
-                        ) {
+                        JumpToLatestButton(newMessageCount: unreadCount(stream)) {
                             followsLatest = true
                         }
                     }
@@ -195,9 +185,6 @@ public struct SessionView: View {
                 RemoteUIWidgetStack(
                     surfaces: widgets(stream, placement: .aboveEditor), viewportRows: rows
                 )
-                if let editor {
-                    RemoteUIEditorPanel(surface: editor, viewportRows: rows)
-                }
                 ComposerBar(
                     stream: stream,
                     text: $draft,
@@ -238,14 +225,6 @@ public struct SessionView: View {
             _ = stream.takeBlockedPromptDrafts()
             composerFocused = true
         }
-        .onChange(of: stream.editorSnapshotDrafts) { _, value in
-            guard !value.isEmpty else { return }
-            let recovered = value.joined(separator: "\n\n")
-            draft = draft.isEmpty ? recovered : draft + "\n\n" + recovered
-            _ = stream.takeEditorSnapshotDrafts()
-            showsEditorReplayNotice = true
-            composerFocused = true
-        }
     }
 
     /// A workstation coming up replaces the connection banner rather than
@@ -284,6 +263,12 @@ public struct SessionView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     leadingState(stream)
+                    if stream.hasEarlierHistory, !rowCache.rows.isEmpty {
+                        LoadEarlierRow(isLoading: stream.isLoadingEarlierHistory) {
+                            earlierAnchorID = stream.items.first?.id
+                            stream.loadEarlierHistory()
+                        }
+                    }
                     ForEach(rowCache.rows, id: \.id) { row in
                         transcriptRow(row, stream: stream)
                     }
@@ -333,9 +318,24 @@ public struct SessionView: View {
                     }
                 }
             }
+            .onChange(of: stream.isLoadingEarlierHistory) { _, isLoading in
+                // Earlier turns arrive above the reader. Left alone, the list
+                // would show the oldest of them, a page away from the turn
+                // being read; so the row that was first is brought back to the
+                // top, where the reader left it.
+                guard !isLoading, let anchor = earlierAnchorID else { return }
+                earlierAnchorID = nil
+                rowCache.update(stream.items)
+                guard let row = rowCache.rows.first(where: { $0.contains(itemID: anchor) })
+                else { return }
+                // After this update is laid out: the older rows are not in the
+                // list yet, and scrolling now would only be undone by them.
+                let rowID = row.id
+                DispatchQueue.main.async { scroller.scrollTo(rowID, anchor: .top) }
+            }
             .onChange(of: followsLatest) { _, follows in
                 guard follows else {
-                    readThroughCount = stream.items.count
+                    readThroughID = stream.items.last?.id
                     return
                 }
                 withAnimation(.easeOut(duration: 0.22)) {
@@ -374,10 +374,18 @@ public struct SessionView: View {
                 setExpanded: stream.setToolExpanded
             )
         case .item(let item, let chrome):
+            // One reply can be opened or closed against the screen-wide choice;
+            // the stream's expansion set records only the replies that differ.
+            let thinkingKey = "thinking-\(item.id)"
+            let differs = stream.isToolExpanded(thinkingKey)
             EventRow(
                 item: item,
                 chrome: chrome,
                 thinkingLabel: stream.hiddenThinkingLabel,
+                showsThinking: preferences.showsThinking != differs,
+                onShowsThinkingChanged: { shows in
+                    stream.setToolExpanded(thinkingKey, shows != preferences.showsThinking)
+                },
                 onRetry: { stream.retrySend(item.id) },
                 onCheck: { stream.checkOutgoing(item.id) },
                 onDiscard: { discardOutgoing(item, stream: stream) }
@@ -414,6 +422,14 @@ public struct SessionView: View {
         }
     }
 
+    /// Rows that arrived below the last one the reader saw before scrolling away.
+    private func unreadCount(_ stream: SessionStream) -> Int {
+        guard let readThroughID,
+              let read = stream.items.lastIndex(where: { $0.id == readThroughID })
+        else { return 0 }
+        return stream.items.count - 1 - read
+    }
+
     private func widgets(
         _ stream: SessionStream, placement: RemoteUIPlacement
     ) -> [RemoteUISurface] {
@@ -429,17 +445,36 @@ public struct SessionView: View {
                 Text(title)
                     .font(.headline)
                     .lineLimit(1)
+                // A status when there is one to report; otherwise the reference
+                // this pod goes by in a terminal, which is how a conversation
+                // here is found again there.
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(AppColors.secondaryLabel)
                         .lineLimit(1)
+                } else {
+                    Text(podRef)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(AppColors.secondaryLabel)
+                        .lineLimit(1)
                 }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(subtitle.map { "\(title), \($0)" } ?? title)
+            .accessibilityLabel("\(title), \(subtitle ?? "pod \(podRef)")")
         }
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button {
+                preferences.setShowsThinking(!preferences.showsThinking)
+            } label: {
+                Image(systemName: "brain")
+                    .symbolVariant(preferences.showsThinking ? .fill : .none)
+                    .foregroundStyle(
+                        preferences.showsThinking ? AppColors.accent : AppColors.secondaryLabel
+                    )
+            }
+            .accessibilityLabel(preferences.showsThinking ? "Hide thinking" : "Show thinking")
+            .accessibilityIdentifier("session.thinkingToggle")
             Button {
                 router.openPod(podId, pod: stream?.podRecord ?? initialPod)
             } label: {
@@ -453,6 +488,10 @@ public struct SessionView: View {
     private var title: String {
         stream?.podName ?? initialPod?.name ?? "Session"
     }
+
+    /// Derived from the id this screen was opened with, so it is there before
+    /// the pod record is.
+    private var podRef: String { Pod.ref(forID: podId) }
 
     /// The transport banner and preparation card already name their states.
     /// The title only adds information while an empty transcript has no typing row.
@@ -538,7 +577,6 @@ public struct SessionView: View {
     private func sendDraft(_ stream: SessionStream) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachments.isEmpty else { return }
-        showsEditorReplayNotice = false
         // A selected model is not usable until the live catalog confirms it.
         // Refuse before clearing the draft so a pending switch cannot lose work.
         guard !stream.isModelSwitchInFlight, !stream.isThinkingSwitchInFlight else { return }
@@ -587,6 +625,28 @@ public struct SessionView: View {
         attachments.append(contentsOf: result.staged)
         attachError = result.dropped?.message
         isPicking = false
+    }
+}
+
+/// The way to the turns above the ones loaded: a button, so nothing loads unasked.
+private struct LoadEarlierRow: View {
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Group {
+            if isLoading {
+                ProgressView()
+                    .accessibilityLabel("Loading earlier messages")
+            } else {
+                Button("Load earlier messages", action: action)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(AppColors.accent)
+                    .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .accessibilityIdentifier("session.loadEarlier")
     }
 }
 

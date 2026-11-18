@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import com.pipod.app.core.session.TranscriptPreferences
 
 /** Everything the session screen draws. */
 data class SessionState(
@@ -31,6 +32,8 @@ data class SessionState(
     val attachments: List<ChatAttachment> = emptyList(),
     val attachError: String? = null,
     val isPickingImages: Boolean = false,
+    /** The reader's standing choice to see every reply's reasoning in full. */
+    val showsThinking: Boolean = false,
 ) {
     val livePod: Pod get() = stream.podRecord ?: pod
 
@@ -118,8 +121,10 @@ class SessionViewModel(
     )
 
     val state: StateFlow<SessionState> =
-        combine(local, stream.state, stream.remoteUi.state) { own, session, surfaces ->
-            own.copy(stream = session, remoteUi = surfaces)
+        combine(
+            local, stream.state, stream.remoteUi.state, TranscriptPreferences.showsThinking,
+        ) { own, session, surfaces, showsThinking ->
+            own.copy(stream = session, remoteUi = surfaces, showsThinking = showsThinking)
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
@@ -210,6 +215,8 @@ class SessionViewModel(
     fun setOffline(offline: Boolean) = stream.setOffline(offline)
 
     fun setToolExpanded(key: String, expanded: Boolean) = stream.setToolExpanded(key, expanded)
+
+    fun loadEarlierHistory() = stream.loadEarlierHistory()
 
     /** Answers a dialog pi is waiting on. False while disconnected; pi keeps waiting. */
     fun answer(dialog: PiDialog, response: JsonObject): Boolean = stream.answer(dialog, response)

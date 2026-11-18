@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.CheckCircleOutline
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Circle
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Dns
@@ -129,6 +130,7 @@ object AppIcons {
     val info: ImageVector get() = Icons.Outlined.Info
     val unknown: ImageVector get() = Icons.AutoMirrored.Rounded.HelpOutline
     val copy: ImageVector get() = Icons.Rounded.ContentCopy
+    val thinking: ImageVector get() = Icons.Outlined.Psychology
     val offline: ImageVector get() = Icons.Rounded.WifiOff
     val syncing: ImageVector get() = Icons.Rounded.Sync
     val syncProblem: ImageVector get() = Icons.Rounded.SyncProblem

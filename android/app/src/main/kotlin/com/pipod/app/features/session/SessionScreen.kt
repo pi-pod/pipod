@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -65,6 +66,7 @@ import com.pipod.app.core.session.RemoteUiPlacement
 import com.pipod.app.core.session.RemoteUiRole
 import com.pipod.app.core.session.RemoteUiSurface
 import com.pipod.app.core.session.SessionStream
+import com.pipod.app.core.session.TranscriptPreferences
 import com.pipod.app.core.session.StreamItem
 import com.pipod.app.features.pods.ModelPickerButton
 import com.pipod.app.features.pods.ModelPickerState
@@ -102,8 +104,9 @@ data class SessionScreenActions(
     val onWake: () -> Unit = {},
     val onCancelWorkstationWait: () -> Unit = {},
     val onRetryWorkstation: () -> Unit = {},
-    val isToolExpanded: (String) -> Boolean = { false },
     val onToolExpandedChanged: (String, Boolean) -> Unit = { _, _ -> },
+    val onLoadEarlier: () -> Unit = {},
+    val onShowsThinkingChanged: (Boolean) -> Unit = {},
     /** Sends an answer to a dialog pi is waiting on; false while disconnected. */
     val onAnswerDialog: (PiDialog, JsonObject) -> Boolean = { _, _ -> false },
     val onOpenPodDetails: (Pod) -> Unit = {},
@@ -120,6 +123,8 @@ object SessionTestTags {
     const val TRANSCRIPT_NOTICE = "transcript-notice"
     const val TRANSCRIPT_LOADING = "transcript-loading"
     const val POD_DETAILS = "session-pod-details"
+    const val THINKING_TOGGLE = "session-thinking-toggle"
+    const val LOAD_EARLIER = "transcript-load-earlier"
 }
 
 /** The screen, driven by a live [SessionViewModel]. */
@@ -165,8 +170,9 @@ fun SessionScreen(
             onWake = viewModel::wake,
             onCancelWorkstationWait = viewModel::cancelWorkstationWait,
             onRetryWorkstation = viewModel::retryWorkstationWait,
-            isToolExpanded = viewModel.stream::isToolExpanded,
             onToolExpandedChanged = viewModel::setToolExpanded,
+            onLoadEarlier = viewModel::loadEarlierHistory,
+            onShowsThinkingChanged = TranscriptPreferences::setShowsThinking,
             onAnswerDialog = viewModel::answer,
             onOpenPodDetails = onOpenPodDetails,
             onOpenModelPicker = { onOpenModelPicker(viewModel.stream) },
@@ -206,7 +212,9 @@ fun SessionScreen(
     }
 
     var followsLatest by remember { mutableStateOf(true) }
-    var readThroughCount by remember { mutableIntStateOf(0) }
+    // The last row that was on screen when the reader left the bottom. An id rather than a
+    // count: earlier history arriving above the transcript is not news.
+    var readThroughId by remember { mutableStateOf<String?>(null) }
     var showsUsage by remember { mutableStateOf(false) }
     val isDragged by listState.interactionSource.collectIsDraggedAsState()
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
@@ -219,7 +227,7 @@ fun SessionScreen(
             followsLatest = true
         } else if (isDragged && followsLatest) {
             followsLatest = false
-            readThroughCount = state.stream.items.size
+            readThroughId = state.stream.items.lastOrNull()?.id
         }
     }
     // Dragging the transcript dismisses the soft keyboard, so a half-screen
@@ -240,27 +248,34 @@ fun SessionScreen(
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleMedium,
                 )
-                if (subtitle != null) {
-                    Text(
-                        text = subtitle,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = appColors.secondaryLabel,
-                    )
-                }
+                // A status when there is one to report; otherwise the reference this pod goes
+                // by in a terminal, which is how a conversation here is found again there.
+                Text(
+                    text = subtitle ?: pod.ref,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = if (subtitle != null) {
+                        MaterialTheme.typography.labelSmall
+                    } else {
+                        MonospaceTextStyle.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize)
+                    },
+                    color = appColors.secondaryLabel,
+                )
             }
         },
         actions = {
+            AppIconButton(
+                icon = AppIcons.thinking,
+                onClick = { actions.onShowsThinkingChanged(!state.showsThinking) },
+                semanticsLabel = if (state.showsThinking) "Hide thinking" else "Show thinking",
+                tint = if (state.showsThinking) appColors.accent else appColors.secondaryLabel,
+                modifier = Modifier.testTag(SessionTestTags.THINKING_TOGGLE),
+            )
             AppIconButton(
                 icon = AppIcons.info,
                 onClick = { actions.onOpenPodDetails(pod) },
                 semanticsLabel = "Pod details",
                 modifier = Modifier.testTag(SessionTestTags.POD_DETAILS),
-            )
-            ModelPickerButton(
-                state = ModelPickerState.from(state.stream),
-                onClick = actions.onOpenModelPicker,
             )
         },
     ) { insets ->
@@ -281,7 +296,9 @@ fun SessionScreen(
             // leaving the conversation: an overlay is the frontmost thing on
             // screen, and back is what dismisses the frontmost thing.
             BackHandler(enabled = overlays.isNotEmpty()) { overlays.last().close() }
-            val editor = surfaces.lastOrNull { it.role == RemoteUiRole.EDITOR }
+            // An editor-role surface is deliberately not drawn. A pod extension replaces pi's
+            // editor to change how a terminal keyboard drives it; on a phone the composer below
+            // is the editor, and a second text field beside it only asks which one to type in.
             val header = surfaces.lastOrNull { it.role == RemoteUiRole.HEADER }
             val footer = surfaces.lastOrNull { it.role == RemoteUiRole.FOOTER }
 
@@ -322,8 +339,9 @@ fun SessionScreen(
                     )
                     if (!followsLatest) {
                         JumpToLatestButton(
-                            newMessageCount = (state.stream.items.size - readThroughCount)
-                                .coerceAtLeast(0),
+                            newMessageCount = state.stream.items
+                                .indexOfLast { it.id == readThroughId }
+                                .let { read -> if (read < 0) 0 else state.stream.items.lastIndex - read },
                             onClick = {
                                 followsLatest = true
                                 scope.launch { listState.scrollToBottom(animated = true) }
@@ -344,11 +362,10 @@ fun SessionScreen(
                     viewportRows = rows,
                     revision = revision,
                 )
-                if (editor != null) {
-                    RemoteUiEditorPanel(surface = editor, viewportRows = rows, revision = revision)
-                }
                 ComposerBar(
                     state = state.composer,
+                    model = ModelPickerState.from(state.stream),
+                    onChooseModel = actions.onOpenModelPicker,
                     onValueChange = actions.onDraftChange,
                     onSend = {
                         followsLatest = true
@@ -419,6 +436,27 @@ private fun Transcript(
         }
     }
 
+    // Earlier turns arrive above the reader. Left alone, the list would stay pinned to its top
+    // and show the oldest of them, a page away from the turn being read; so the row that was
+    // first is found again and brought back, with the last earlier row above it as the join.
+    var earlierAnchor by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(session.isLoadingEarlierHistory) {
+        if (session.isLoadingEarlierHistory) {
+            earlierAnchor = session.items.firstOrNull()?.id
+            return@LaunchedEffect
+        }
+        val anchor = earlierAnchor ?: return@LaunchedEffect
+        earlierAnchor = null
+        val index = rows.indexOfFirst { row ->
+            when (row) {
+                is TranscriptRow.Item -> row.item.id == anchor
+                is TranscriptRow.Tools -> row.items.any { it.id == anchor }
+                is TranscriptRow.Day -> false
+            }
+        }
+        if (index > 0) listState.scrollToItem((if (session.hasEarlierHistory) 1 else 0) + index - 1)
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().testTag(SessionTestTags.TRANSCRIPT),
         state = listState,
@@ -464,6 +502,12 @@ private fun Transcript(
                 }
         }
 
+        if (session.hasEarlierHistory && rows.isNotEmpty()) {
+            item(key = "load-earlier") {
+                LoadEarlierRow(isLoading = session.isLoadingEarlierHistory, onClick = actions.onLoadEarlier)
+            }
+        }
+
         // Rows carry stable keys by message/tool-call id so expansion and
         // interaction state survive insertions elsewhere in the transcript.
         items(count = rows.size, key = { index -> rows[index].id }) { index ->
@@ -471,17 +515,28 @@ private fun Transcript(
                 is TranscriptRow.Day -> DaySeparator(title = row.title)
                 is TranscriptRow.Tools -> ToolActivityCard(
                     items = row.items,
-                    isExpanded = actions.isToolExpanded,
+                    expandedKeys = session.expandedToolDetails,
+                    allExpanded = session.toolsExpandedByExtension,
                     onExpandedChanged = actions.onToolExpandedChanged,
                 )
 
-                is TranscriptRow.Item -> EventRow(
-                    item = row.item,
-                    chrome = row.chrome,
-                    thinkingLabel = session.hiddenThinkingLabel,
-                    onRetry = { actions.onRetrySend(row.item.id) },
-                    onDiscard = { actions.onDiscardOutgoing(row.item) },
-                )
+                is TranscriptRow.Item -> {
+                    // One reply can be opened or closed against the screen-wide choice; the
+                    // stream's expansion set records only the replies that differ from it.
+                    val thinkingKey = "thinking-${row.item.id}"
+                    val differs = thinkingKey in session.expandedToolDetails
+                    EventRow(
+                        item = row.item,
+                        chrome = row.chrome,
+                        thinkingLabel = session.hiddenThinkingLabel,
+                        showsThinking = state.showsThinking != differs,
+                        onShowsThinkingChanged = { shows ->
+                            actions.onToolExpandedChanged(thinkingKey, shows != state.showsThinking)
+                        },
+                        onRetry = { actions.onRetrySend(row.item.id) },
+                        onDiscard = { actions.onDiscardOutgoing(row.item) },
+                    )
+                }
             }
         }
 
@@ -507,6 +562,29 @@ private fun Transcript(
         }
 
         item(key = "transcript-tail") { Spacer(Modifier.height(28.dp)) }
+    }
+}
+
+/** The way to the turns above the ones loaded: a button, so nothing loads unasked. */
+@Composable
+private fun LoadEarlierRow(isLoading: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag(SessionTestTags.LOAD_EARLIER),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (isLoading) {
+            Box(Modifier.heightIn(min = AppButtonDefaults.MinTouchTarget), contentAlignment = Alignment.Center) {
+                AppActivityIndicator()
+            }
+        } else {
+            AppButton(
+                text = "Load earlier messages",
+                onClick = onClick,
+                kind = AppButtonKind.Plain,
+                size = AppButtonSize.Small,
+                semanticsLabel = "Load earlier messages",
+            )
+        }
     }
 }
 

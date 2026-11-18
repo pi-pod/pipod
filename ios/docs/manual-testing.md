@@ -11,6 +11,23 @@ The final automated run passed **1000 tests (0 failures)** on the merged round-2
 [cold notification routing](screenshots/cold-notification-session.png), and
 [dark-mode message contrast](screenshots/session-dark.png) against the isolated fake-provider API.
 
+## Session screen changes (2026-11-17) — not yet exercised on a simulator
+
+The session screen changed with the Android app's (see
+[its pass](../../android/docs/manual-testing.md#session-screen-pass-2026-11-17)): the newest
+history page first with **Load earlier messages**, pod record and history fetched together,
+`view=summary` for the list, a collapsed **Thought** row per reply with a toolbar toggle, tool
+cards that name each call and open to its input and output, the pod reference under the title
+and as a copy row on the detail screen, a model picker with thinking chips, an always-visible
+search and scoped models first, and model choices made before the pod connects.
+
+An editor-role surface is no longer drawn (the composer is the editor), which retires the
+"Recovered editor text" notice; entries below that mention the editor role describe the app
+before this change.
+
+None of this has been run on iOS: the Mac this workstation builds on was unreachable. Compile
+is covered by CI. Every item above is **unverified on iOS** until someone uses it.
+
 ## Self-hosted pass (2026-10-01)
 
 Exercised by hand on an owned simulator/emulator against a self-hosted deployment
@@ -500,9 +517,12 @@ The workspace runs an isolated `dev/main-fake.mts` server for this client. It is
 fake provider, not a sandbox host, so it covers the gateway and the API faithfully and
 covers real provisioning not at all.
 
-Prompt keywords, on a pod the fake provider actually owns: `TOOL`, `SLOW`, `CONFIRM`,
+Prompt keywords, on a pod the fake provider actually owns: `TOOL`, `TOOLS` (a run of
+different tool calls, one failing), `THINK` (a streamed thinking block before the reply),
+`MARKDOWN`, `BRIDGE` (an internal `pi-pod-internal/…` notification), `SLOW`, `CONFIRM`,
 `SELECT`, `INPUT`, `EDITOR`, `REMOTEUI`, `REMOTEUICLOSE`, and `HEAVY` (a reply that fills a
-large share of the context, for the usage readout). Every reply is priced, and
+large share of the context, for the usage readout). `FAKE_MODEL_CATALOG=large` gives the
+pod a catalog the size a real account has, and `FAKE_ENABLED_MODELS=a,b` a model scope. Every reply is priced, and
 `get_session_stats` answers with the running totals.
 
 Two things about it are load-bearing:

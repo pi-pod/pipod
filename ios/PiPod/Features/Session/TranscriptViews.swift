@@ -134,6 +134,10 @@ struct EventRow: View {
     /// Replaces the placeholder shown while a reply has no visible text yet, so
     /// an extension that hides thinking can name what is happening instead.
     let thinkingLabel: String?
+    /// Whether this reply's reasoning is shown in full rather than as a
+    /// one-line row.
+    var showsThinking = false
+    var onShowsThinkingChanged: (Bool) -> Void = { _ in }
     let onRetry: () -> Void
     let onCheck: () -> Void
     let onDiscard: () -> Void
@@ -382,9 +386,25 @@ struct EventRow: View {
         .contextMenu { copyButton }
     }
 
+    private var hasThinking: Bool {
+        !item.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasText: Bool {
+        !item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     @ViewBuilder
     private var assistantContent: some View {
-        if item.isInProgress, item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if hasThinking {
+            ThinkingBlock(
+                item: item, isExpanded: showsThinking, onExpandedChanged: onShowsThinkingChanged
+            )
+        }
+        if hasThinking, !hasText, !item.isError {
+            // The reasoning row above already says what pi is doing.
+            EmptyView()
+        } else if item.isInProgress, !hasText {
             let label = thinkingLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
@@ -456,7 +476,7 @@ struct EventRow: View {
             parts.append(count == 1 ? "1 image attached" : "\(count) images attached")
         }
         let body = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        parts.append(body.isEmpty && item.isInProgress ? "Thinking" : body)
+        parts.append(body.isEmpty && (item.isInProgress || hasThinking) ? "Thinking" : body)
         switch item.delivery {
         case .delivered: break
         case .sending: parts.append("Sending")
@@ -469,69 +489,105 @@ struct EventRow: View {
     }
 }
 
+// MARK: - Thinking
+
+/// The model's reasoning for one reply.
+///
+/// Collapsed it is one quiet line, because reasoning is long and the reply
+/// under it is what was asked for; opened it reads as an aside, set off from
+/// the reply by a rule and a dimmer colour. While pi is still reasoning the
+/// line says so.
+struct ThinkingBlock: View {
+    let item: StreamItem
+    let isExpanded: Bool
+    let onExpandedChanged: (Bool) -> Void
+
+    private var isLive: Bool {
+        item.isInProgress && item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var label: String { isLive ? "Thinking…" : "Thought" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                onExpandedChanged(!isExpanded)
+            } label: {
+                HStack(spacing: 6) {
+                    if isLive {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "brain").font(.footnote)
+                    }
+                    Text(label).font(.footnote)
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                }
+                .foregroundStyle(AppColors.secondaryLabel)
+                .frame(minHeight: 36)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(label)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(isExpanded ? "Hides the reasoning" : "Shows the reasoning")
+            .accessibilityIdentifier("session.thinking")
+
+            if isExpanded {
+                HStack(alignment: .top, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(AppColors.separator)
+                        .frame(width: 2)
+                    Text(item.thinking.trimmingCharacters(in: .whitespacesAndNewlines))
+                        .font(.footnote)
+                        .foregroundStyle(AppColors.secondaryLabel)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 6)
+                .accessibilityIdentifier("session.thinkingText")
+            }
+        }
+    }
+}
+
 // MARK: - Tool activity
 
-/// One run of tool calls, collapsed into a single line. A turn that reads six
-/// files and runs three commands is nine full-width cards otherwise, and the
-/// prose the user actually came for scrolls off the top.
+/// One run of tool calls.
+///
+/// A turn that reads six files and runs three commands is nine cards otherwise,
+/// and the prose the reader came for scrolls away. So a run is one card: closed,
+/// it says how many calls there were and what the latest was doing; opened,
+/// every call is a line naming its tool and what it was pointed at, and a call
+/// opens in turn to show what it was given and what it answered. A run of one
+/// skips the first step.
 struct ToolActivityCard: View {
     let items: [StreamItem]
     let isExpanded: (String) -> Bool
     let setExpanded: (String, Bool) -> Void
 
     private var groupID: String { "tool-group-\(items.first?.id ?? "")" }
-    private var activeItem: StreamItem? { items.last { $0.isInProgress } }
     private var failureCount: Int { items.filter(\.isError).count }
-    private var hasDetails: Bool { items.contains { !$0.text.isEmpty } }
-
-    private var summary: String {
-        if let activeItem { return activeItem.title }
-        if items.count == 1 { return items[0].title }
-        return "\(items.count) tool calls"
-    }
+    private var isRunning: Bool { items.contains { $0.isInProgress } }
+    /// What the run is doing now, or did last: the line a reader would
+    /// otherwise open it for.
+    private var latest: StreamItem? { items.last { $0.isInProgress } ?? items.last }
 
     var body: some View {
-        let expanded = isExpanded(groupID)
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                guard hasDetails else { return }
-                setExpanded(groupID, !expanded)
-            } label: {
-                HStack(spacing: 8) {
-                    statusIcon
-                    Text(summary)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(failureCount > 0 ? AppColors.destructive : AppColors.label)
-                        .lineLimit(1)
-                    if failureCount > 0, items.count > 1 {
-                        Text("\(failureCount) failed")
-                            .font(.caption)
-                            .foregroundStyle(AppColors.destructive)
-                    }
-                    Spacer()
-                    if hasDetails {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.footnote)
-                            .foregroundStyle(AppColors.secondaryLabel)
-                    }
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!hasDetails)
-            .accessibilityLabel(
-                failureCount > 0 ? "\(summary), \(failureCount) failed" : summary
-            )
-            .accessibilityHint(hasDetails ? "Shows what each tool did" : "")
-            .accessibilityIdentifier("session.toolGroup")
-
-            if expanded {
-                if items.count == 1 {
-                    detailText(items[0].text)
-                } else {
+        VStack(alignment: .leading, spacing: 0) {
+            if items.count == 1, let item = items.first {
+                ToolCallRow(
+                    item: item,
+                    isExpanded: isExpanded(item.id),
+                    setExpanded: { setExpanded(item.id, $0) }
+                )
+            } else {
+                let expanded = isExpanded(groupID)
+                header(expanded: expanded)
+                if expanded {
                     ForEach(items) { item in
-                        ToolDetailRow(
+                        ToolCallRow(
                             item: item,
                             isExpanded: isExpanded(item.id),
                             setExpanded: { setExpanded(item.id, $0) }
@@ -541,60 +597,121 @@ struct ToolActivityCard: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(AppColors.fill.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
         .padding(.top, 8)
     }
 
-    @ViewBuilder
-    private var statusIcon: some View {
-        if activeItem != nil {
-            ProgressView().controlSize(.mini)
-        } else {
-            Image(systemName: failureCount > 0 ? "xmark.circle" : "checkmark.circle")
-                .font(.footnote)
-                .foregroundStyle(
-                    failureCount > 0 ? AppColors.destructive : AppColors.secondaryLabel
-                )
+    private func header(expanded: Bool) -> some View {
+        Button {
+            setExpanded(groupID, !expanded)
+        } label: {
+            HStack(spacing: 8) {
+                ToolStatusIcon(isRunning: isRunning, failed: failureCount > 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text("\(items.count) tool calls")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(AppColors.label)
+                        if failureCount > 0 {
+                            Text("\(failureCount) failed")
+                                .font(.caption)
+                                .foregroundStyle(AppColors.destructive)
+                        }
+                    }
+                    if !expanded, let latest {
+                        Text(ToolCallRow.line(latest))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(AppColors.secondaryLabel)
+                            .lineLimit(1)
+                            .truncationMode(ToolCallRow.truncation(latest.toolSummary))
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.secondaryLabel)
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(groupLabel)
+        .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+        .accessibilityHint("Shows each tool call")
+        .accessibilityIdentifier("session.toolGroup")
     }
 
-    private func detailText(_ text: String) -> some View {
-        ScrollView(.horizontal, showsIndicators: true) {
-            Text(text)
-                .font(.system(.footnote, design: .monospaced))
-                .textSelection(.enabled)
-                // Tool output is a grid; let it scroll rather than wrap.
-                .fixedSize(horizontal: true, vertical: true)
+    /// What the run is named: the count, how many failed, and what is running.
+    private var groupLabel: String {
+        var parts = ["\(items.count) tool calls"]
+        if failureCount > 0 { parts.append("\(failureCount) failed") }
+        if let active = items.last(where: { $0.isInProgress }) {
+            parts.append(ToolCallRow.label(active))
         }
+        return parts.joined(separator: ", ")
     }
 }
 
-private struct ToolDetailRow: View {
+/// One tool call: its tool and what it was pointed at, opening to its input and
+/// output.
+private struct ToolCallRow: View {
     let item: StreamItem
     let isExpanded: Bool
     let setExpanded: (Bool) -> Void
 
+    /// The input is worth a block of its own only when the one-line summary
+    /// left some of it out.
+    private var input: String? {
+        let trimmed = item.toolInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed != item.toolSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return nil }
+        return item.toolInput
+    }
+
+    private var hasDetails: Bool { input != nil || !item.text.isEmpty }
+
+    /// A tool call as one line of text: its tool and what it was pointed at.
+    static func line(_ item: StreamItem) -> String {
+        let name = item.toolName.isEmpty ? item.title : item.toolName
+        return item.toolSummary.isEmpty ? name : "\(name) \(item.toolSummary)"
+    }
+
+    /// What a tool call row is named: how it went, then what it was.
+    static func label(_ item: StreamItem) -> String {
+        item.toolSummary.isEmpty ? item.title : "\(item.title): \(item.toolSummary)"
+    }
+
+    /// Where a summary too long for its line gives way. A path is recognised by
+    /// its last component, so it loses its start; a command is recognised by
+    /// how it begins.
+    static func truncation(_ summary: String) -> Text.TruncationMode {
+        summary.contains("/") && !summary.contains(" ") ? .head : .tail
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
-                guard !item.text.isEmpty else { return }
+                guard hasDetails else { return }
                 setExpanded(!isExpanded)
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: item.isError ? "xmark.circle" : "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(
-                            item.isError ? AppColors.destructive : AppColors.secondaryLabel
-                        )
-                    Text(item.title)
-                        .font(.footnote)
+                    ToolStatusIcon(isRunning: item.isInProgress, failed: item.isError)
+                    Text(item.toolName.isEmpty ? item.title : item.toolName)
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(item.isError ? AppColors.destructive : AppColors.label)
                         .lineLimit(1)
-                    Spacer()
-                    if !item.text.isEmpty {
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .fixedSize()
+                    Text(item.toolSummary)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(AppColors.secondaryLabel)
+                        .lineLimit(1)
+                        .truncationMode(Self.truncation(item.toolSummary))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if hasDetails {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                             .font(.caption)
                             .foregroundStyle(AppColors.secondaryLabel)
                     }
@@ -603,20 +720,62 @@ private struct ToolDetailRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(item.text.isEmpty)
-            .accessibilityLabel(item.title)
+            .disabled(!hasDetails)
+            .accessibilityLabel(Self.label(item))
+            .accessibilityValue(hasDetails ? (isExpanded ? "Expanded" : "Collapsed") : "")
+            .accessibilityHint(
+                hasDetails ? "Shows what the tool was given and what it answered" : ""
+            )
+            .accessibilityIdentifier("session.toolMessage")
 
-            if isExpanded, !item.text.isEmpty {
-                // Indented under its own title, or the output reads as the card's.
-                ScrollView(.horizontal, showsIndicators: true) {
-                    Text(item.text)
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: true, vertical: true)
+            if isExpanded, hasDetails {
+                VStack(alignment: .leading, spacing: 6) {
+                    if let input { ToolDetailBlock(text: input, isError: false) }
+                    if !item.text.isEmpty {
+                        ToolDetailBlock(text: item.text, isError: item.isError)
+                    }
                 }
-                .padding(.leading, 22)
+                .padding(.leading, 24)
+                .padding(.bottom, 8)
             }
         }
+    }
+}
+
+private struct ToolStatusIcon: View {
+    let isRunning: Bool
+    let failed: Bool
+
+    var body: some View {
+        if isRunning {
+            ProgressView().controlSize(.mini).frame(width: 16)
+        } else {
+            Image(systemName: failed ? "xmark.circle" : "checkmark.circle")
+                .font(.footnote)
+                .foregroundStyle(failed ? AppColors.destructive : AppColors.secondaryLabel)
+                .frame(width: 16)
+        }
+    }
+}
+
+/// Tool input or output: monospaced, selectable, and bounded so one call cannot
+/// fill a screen. Output is a grid, so it scrolls sideways rather than wrapping.
+private struct ToolDetailBlock: View {
+    let text: String
+    let isError: Bool
+
+    var body: some View {
+        ScrollView([.horizontal, .vertical], showsIndicators: true) {
+            Text(text)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(isError ? AppColors.destructive : AppColors.label)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: true, vertical: true)
+                .padding(8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: 280, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(AppColors.background.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

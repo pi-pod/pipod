@@ -71,10 +71,15 @@ import com.pipod.app.ui.AppSelectableText
 import com.pipod.app.ui.AppSelectionScope
 import com.pipod.app.ui.rememberThumbnail
 import com.pipod.app.ui.LocalAppToastHost
+import com.pipod.app.ui.rememberCopyAction
 import com.pipod.app.ui.showAppToast
 import com.pipod.app.ui.theme.MonospaceTextStyle
 import com.pipod.app.ui.theme.appColors
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 
 /**
  * The row widgets a chat transcript is assembled from, ported from
@@ -108,6 +113,8 @@ object TranscriptTestTags {
     fun tools(id: String) = "transcript-tools-$id"
 
     fun toolDetail(id: String) = "transcript-tool-detail-$id"
+
+    fun thinking(id: String) = "transcript-thinking-$id"
 }
 
 /**
@@ -268,6 +275,9 @@ fun EventRow(
     modifier: Modifier = Modifier,
     chrome: MessageChrome = MessageChrome.STANDALONE,
     thinkingLabel: String? = null,
+    /** Whether this reply's reasoning is shown in full rather than as a one-line row. */
+    showsThinking: Boolean = false,
+    onShowsThinkingChanged: (Boolean) -> Unit = {},
     onRetry: () -> Unit = {},
     onDiscard: () -> Unit = {},
 ) {
@@ -281,7 +291,9 @@ fun EventRow(
         when (item.style) {
             StreamItemStyle.STATUS, StreamItemStyle.TOOL -> StatusLine(item)
             StreamItemStyle.USER -> UserBubble(item, chrome, timeLabel, onRetry, onDiscard)
-            StreamItemStyle.ASSISTANT -> AssistantBlock(item, chrome, timeLabel, thinkingLabel)
+            StreamItemStyle.ASSISTANT -> AssistantBlock(
+                item, chrome, timeLabel, thinkingLabel, showsThinking, onShowsThinkingChanged,
+            )
         }
     }
 }
@@ -393,6 +405,8 @@ private fun AssistantBlock(
     chrome: MessageChrome,
     timeLabel: String?,
     thinkingLabel: String?,
+    showsThinking: Boolean,
+    onShowsThinkingChanged: (Boolean) -> Unit,
 ) {
     val colors = appColors
     val showsMeta = chrome.showsSender || (chrome.showsTimestamp && timeLabel != null)
@@ -417,7 +431,17 @@ private fun AssistantBlock(
                     },
             ) {
                 if (showsMeta) MetaRow(item, chrome, "pi", timeLabel, Arrangement.Start)
+                if (item.thinking.isNotBlank()) {
+                    ThinkingBlock(
+                        item = item,
+                        isExpanded = showsThinking,
+                        onExpandedChanged = onShowsThinkingChanged,
+                    )
+                }
                 when {
+                    // The reasoning row above already says what pi is doing.
+                    item.text.isBlank() && item.thinking.isNotBlank() && !item.isError -> Unit
+
                     item.isInProgress && item.text.isBlank() -> Row(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -676,36 +700,183 @@ private fun DeliveryLabel(text: String, icon: ImageVector) {
 }
 
 /**
- * One run of tool calls, collapsed into a single line. A turn that reads six
- * files and runs three commands is nine full-width cards otherwise, and the
- * prose the user actually came for scrolls off the top.
+ * The model's reasoning for one reply.
  *
- * @param isExpanded expansion lives on the stream, keyed by id, so recycling
- *   this card does not silently collapse it.
+ * Collapsed it is one quiet line, because reasoning is long and the reply under it is what
+ * was asked for; opened it reads as an aside, set off from the reply by a rule and a dimmer
+ * colour. While pi is still reasoning the line says so.
+ */
+@Composable
+private fun ThinkingBlock(item: StreamItem, isExpanded: Boolean, onExpandedChanged: (Boolean) -> Unit) {
+    val colors = appColors
+    val isLive = item.isInProgress && item.text.isBlank()
+    val label = if (isLive) "Thinking…" else "Thought"
+    Column(Modifier.fillMaxWidth().testTag(TranscriptTestTags.thinking(item.id))) {
+        Row(
+            modifier = Modifier
+                .heightIn(min = 40.dp)
+                .clickable { onExpandedChanged(!isExpanded) }
+                .clearAndSetSemantics {
+                    contentDescription = label
+                    role = Role.Button
+                    stateDescription = if (isExpanded) "Expanded" else "Collapsed"
+                    onClick(label = if (isExpanded) "Hides the reasoning" else "Shows the reasoning") {
+                        onExpandedChanged(!isExpanded)
+                        true
+                    }
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (isLive) {
+                AppActivityIndicator(size = 14.dp)
+            } else {
+                Icon(
+                    imageVector = AppIcons.thinking,
+                    contentDescription = null,
+                    tint = colors.secondaryLabel,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.bodySmall, color = colors.secondaryLabel)
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                imageVector = if (isExpanded) AppIcons.expand else AppIcons.chevron,
+                contentDescription = null,
+                tint = colors.secondaryLabel,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        if (isExpanded) {
+            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(bottom = 10.dp)) {
+                Box(Modifier.width(2.dp).fillMaxHeight().background(colors.separator))
+                Spacer(Modifier.width(10.dp))
+                AppSelectableText(
+                    text = item.thinking.trim(),
+                    style = MaterialTheme.typography.bodySmall.copy(color = colors.secondaryLabel),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One run of tool calls.
+ *
+ * A turn that reads six files and runs three commands is nine cards otherwise, and the prose
+ * the reader came for scrolls away. So a run is one card: closed, it says how many calls there
+ * were and what the latest was doing; opened, every call is a line naming its tool and what it
+ * was pointed at, and a call opens in turn to show what it was given and what it answered. A
+ * run of one skips the first step.
+ *
+ * [expandedKeys] is state, not a lookup function: a function reference never changes, so a
+ * card handed one was never recomposed when a row was opened.
  */
 @Composable
 fun ToolActivityCard(
     items: List<StreamItem>,
-    isExpanded: (String) -> Boolean,
+    expandedKeys: Set<String>,
     onExpandedChanged: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** A pod extension asked for every tool card to be open. */
+    allExpanded: Boolean = false,
 ) {
     val groupId = toolActivityGroupId(items)
-    val expanded = isExpanded(groupId)
-    val hasDetails = items.any { it.text.isNotEmpty() }
-    val failureCount = items.count { it.isError }
-    val label = toolActivityLabel(items)
-    val summary = toolActivitySummary(items)
-    val toggle = { onExpandedChanged(groupId, !expanded) }
-
+    val isOpen: (String) -> Boolean = { key -> allExpanded || key in expandedKeys }
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(top = 8.dp)
             .background(appColors.fill.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = 10.dp, vertical = 2.dp)
             .testTag(TranscriptTestTags.tools(items.firstOrNull()?.id.orEmpty())),
     ) {
+        if (items.size == 1) {
+            val item = items.first()
+            ToolCallRow(item, isOpen(item.id)) { onExpandedChanged(item.id, it) }
+            return@Column
+        }
+        val expanded = isOpen(groupId)
+        ToolGroupHeader(items, expanded) { onExpandedChanged(groupId, !expanded) }
+        if (expanded) {
+            items.forEach { item ->
+                ToolCallRow(item, isOpen(item.id)) { onExpandedChanged(item.id, it) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolGroupHeader(items: List<StreamItem>, expanded: Boolean, onToggle: () -> Unit) {
+    val failureCount = items.count { it.isError }
+    val label = toolActivityLabel(items)
+    // What the run is doing now, or did last: the line a reader would otherwise open it for.
+    val latest = (items.lastOrNull { it.isInProgress } ?: items.last())
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = AppButtonDefaults.MinTouchTarget)
+            .clickable(onClick = onToggle)
+            .clearAndSetSemantics {
+                contentDescription = label
+                role = Role.Button
+                stateDescription = if (expanded) "Expanded" else "Collapsed"
+                onClick(label = "Shows each tool call") {
+                    onToggle()
+                    true
+                }
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ToolStatusIcon(isRunning = items.any { it.isInProgress }, failed = failureCount > 0)
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "${items.size} tool calls",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = appColors.label,
+                )
+                if (failureCount > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "$failureCount failed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = appColors.destructive,
+                    )
+                }
+            }
+            if (!expanded) {
+                Text(
+                    text = toolCallLine(latest),
+                    maxLines = 1,
+                    overflow = toolSummaryOverflow(latest.toolSummary),
+                    style = MonospaceTextStyle.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize),
+                    color = appColors.secondaryLabel,
+                )
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            imageVector = if (expanded) AppIcons.expand else AppIcons.chevron,
+            contentDescription = null,
+            tint = appColors.secondaryLabel,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+/** One tool call: its tool and what it was pointed at, opening to its input and output. */
+@Composable
+private fun ToolCallRow(item: StreamItem, isExpanded: Boolean, onExpandedChanged: (Boolean) -> Unit) {
+    val name = item.toolName.ifEmpty { item.title }
+    // The input is worth a block of its own only when the one-line summary left some out.
+    val input = item.toolInput.takeIf { it.isNotEmpty() && it.trim() != item.toolSummary.trim() }
+    val hasDetails = input != null || item.text.isNotEmpty()
+    val toggle = { onExpandedChanged(!isExpanded) }
+    val label = toolCallLabel(item)
+    Column(Modifier.fillMaxWidth().testTag(TranscriptTestTags.toolDetail(item.id))) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -715,91 +886,8 @@ fun ToolActivityCard(
                     contentDescription = label
                     role = Role.Button
                     if (hasDetails) {
-                        stateDescription = if (expanded) "Expanded" else "Collapsed"
-                        onClick(label = "Shows what each tool did") {
-                            toggle()
-                            true
-                        }
-                    } else {
-                        disabled()
-                    }
-                },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (items.any { it.isInProgress }) {
-                AppActivityIndicator(size = 14.dp)
-            } else {
-                Icon(
-                    imageVector = if (failureCount > 0) AppIcons.close else AppIcons.success,
-                    contentDescription = null,
-                    tint = if (failureCount > 0) appColors.destructive else appColors.secondaryLabel,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = summary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                color = if (failureCount > 0) appColors.destructive else appColors.label,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            if (failureCount > 0 && items.size > 1) {
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = "$failureCount failed",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = appColors.destructive,
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            if (hasDetails) {
-                Icon(
-                    imageVector = if (expanded) AppIcons.expand else AppIcons.chevron,
-                    contentDescription = null,
-                    tint = appColors.secondaryLabel,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-        }
-        if (expanded) {
-            Spacer(Modifier.height(8.dp))
-            if (items.size == 1) {
-                AppSelectableText(
-                    text = items.first().text,
-                    style = MonospaceTextStyle,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            } else {
-                items.forEach { item ->
-                    ToolDetailRow(
-                        item = item,
-                        isExpanded = isExpanded(item.id),
-                        onExpandedChanged = { value -> onExpandedChanged(item.id, value) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ToolDetailRow(item: StreamItem, isExpanded: Boolean, onExpandedChanged: (Boolean) -> Unit) {
-    val hasDetails = item.text.isNotEmpty()
-    val toggle = { onExpandedChanged(!isExpanded) }
-    Column(Modifier.fillMaxWidth().testTag(TranscriptTestTags.toolDetail(item.id))) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = AppButtonDefaults.MinTouchTarget)
-                .clickable(enabled = hasDetails, onClick = toggle)
-                .clearAndSetSemantics {
-                    contentDescription = item.title
-                    role = Role.Button
-                    if (hasDetails) {
                         stateDescription = if (isExpanded) "Expanded" else "Collapsed"
-                        onClick {
+                        onClick(label = "Shows what the tool was given and what it answered") {
                             toggle()
                             true
                         }
@@ -809,23 +897,25 @@ private fun ToolDetailRow(item: StreamItem, isExpanded: Boolean, onExpandedChang
                 },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = if (item.isError) AppIcons.close else AppIcons.successOutline,
-                contentDescription = null,
-                tint = if (item.isError) appColors.destructive else appColors.secondaryLabel,
-                modifier = Modifier.size(13.dp),
+            ToolStatusIcon(isRunning = item.isInProgress, failed = item.isError)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = name,
+                maxLines = 1,
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                color = if (item.isError) appColors.destructive else appColors.label,
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = item.title,
+                text = item.toolSummary,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (item.isError) appColors.destructive else appColors.label,
-                modifier = Modifier.weight(1f, fill = false),
+                overflow = toolSummaryOverflow(item.toolSummary),
+                style = MonospaceTextStyle.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize),
+                color = appColors.secondaryLabel,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.weight(1f))
             if (hasDetails) {
+                Spacer(Modifier.width(8.dp))
                 Icon(
                     imageVector = if (isExpanded) AppIcons.expand else AppIcons.chevron,
                     contentDescription = null,
@@ -835,13 +925,49 @@ private fun ToolDetailRow(item: StreamItem, isExpanded: Boolean, onExpandedChang
             }
         }
         if (isExpanded && hasDetails) {
-            // Indented under its own title, or the output reads as the card's.
-            AppSelectableText(
-                text = item.text,
-                style = MonospaceTextStyle,
-                modifier = Modifier.fillMaxWidth().padding(start = 22.dp, top = 4.dp),
-            )
+            Column(Modifier.fillMaxWidth().padding(start = 24.dp, bottom = 8.dp)) {
+                if (input != null) ToolDetailBlock(text = input, isError = false)
+                if (input != null && item.text.isNotEmpty()) Spacer(Modifier.height(6.dp))
+                if (item.text.isNotEmpty()) ToolDetailBlock(text = item.text, isError = item.isError)
+            }
         }
+    }
+}
+
+@Composable
+private fun ToolStatusIcon(isRunning: Boolean, failed: Boolean) {
+    if (isRunning) {
+        AppActivityIndicator(size = 14.dp)
+        return
+    }
+    Icon(
+        imageVector = if (failed) AppIcons.close else AppIcons.successOutline,
+        contentDescription = null,
+        tint = if (failed) appColors.destructive else appColors.secondaryLabel,
+        modifier = Modifier.size(14.dp),
+    )
+}
+
+/** Tool input or output: monospaced, selectable, and bounded so one call cannot fill a screen. */
+@Composable
+private fun ToolDetailBlock(text: String, isError: Boolean) {
+    val scroll = rememberScrollState()
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = 280.dp)
+            .background(appColors.background.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+            .verticalScroll(scroll)
+            .padding(8.dp),
+    ) {
+        AppSelectableText(
+            text = text,
+            style = MonospaceTextStyle.copy(
+                fontSize = MaterialTheme.typography.labelSmall.fontSize,
+                color = if (isError) appColors.destructive else appColors.label,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -864,7 +990,7 @@ internal fun transcriptAccessibilityText(
         parts.add(if (count == 1) "1 image attached" else "$count images attached")
     }
     val body = item.text.trim()
-    parts.add(if (body.isEmpty() && item.isInProgress) "Thinking" else body)
+    parts.add(if (body.isEmpty() && (item.isInProgress || item.thinking.isNotBlank())) "Thinking" else body)
     when (item.delivery) {
         StreamItemDelivery.DELIVERED -> Unit
         StreamItemDelivery.SENDING -> parts.add("Sending")
@@ -878,30 +1004,29 @@ internal fun transcriptAccessibilityText(
 internal fun toolActivityGroupId(items: List<StreamItem>): String =
     "tool-group-${items.firstOrNull()?.id.orEmpty()}"
 
-/** The one line a collapsed run of tool calls shows. */
-internal fun toolActivitySummary(items: List<StreamItem>): String {
-    val active = items.lastOrNull { it.isInProgress }
-    if (active != null) return active.title
-    if (items.size == 1) return items[0].title
-    return "${items.size} tool calls"
+/**
+ * Where a summary too long for its line gives way. A path is recognised by its last
+ * component, so it loses its start; a command is recognised by how it begins.
+ */
+internal fun toolSummaryOverflow(summary: String): TextOverflow =
+    if ('/' in summary && ' ' !in summary.trim()) TextOverflow.StartEllipsis else TextOverflow.Ellipsis
+
+/** A tool call as one line of text: its tool and what it was pointed at. */
+internal fun toolCallLine(item: StreamItem): String {
+    val name = item.toolName.ifEmpty { item.title }
+    return if (item.toolSummary.isEmpty()) name else "$name ${item.toolSummary}"
 }
 
-/** The same line plus the failure count, which is what the row is named. */
+/** What a tool call row is named: how it went, then what it was. */
+internal fun toolCallLabel(item: StreamItem): String =
+    if (item.toolSummary.isEmpty()) item.title else "${item.title}: ${item.toolSummary}"
+
+/** What a run of tool calls is named: the count, how many failed, and what is running. */
 internal fun toolActivityLabel(items: List<StreamItem>): String {
-    val summary = toolActivitySummary(items)
+    val parts = mutableListOf("${items.size} tool calls")
     val failures = items.count { it.isError }
-    return if (failures > 0) "$summary, $failures failed" else summary
+    if (failures > 0) parts += "$failures failed"
+    items.lastOrNull { it.isInProgress }?.let { parts += toolCallLabel(it) }
+    return parts.joinToString(", ")
 }
 
-@Composable
-private fun rememberCopyAction(text: String): () -> Unit {
-    val clipboard = LocalClipboardManager.current
-    val toastHost = LocalAppToastHost.current
-    val scope = rememberCoroutineScope()
-    return remember(text, clipboard, toastHost, scope) {
-        {
-            clipboard.setText(AnnotatedString(text))
-            scope.launch { showAppToast(toastHost, "Copied") }
-        }
-    }
-}

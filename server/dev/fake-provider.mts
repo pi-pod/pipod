@@ -66,6 +66,38 @@ const FAKE_PI_VERSION = (
   ) as { version: string }
 ).version;
 
+/**
+ * Two models by default. `FAKE_MODEL_CATALOG=large` adds a catalog the size a real account
+ * has (several providers, dozens of models), which is what a model picker has to be usable
+ * against; `FAKE_ENABLED_MODELS` (comma-separated patterns) is the pod's model scope.
+ */
+function fakeModelCatalog(): Array<Record<string, unknown>> {
+  const models: Array<Record<string, unknown>> = [
+    { provider: "fake", id: "fast", name: "Fake Fast" },
+    { provider: "fake", id: "careful", name: "Fake Careful", reasoning: true },
+  ];
+  if (process.env["FAKE_MODEL_CATALOG"] !== "large") return models;
+  const families: Array<[string, string[]]> = [
+    ["acme", ["sonnet", "opus", "haiku"]],
+    ["globex", ["sol", "luna", "astra", "nova"]],
+    ["initech", ["flash", "pro", "ultra"]],
+    ["umbrella/hosted", ["deep-seek-v4", "llama-4-70b", "qwen-3-coder", "mistral-large"]],
+  ];
+  for (const [provider, names] of families) {
+    for (const name of names) {
+      for (const version of ["4", "4.5", "5"]) {
+        models.push({
+          provider: provider.split("/")[0],
+          id: provider.includes("/") ? `${provider.split("/")[1]}/${name}-${version}` : `${name}-${version}`,
+          name: `${name[0]!.toUpperCase()}${name.slice(1)} ${version}`,
+          reasoning: true,
+        });
+      }
+    }
+  }
+  return models;
+}
+
 const INITIAL_STATE = {
   thinkingLevel: "off",
   isStreaming: false,
@@ -83,12 +115,7 @@ const CANNED: Record<string, unknown> = {
   get_messages: { messages: [] },
   get_entries: { entries: [], leafId: null },
   get_tree: { tree: [], leafId: null },
-  get_available_models: {
-    models: [
-      { provider: "fake", id: "fast", name: "Fake Fast" },
-      { provider: "fake", id: "careful", name: "Fake Careful", reasoning: true },
-    ],
-  },
+  get_available_models: { models: fakeModelCatalog() },
   get_available_thinking_levels: { levels: ["off", "low", "high"] },
   get_commands: {
     commands: [SEED_CONTEXT_COMMAND, SEED_TREE_SUMMARY_COMMAND].map((name) => ({
@@ -118,10 +145,15 @@ function assistantMessage(
   text: string,
   stopReason?: string,
   usage?: FakeReplyUsage,
+  thinking?: string,
 ): Record<string, unknown> {
   return {
     role: "assistant",
-    content: [{ type: "text", text }],
+    // Pi puts a model's reasoning in its own block ahead of the reply text.
+    content: [
+      ...(thinking ? [{ type: "thinking", thinking }] : []),
+      ...(text || !thinking ? [{ type: "text", text }] : []),
+    ],
     ...(stopReason ? { stopReason } : {}),
     ...(usage ? { usage } : {}),
   };
@@ -144,8 +176,44 @@ const FAKE_PRICES = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } a
 function replyFor(message: string): string {
   const echo = /reply with exactly ([^.\n]+)/i.exec(message);
   if (echo?.[1]) return echo[1].trim();
+  if (/\bMARKDOWN\b/i.test(message)) return MARKDOWN_REPLY;
   return `fake pi received: ${message}`;
 }
+
+/** What a real model's reasoning reads like: several short paragraphs before the reply. */
+const THINKING_TRACE = [
+  "The user wants to know why the build fails. Let me look at what changed first. ",
+  "The lockfile and the workflow both moved in the last commit, so the cache key no longer matches. ",
+  "That explains the cold install, but not the failure itself.\n\n",
+  "The failing step is the typecheck: `SessionStream` gained a required argument and one call site was missed. ",
+  "I should fix the call site rather than make the argument optional.",
+];
+
+const MARKDOWN_REPLY = [
+  "## What I found",
+  "",
+  "The build fails in **typecheck**, not in install. Two things changed:",
+  "",
+  "1. `SessionStream` gained a required `api` argument.",
+  "2. One call site in `SessionRoute.kt` was missed.",
+  "",
+  "```kotlin",
+  "val stream = SessionStream(podId = podId, api = api)",
+  "```",
+  "",
+  "> The cache miss is unrelated: the lockfile moved in the same commit.",
+  "",
+  "Run `./gradlew :app:assembleDebug` to confirm. See [the docs](https://example.com/docs) for the rest.",
+].join("\n");
+
+/** A turn's worth of tool calls in pi's shapes, for the TOOLS scenario. */
+const TOOL_SCRIPT: Array<{ toolName: string; args: Record<string, unknown>; result: string; isError?: boolean }> = [
+  { toolName: "read", args: { path: "android/app/src/main/kotlin/com/pipod/app/features/session/SessionRoute.kt" }, result: "package com.pipod.app.features.session\n\nimport androidx.compose.runtime.Composable\n// … 297 lines" },
+  { toolName: "bash", args: { command: "rg -n \"SessionStream\\(\" android/app/src/main --glob '*.kt' | head -20" }, result: "features/session/SessionRoute.kt:88:    val stream = SessionStream(podId = podId)\nfeatures/session/SessionViewModel.kt:41:        SessionStream(podId, api = api)" },
+  { toolName: "edit", args: { path: "android/app/src/main/kotlin/com/pipod/app/features/session/SessionRoute.kt", oldText: "SessionStream(podId = podId)", newText: "SessionStream(podId = podId, api = api)" }, result: "Successfully replaced text in SessionRoute.kt." },
+  { toolName: "bash", args: { command: "cd android && ./gradlew :app:compileDebugKotlin -q" }, result: "e: SessionRoute.kt:90:17 Unresolved reference: api", isError: true },
+  { toolName: "write", args: { path: "notes/build-fix.md", content: "# Build fix\n\nPass `api` through SessionRoute." }, result: "Successfully wrote 48 bytes to notes/build-fix.md" },
+];
 
 class FakePty implements PtySession {
   readonly id = `pty-${randomBytes(4).toString("hex")}`;
@@ -209,7 +277,10 @@ class FakePty implements PtySession {
             this.state.model = {
               provider: command.provider,
               id: command.modelId,
-              name: command.modelId === "careful" ? "Fake Careful" : "Fake Fast",
+              name: String(
+                fakeModelCatalog().find((m) => m["provider"] === command.provider && m["id"] === command.modelId)?.["name"]
+                  ?? command.modelId,
+              ),
             };
           }
           if (command.type === "set_thinking_level" && command.level) {
@@ -303,6 +374,10 @@ class FakePty implements PtySession {
    *   TOOL     — a tool card that runs and then succeeds
    *   HEAVY    — a reply that fills a large share of the context (usage readouts)
    *   SLOW     — a long turn, so interrupt has something to stop
+   *   TOOLS    — a run of different tool calls (read, bash, edit, write), one of them failing
+   *   THINK    — the reply is preceded by a streamed thinking block
+   *   MARKDOWN — a reply with headings, a list, a code block, a quote and a link
+   *   BRIDGE   — an internal `pi-pod-internal/…` bridge notification, as a CLI attach causes
    *   CONFIRM | SELECT | INPUT | EDITOR — a blocking approval of that method
    *   REMOTEUI | REMOTEUICLOSE — open or tear down the remote extension UI fixture
    */
@@ -345,13 +420,50 @@ class FakePty implements PtySession {
       });
     }
 
+    if (want("TOOLS")) {
+      for (const step of TOOL_SCRIPT) {
+        if (turn.aborted) break;
+        this.totals.toolCalls += 1;
+        const toolCallId = `call-${randomBytes(3).toString("hex")}`;
+        this.emitEvent({ type: "tool_execution_start", toolCallId, toolName: step.toolName, args: step.args });
+        await delay(want("SLOW") ? 1500 : 250);
+        this.emitEvent({
+          type: "tool_execution_end",
+          toolCallId,
+          toolName: step.toolName,
+          args: step.args,
+          isError: step.isError === true,
+          result: { content: [{ type: "text", text: step.result }] },
+        });
+      }
+    }
+    if (want("BRIDGE")) {
+      // The CLI's pod bridge answers arrive as notifications carrying an opaque blob. They are
+      // protocol traffic, and large: this one is the size of a real provider catalog answer.
+      this.emitEvent({
+        type: "extension_ui_request",
+        id: randomBytes(8).toString("hex"),
+        method: "notify",
+        message: `pi-pod-internal/auth-v1:${randomBytes(96 * 1024).toString("base64url")}`,
+      });
+    }
+
     const reply = replyFor(message);
     this.emitEvent({ type: "message_start", message: assistantMessage("") });
+    let thinking = "";
+    if (want("THINK")) {
+      for (const chunk of THINKING_TRACE) {
+        if (turn.aborted) break;
+        thinking += chunk;
+        this.emitEvent({ type: "message_update", message: assistantMessage("", undefined, undefined, thinking) });
+        await delay(want("SLOW") ? 1200 : 350);
+      }
+    }
     let shown = "";
     for (const chunk of reply.match(/\S+\s*/g) ?? [reply]) {
       if (turn.aborted) break;
       shown += chunk;
-      this.emitEvent({ type: "message_update", message: assistantMessage(shown) });
+      this.emitEvent({ type: "message_update", message: assistantMessage(shown, undefined, undefined, thinking) });
       await delay(want("SLOW") ? 1200 : 90);
     }
 
@@ -359,10 +471,10 @@ class FakePty implements PtySession {
     if (turn.aborted) {
       this.emitEvent({
         type: "message_end",
-        message: assistantMessage(shown + "\n\n[interrupted]", "aborted", usage),
+        message: assistantMessage(shown + "\n\n[interrupted]", "aborted", usage, thinking),
       });
     } else {
-      this.emitEvent({ type: "message_end", message: assistantMessage(reply, undefined, usage) });
+      this.emitEvent({ type: "message_end", message: assistantMessage(reply, undefined, usage, thinking) });
     }
     this.emitEvent({ type: "agent_end" });
     this.emitEvent({ type: "agent_settled" });
@@ -490,7 +602,14 @@ class FakePty implements PtySession {
       fidelity: "disk",
       bootDigest: process.env["FAKE_MANIFEST_DRIFT"] ? "driftdriftdrift1" : digest,
       launchArgv: ["pi", "--mode", "rpc"],
-      uiSettings: { theme: "pod-fake", hideThinkingBlock: true, editorPaddingX: 4 },
+      uiSettings: {
+        theme: "pod-fake",
+        hideThinkingBlock: true,
+        editorPaddingX: 4,
+        ...(process.env["FAKE_ENABLED_MODELS"]
+          ? { enabledModels: process.env["FAKE_ENABLED_MODELS"].split(",").map((entry) => entry.trim()).filter(Boolean) }
+          : {}),
+      },
       themes: [
         {
           name: "pod-fake",

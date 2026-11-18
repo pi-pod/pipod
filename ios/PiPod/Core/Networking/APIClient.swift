@@ -137,7 +137,10 @@ public final class APIClient: @unchecked Sendable {
     /// is that same value): one page would quietly stop at whatever the server
     /// chose. Rows de-duplicate by id and billing is read from the first page.
     public func podsPage(state: String? = nil, mine: Bool = false) async throws -> PodsPage {
-        var query: [String: String] = ["limit": "\(APIClient.listPageSize)"]
+        // A roster needs no launch reports: with them a page of pods is megabytes,
+        // without them kilobytes. Whoever opens a pod reads the whole record then.
+        // A server that predates the parameter ignores it and answers in full.
+        var query: [String: String] = ["limit": "\(APIClient.listPageSize)", "view": "summary"]
         if let state { query["state"] = state }
         if mine { query["mine"] = "true" }
         var items: [Pod] = []

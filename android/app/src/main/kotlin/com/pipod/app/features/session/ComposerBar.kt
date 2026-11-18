@@ -55,6 +55,9 @@ import com.pipod.app.ui.AppIcons
 import com.pipod.app.ui.AppTextField
 import com.pipod.app.ui.rememberThumbnail
 import com.pipod.app.ui.theme.appColors
+import com.pipod.app.features.pods.ModelPickerButton
+import com.pipod.app.features.pods.ModelPickerState
+import androidx.compose.foundation.layout.Spacer
 
 /**
  * Everything the composer draws.
@@ -123,6 +126,9 @@ fun ComposerBar(
     onRemoveAttachment: (String) -> Unit = {},
     onShowUsage: () -> Unit = {},
     focusRequester: FocusRequester? = null,
+    /** The model the next turn runs on; null leaves the model chip out (previews, tests). */
+    model: ModelPickerState? = null,
+    onChooseModel: () -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -136,8 +142,18 @@ fun ComposerBar(
             Column(
                 Modifier.padding(start = 12.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
             ) {
-                state.usage?.takeUnless { it.isEmpty }?.let { usage ->
-                    SessionUsageStrip(usage = usage, onClick = onShowUsage)
+                // The two halves of pi's own footer, where the message is written: what the
+                // next turn runs on, and what the session has spent.
+                val usage = state.usage?.takeUnless { it.isEmpty }
+                if (model != null || usage != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (model != null) ModelPickerButton(state = model, onClick = onChooseModel)
+                        if (usage != null) {
+                            SessionUsageStrip(usage = usage, onClick = onShowUsage, modifier = Modifier.weight(1f))
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
                 if (state.attachments.isNotEmpty() || state.attachError != null) {
                     AttachmentStrip(

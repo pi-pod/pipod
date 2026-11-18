@@ -72,6 +72,8 @@ import com.pipod.app.ui.showAppToast
 import com.pipod.app.ui.theme.appColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.pipod.app.ui.rememberCopyAction
+import com.pipod.app.ui.theme.MonospaceTextStyle
 
 /** The lifecycle actions the overflow menu offers. */
 private enum class PodAction { Refresh, Stop, Archive, Delete }
@@ -623,6 +625,7 @@ private fun InfoCard(pod: Pod, templateLabel: String, onOpenHostPod: (String) ->
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Text("Pod information", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(12.dp))
+                CopyableValue(label = "Pod ID", value = pod.ref, testTag = PodDetailTestTags.POD_REF)
                 pod.projectName?.let { LabeledValue(label = "Project", value = it) }
                 LabeledValue(label = "Environment", value = templateLabel)
                 LabeledValue(label = "Location", value = pod.displayLocation)
@@ -634,7 +637,12 @@ private fun InfoCard(pod: Pod, templateLabel: String, onOpenHostPod: (String) ->
                         onClick = if (hostPodId == null) null else { { onOpenHostPod(hostPodId) } },
                     )
                 }
-                LabeledValue(label = "Network", value = network)
+                // A pod handed over from the list is a summary without its launch
+                // configuration; the full record replaces it a moment later. Until then the
+                // network policy is unknown, which is not "restricted".
+                if (pod.resolvedConfig.egress.mode != "unknown") {
+                    LabeledValue(label = "Network", value = network)
+                }
                 pod.resolvedConfig.idleTimeoutMinutes?.let { minutes ->
                     LabeledValue(label = "Idle timeout", value = "$minutes minutes")
                     clampsFor(pod.resolvedConfig.clamps, "idleTimeoutMinutes")
@@ -727,6 +735,39 @@ private fun LabeledValue(label: String, value: String, onClick: (() -> Unit)? = 
             contentDescription = null,
             modifier = Modifier.size(16.dp),
             tint = appColors.tertiaryLabel,
+        )
+    }
+}
+
+/**
+ * A `label: value` line whose value is meant to be carried somewhere else: tapping it copies.
+ * Monospaced, because it is matched character by character against what a terminal printed.
+ */
+@Composable
+private fun CopyableValue(label: String, value: String, testTag: String) {
+    val copy = rememberCopyAction(value)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = AppButtonDefaults.MinTouchTarget)
+            .clickable(onClickLabel = "Copy", onClick = copy)
+            .padding(vertical = 8.dp)
+            .testTag(testTag)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "$label, $value"
+                role = Role.Button
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(16.dp))
+        Text(text = value, style = MonospaceTextStyle, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            imageVector = AppIcons.copy,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = appColors.secondaryLabel,
         )
     }
 }
@@ -940,6 +981,7 @@ object PodDetailTestTags {
     const val ACTIONS_BUTTON = "pod-detail-actions"
     const val STATUS_CARD = "pod-detail-status"
     const val INFO_CARD = "pod-detail-info"
+    const val POD_REF = "pod-detail-ref"
     const val LAUNCH_REPORT = "pod-detail-launch-report"
     const val LAUNCH_REPORT_TOGGLE = "pod-detail-launch-report-toggle"
     const val FAILURE_REASON = "pod-detail-failure"

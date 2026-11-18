@@ -78,6 +78,14 @@ public final class SessionStream: ModelSelecting {
     public private(set) var pendingModel: ModelChoice?
     public private(set) var currentThinkingLevel: String?
     public private(set) var pendingThinkingLevel: String?
+    /// The models this pod's user keeps to hand (pi's model scope), in the order
+    /// they listed them.
+    public private(set) var scopedModels: [ModelChoice] = []
+    /// A model or thinking level chosen while the pod was not connected. It is
+    /// what the next message will run on: the stream makes the switch as soon
+    /// as the pod's catalog arrives, ahead of anything waiting to be sent.
+    public private(set) var deferredModel: ModelChoice?
+    public private(set) var deferredThinkingLevel: String?
     /// True when a disconnect/error or a mismatching snapshot needs an explicit
     /// status check before the user chooses how to proceed.
     public private(set) var selectionNeedsAttention = false
@@ -87,9 +95,6 @@ public final class SessionStream: ModelSelecting {
     /// Text submitted by remote editors while model selection was unresolved.
     /// They are surfaced in the normal composer and never auto-sent later.
     public private(set) var blockedPromptDrafts: [String] = []
-    /// A cold attach saw a cached editor submit whose execution could not be
-    /// established. Recover it for review, never as an automatic send.
-    public private(set) var editorSnapshotDrafts: [String] = []
 
     /// True after the first models catalog. Until then the model and thinking
     /// level are unset — `hello`'s stale defaults are ignored — so the UI shows
@@ -99,6 +104,9 @@ public final class SessionStream: ModelSelecting {
     public private(set) var preparingPod: Pod?
     public private(set) var podRecord: Pod?
     public private(set) var isLoadingHistory = true
+    /// Older turns exist on the server that the transcript has not loaded yet.
+    public private(set) var hasEarlierHistory = false
+    public private(set) var isLoadingEarlierHistory = false
     public private(set) var sessionEnded = false
     public private(set) var sessionEndedMessage = ""
     public private(set) var historyLoadFailed = false
@@ -140,6 +148,12 @@ public final class SessionStream: ModelSelecting {
 
     // MARK: - Model switches
 
+    /// pi's `enabledModels` patterns for this pod; resolved against the catalog
+    /// as `scopedModels`.
+    @ObservationIgnored private var modelScopePatterns: [String] = []
+    /// Cursor for the page before the oldest one loaded; nil once the beginning
+    /// of the conversation is on screen.
+    @ObservationIgnored private var earlierHistoryCursor: String?
     @ObservationIgnored private var modelBeforePending: ModelChoice?
     @ObservationIgnored private var thinkingBeforePending: String?
     @ObservationIgnored private var lastPendingModelSnapshot: ModelChoice?
@@ -154,6 +168,11 @@ public final class SessionStream: ModelSelecting {
     // MARK: - Injected collaborators
 
     @ObservationIgnored private var api: SessionAPI?
+    /// Prefix for the ids of rows this reducer invents (status lines, optimistic
+    /// sends). The live stream uses `local`; a page of earlier history is
+    /// reduced on its own and needs ids that cannot collide with the rows
+    /// already on screen.
+    @ObservationIgnored private let localIDPrefix: String
     @ObservationIgnored private let socketFactory: SessionTransportFactory
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let reconnectDelay: (Int) -> TimeInterval
@@ -229,12 +248,14 @@ public final class SessionStream: ModelSelecting {
         api: SessionAPI? = nil,
         socketFactory: SessionTransportFactory? = nil,
         now: @escaping () -> Date = Date.init,
-        reconnectDelay: ((Int) -> TimeInterval)? = nil
+        reconnectDelay: ((Int) -> TimeInterval)? = nil,
+        localIDPrefix: String = "local"
     ) {
         self.podId = podId
         self.lastSeq = fromSeq ?? 0
         self.currentSessionId = sessionId
         self.api = api
+        self.localIDPrefix = localIDPrefix
         self.socketFactory = socketFactory ?? SessionStream.defaultSocketFactory
         self.now = now
         self.reconnectDelay = reconnectDelay ?? SessionStream.defaultReconnectDelay
@@ -250,16 +271,22 @@ public final class SessionStream: ModelSelecting {
             guard let self, self.isConnected, let socket = self.socket else { return false }
             return socket.rpc(id: id, command: command)
         }
-        // An extension-owned editor submits the same way pi's own does: the text
-        // becomes a user prompt.
-        remoteUI.onEditorSubmit = { [weak self] _, text in
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
-            return self?.send(text) ?? false
-        }
-        remoteUI.onEditorSnapshotSubmit = { [weak self] _, text in
-            self?.recoverEditorSnapshot(text) ?? false
-        }
-        restoreQueuedPromptAdmissions()
+        // The editor-submit hooks are deliberately left unset. An editor-role
+        // surface is not drawn on a phone (see `SessionView`), so this client
+        // never drives one; a submit it merely overhears belongs to the client
+        // that typed it, and sending it from here as well would run the turn twice.
+
+        // Until this pod reports its own catalog, the picker offers the last one
+        // seen on this server, so a model can be chosen while the pod is still
+        // starting or asleep.
+        let cached = ModelCatalogCache.read()
+        availableModels = cached.models
+        availableThinkingLevels = cached.thinkingLevels
+        modelScopePatterns = cached.scopePatterns
+        refreshScopedModels()
+        // A page of earlier history is reduced by a second, short-lived instance:
+        // the prompts this device still has queued belong to the live one only.
+        if localIDPrefix == "local" { restoreQueuedPromptAdmissions() }
     }
 
     private func restoreQueuedPromptAdmissions() {
@@ -343,13 +370,19 @@ public final class SessionStream: ModelSelecting {
 
     public func open(_ api: SessionAPI) async {
         self.api = api
+        // The transcript does not depend on the pod record, so it is fetched
+        // alongside it rather than after it: one round trip to a readable
+        // screen instead of two. Whether to attach still waits on both.
+        async let history: Void = loadHistory(api)
         do {
             let current = try await api.pod(id: podId)
             setPodRecord(current)
             // A launch the server refused after admitting it (a full host, say) is over before
             // the screen opens. Attaching would only fail with a less useful message.
             if current.didFail {
-                isLoadingHistory = false
+                await history
+                // After the history, whose own failure would otherwise replace
+                // the reason the launch failed.
                 error = current.friendlyStateReason
                     .map { FriendlyError.message(serverText: $0) }
                     ?? "This pod couldn’t start."
@@ -357,20 +390,20 @@ public final class SessionStream: ModelSelecting {
             }
             if current.initializing {
                 preparingPod = current
-                isLoadingHistory = false
+                await history
                 await waitForPreparation(api)
                 return
             }
             if current.isAsleep {
                 asleep = current.sandboxState
-                await loadHistory(api)
+                await history
                 return
             }
         } catch {
             // The attach path stays authoritative when the pod snapshot is
             // temporarily unreachable.
         }
-        await loadHistory(api)
+        await history
         sessionEnded = false
         sessionEndedMessage = ""
         asleep = nil
@@ -420,25 +453,72 @@ public final class SessionStream: ModelSelecting {
         }
     }
 
+    /// Loads the newest page of the conversation and remembers where the rest
+    /// begins.
+    ///
+    /// A long conversation is thousands of events. Fetching all of it before
+    /// showing any of it made opening a pod take as long as its whole history
+    /// took to download; the end of the conversation is what the reader came
+    /// for, and `loadEarlierHistory` fetches what is above it when they ask.
     private func loadHistory(_ api: SessionAPI) async {
         historyLoadFailed = false
         do {
-            var pages: [ConversationEventsPage] = []
-            var before: String?
-            for _ in 0..<25 {
-                let page = try await api.conversationEvents(
-                    podId: podId, before: before, limit: 200
-                )
-                pages.append(page)
-                guard let next = page.nextBefore else { break }
-                before = next
-            }
-            for page in pages.reversed() { ingestHistory(page.events) }
+            let page = try await api.conversationEvents(
+                podId: podId, before: nil, limit: SessionStream.historyPageSize
+            )
+            ingestHistory(page.events)
+            earlierHistoryCursor = page.nextBefore
+            hasEarlierHistory = page.nextBefore != nil
         } catch {
             historyLoadFailed = true
             self.error = "Conversation history couldn’t be loaded. Retry."
         }
         isLoadingHistory = false
+    }
+
+    /// Events per history request. One page is what opening a conversation
+    /// costs, so it is sized to cover the last few turns of a tool-heavy session
+    /// without a payload a phone on a cellular connection would notice.
+    static let historyPageSize = 200
+
+    /// Puts the page before the oldest loaded one above the transcript. Does
+    /// nothing when the beginning is already on screen or a page is on its way.
+    public func loadEarlierHistory() {
+        guard !isLoadingEarlierHistory, let cursor = earlierHistoryCursor, let api else { return }
+        isLoadingEarlierHistory = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let page = try await api.conversationEvents(
+                    podId: self.podId, before: cursor, limit: SessionStream.historyPageSize
+                )
+                let earlier = SessionStream.reduceHistoryPage(
+                    podId: self.podId, events: page.events, idPrefix: "earlier:\(cursor)"
+                )
+                let shown = Set(self.items.map(\.id))
+                self.items.insert(contentsOf: earlier.filter { !shown.contains($0.id) }, at: 0)
+                self.earlierHistoryCursor = page.nextBefore
+                self.hasEarlierHistory = page.nextBefore != nil
+            } catch {
+                self.error = "Earlier messages couldn’t be loaded. Try again."
+            }
+            self.isLoadingEarlierHistory = false
+        }
+    }
+
+    /// Reduces one page of earlier history into transcript rows, apart from the
+    /// live stream.
+    ///
+    /// A page boundary can fall between the start and the end of a reply or a
+    /// tool call. Rows the page leaves unfinished are dropped rather than shown:
+    /// the event that finishes each of them is in the next page, which is
+    /// already on screen and drew the finished row itself.
+    static func reduceHistoryPage(
+        podId: String, events: [ConversationEventRecord], idPrefix: String
+    ) -> [StreamItem] {
+        let reducer = SessionStream(podId: podId, fromSeq: nil, localIDPrefix: idPrefix)
+        reducer.ingestHistory(events)
+        return reducer.items.filter { !$0.isInProgress }
     }
 
     /// Feeds history pages straight into the reducer, newest page last, for
@@ -888,7 +968,7 @@ public final class SessionStream: ModelSelecting {
             error = "Wait for the model change to finish before sending this message."
             return true
         }
-        let id = "local:\(syntheticId)"
+        let id = "\(localIDPrefix):\(syntheticId)"
         let isTooLong = text.utf16.count > SessionLimits.maxPromptTextChars
         syntheticId -= 1
         let staged = attachments.map {
@@ -924,18 +1004,6 @@ public final class SessionStream: ModelSelecting {
     public func takeBlockedPromptDrafts() -> [String] {
         defer { blockedPromptDrafts.removeAll() }
         return blockedPromptDrafts
-    }
-
-    private func recoverEditorSnapshot(_ text: String) -> Bool {
-        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return true }
-        editorSnapshotDrafts.append(value)
-        return true
-    }
-
-    public func takeEditorSnapshotDrafts() -> [String] {
-        defer { editorSnapshotDrafts.removeAll() }
-        return editorSnapshotDrafts
     }
 
     public func retrySend(_ id: String) {
@@ -1051,7 +1119,9 @@ public final class SessionStream: ModelSelecting {
         do {
             let receipt = try await api.queuePrompt(
                 podId: podId, text: text, requestID: requestID,
-                model: ModelMemory.startingModel(podID: podId)
+                // The model chosen here while waiting, else the one remembered
+                // for a pod this app just launched.
+                model: deferredModel?.id ?? ModelMemory.startingModel(podID: podId)
             )
             if receipt.id != requestID {
                 let itemID = queuedPromptItemIDs.removeValue(forKey: requestID) ?? id
@@ -1278,8 +1348,15 @@ public final class SessionStream: ModelSelecting {
         refreshModels()
     }
 
+    /// Switches the pod to `model`. While the pod is not connected the choice is
+    /// kept and made as soon as its catalog arrives, so nobody has to wait for a
+    /// pod to start before saying what it should run.
     @discardableResult
     public func selectModel(_ model: ModelChoice) -> Bool {
+        if !isConnected {
+            deferredModel = model == currentModel ? nil : model
+            return true
+        }
         if model == currentModel, pendingModel == nil { return true }
         guard pendingModel == nil, pendingThinkingLevel == nil else {
             error = "Wait for the current model change to finish before choosing another."
@@ -1288,8 +1365,13 @@ public final class SessionStream: ModelSelecting {
         return requestModel(model)
     }
 
+    /// As `selectModel`: kept while the pod is not connected, and made when it is.
     @discardableResult
     public func selectThinkingLevel(_ level: String) -> Bool {
+        if !isConnected {
+            deferredThinkingLevel = level == currentThinkingLevel ? nil : level
+            return true
+        }
         if level == currentThinkingLevel, pendingThinkingLevel == nil { return true }
         guard pendingModel == nil, pendingThinkingLevel == nil else {
             error = "Wait for the current model change to finish before choosing another."
@@ -1543,6 +1625,9 @@ public final class SessionStream: ModelSelecting {
                 requestID: requestID
             )
 
+        case .modelScope(let patterns):
+            if let patterns { applyModelScope(patterns) }
+
         case .rpcResult(let id, let response):
             usage.accept(id: id, response: response)
 
@@ -1684,6 +1769,7 @@ public final class SessionStream: ModelSelecting {
         // anything answered elsewhere while detached is gone from this list.
         openDialogs.removeAll()
         _ = socket?.requestModels()
+        _ = socket?.requestModelScope()
         usage.attached()
         flushQueuedOffline()
         Task { await refreshPodRecord() }
@@ -1702,6 +1788,15 @@ public final class SessionStream: ModelSelecting {
     ) {
         let choices = models.compactMap { ModelChoice.from($0) }
         availableModels = choices
+        refreshScopedModels()
+        if !choices.isEmpty {
+            ModelCatalogCache.write(
+                ModelCatalogCache.Snapshot(
+                    models: choices, thinkingLevels: thinkingLevels,
+                    scopePatterns: modelScopePatterns
+                )
+            )
+        }
         let selected = ModelChoice.from(current)
         let confirmsPendingSelection = requestID == pendingSelectionRequestID
             || (requestID == nil && allowUncorrelatedSelectionConfirmation)
@@ -1773,12 +1868,61 @@ public final class SessionStream: ModelSelecting {
         } else if let thinkingLevel {
             currentThinkingLevel = thinkingLevel
         }
+        applyDeferredSelection(choices)
         startOnRememberedModel(choices)
         // A parked prompt may only cross the socket after the requested model
         // is confirmed on this connection.
         if pendingModel == nil, pendingThinkingLevel == nil {
             flushQueuedOffline()
         }
+    }
+
+    /// Makes the choice that was waiting for a connection, now that the pod says
+    /// what it offers.
+    ///
+    /// One request at a time, as every selection is: the model first, and the
+    /// thinking level on the catalog that confirms it, since switching models
+    /// re-clamps the level. Parked messages are not sent until both are confirmed.
+    private func applyDeferredSelection(_ choices: [ModelChoice]) {
+        guard deferredModel != nil || deferredThinkingLevel != nil else { return }
+        // A choice made by hand outranks the model remembered for a new pod.
+        ModelMemory.settled(podID: podId)
+        guard isConnected, pendingModel == nil, pendingThinkingLevel == nil else { return }
+        if let model = deferredModel {
+            deferredModel = nil
+            if model != currentModel {
+                if let offered = choices.first(where: { $0 == model }) {
+                    if requestModel(offered) { return }
+                } else {
+                    appendStatus(
+                        "\(model.name) isn’t available in this pod, so the model was not changed."
+                    )
+                }
+            }
+        }
+        if let level = deferredThinkingLevel {
+            deferredThinkingLevel = nil
+            if level != currentThinkingLevel, availableThinkingLevels.contains(level) {
+                _ = requestThinkingLevel(level)
+            }
+        }
+    }
+
+    private func applyModelScope(_ patterns: [String]) {
+        guard patterns != modelScopePatterns else { return }
+        modelScopePatterns = patterns
+        refreshScopedModels()
+        guard hasModelSnapshot else { return }
+        ModelCatalogCache.write(
+            ModelCatalogCache.Snapshot(
+                models: availableModels, thinkingLevels: availableThinkingLevels,
+                scopePatterns: patterns
+            )
+        )
+    }
+
+    private func refreshScopedModels() {
+        scopedModels = ModelScope.resolve(modelScopePatterns, in: availableModels)
     }
 
     /// A pod this app just launched starts on the model last chosen here (see `ModelMemory`),
@@ -1900,21 +2044,28 @@ public final class SessionStream: ModelSelecting {
             let itemId = activeAssistantItemId ?? id
             activeAssistantItemId = itemId
             upsertAssistant(
-                itemId, visibleMessageText(payload), timestamp, inProgress: true
+                itemId, visibleMessageText(payload), thinking: visibleThinkingText(payload),
+                timestamp, inProgress: true
             )
 
         case "message_end":
             guard messageRole(payload) == "assistant" else { return }
             let itemId = activeAssistantItemId ?? id
             let text = visibleMessageText(payload)
+            let thinking = visibleThinkingText(payload)
             if let failure = messageFailure(payload) {
-                upsertAssistant(itemId, failure, timestamp, inProgress: false, isError: true)
-            } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                upsertAssistant(
+                    itemId, failure, thinking: thinking, timestamp, inProgress: false, isError: true
+                )
+            } else if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // A turn that only called tools says nothing of its own; one that
+                // reasoned first still has that reasoning to show.
                 items.removeAll { $0.id == itemId }
                 scrollIsStreamingUpdate = false
                 scrollRevision += 1
             } else {
-                upsertAssistant(itemId, text, timestamp, inProgress: false)
+                upsertAssistant(itemId, text, thinking: thinking, timestamp, inProgress: false)
             }
             activeAssistantItemId = nil
             // Each finished reply is priced, so a long tool-calling turn shows
@@ -2000,6 +2151,7 @@ public final class SessionStream: ModelSelecting {
         items.removeAll { item in
             item.isInProgress && item.style == .assistant
                 && item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && item.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         for index in items.indices where items[index].isInProgress {
             items[index].isInProgress = false
@@ -2010,11 +2162,12 @@ public final class SessionStream: ModelSelecting {
     }
 
     private func upsertAssistant(
-        _ id: String, _ text: String, _ timestamp: Date?,
+        _ id: String, _ text: String, thinking: String, _ timestamp: Date?,
         inProgress: Bool, isError: Bool = false
     ) {
         if let index = items.firstIndex(where: { $0.id == id }) {
             items[index].text = text
+            items[index].thinking = thinking
             items[index].isInProgress = inProgress
             items[index].isError = isError
             if items[index].timestamp == nil { items[index].timestamp = timestamp }
@@ -2025,7 +2178,8 @@ public final class SessionStream: ModelSelecting {
         append(
             StreamItem(
                 id: id, style: .assistant, title: "pi", text: text,
-                timestamp: timestamp, isInProgress: inProgress, isError: isError
+                timestamp: timestamp, isInProgress: inProgress, isError: isError,
+                thinking: thinking
             )
         )
     }
@@ -2043,9 +2197,14 @@ public final class SessionStream: ModelSelecting {
             ? (isError ? "\(toolName) failed" : "\(toolName) completed")
             : "Running \(toolName)"
         let text = toolText(payload, ended: isEnd, isError: isError)
+        let summary = toolSummary(payload)
+        let input = toolInput(toolName, payload)
         if let index = items.firstIndex(where: { $0.id == itemId }) {
             items[index].title = title
             if !text.isEmpty { items[index].text = text }
+            // Only the start names the arguments; the end must not erase them.
+            if !summary.isEmpty { items[index].toolSummary = summary }
+            if !input.isEmpty { items[index].toolInput = input }
             items[index].isInProgress = !isEnd
             items[index].isError = isError
             scrollIsStreamingUpdate = !isEnd
@@ -2055,7 +2214,8 @@ public final class SessionStream: ModelSelecting {
         append(
             StreamItem(
                 id: itemId, style: .tool, title: title, text: text,
-                timestamp: timestamp, isInProgress: !isEnd, isError: isError
+                timestamp: timestamp, isInProgress: !isEnd, isError: isError,
+                toolName: toolName, toolSummary: summary, toolInput: input
             )
         )
     }
@@ -2098,7 +2258,7 @@ public final class SessionStream: ModelSelecting {
         append(
             StreamItem(
                 id: itemId, style: .tool, title: "Running bash", text: text,
-                timestamp: timestamp, isInProgress: true
+                timestamp: timestamp, isInProgress: true, toolName: "bash"
             )
         )
     }
@@ -2140,7 +2300,7 @@ public final class SessionStream: ModelSelecting {
 
     private func appendStatus(_ text: String) {
         append(
-            StreamItem(id: "local:\(syntheticId)", style: .status, title: "", text: text)
+            StreamItem(id: "\(localIDPrefix):\(syntheticId)", style: .status, title: "", text: text)
         )
         syntheticId -= 1
     }
@@ -2150,7 +2310,7 @@ public final class SessionStream: ModelSelecting {
     /// continue it.
     private func appendSessionBoundary() {
         let item = StreamItem(
-            id: "local:\(syntheticId)",
+            id: "\(localIDPrefix):\(syntheticId)",
             style: .status,
             title: "",
             text: (waking || asleep != nil) ? "Pod woke up." : "Connection restored."
@@ -2378,23 +2538,75 @@ public final class SessionStream: ModelSelecting {
         }.joined()
     }
 
+    /// The reasoning blocks of an assistant message, in order. Redacted blocks
+    /// carry no text.
+    private func visibleThinkingText(_ payload: JSONValue) -> String {
+        guard let blocks = payload["message"]?["content"]?.arrayValue else { return "" }
+        let parts = blocks.compactMap { block -> String? in
+            guard block["type"]?.stringValue == "thinking",
+                  let text = block["thinking"]?.stringValue,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            return text
+        }
+        return SessionStream.redactingSecrets(parts.joined(separator: "\n\n"))
+    }
+
+    /// What the tool has produced so far. Its arguments are `toolInput`, not this.
     private func toolText(_ payload: JSONValue, ended: Bool, isError: Bool) -> String {
-        var resultText = ""
-        if let result = payload["result"], let blocks = result["content"]?.arrayValue {
-            resultText = blocks.compactMap { $0["text"]?.stringValue }.joined(separator: "\n")
+        guard let result = payload["result"] ?? payload["partialResult"],
+              let blocks = result["content"]?.arrayValue
+        else { return "" }
+        let resultText = blocks.compactMap { $0["text"]?.stringValue }.joined(separator: "\n")
+        guard !resultText.isEmpty else { return "" }
+        let visible = SessionStream.redactingSecrets(resultText)
+        return truncated(ended && isError ? FriendlyError.message(serverText: visible) : visible)
+    }
+
+    /// The arguments that say what a tool call is about, most telling first.
+    private static let toolSummaryArguments = [
+        "command", "path", "file_path", "filePath", "pattern", "query", "url", "prompt",
+        "description", "name",
+    ]
+
+    /// One line naming what the tool was pointed at: the argument a person
+    /// would say first (a command, a path, a pattern), else the first argument
+    /// there is. Empty without arguments.
+    private func toolSummary(_ payload: JSONValue) -> String {
+        guard let args = payload["args"], let object = args.objectValue, !object.isEmpty
+        else { return "" }
+        let named = SessionStream.toolSummaryArguments.lazy.compactMap { key -> String? in
+            guard let value = args[key]?.stringValue,
+                  !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return nil }
+            return value
+        }.first
+        let line: String
+        if let named {
+            line = named
+        } else if let key = object.keys.sorted().first, let value = object[key] {
+            line = "\(key): \(value.stringValue ?? value.prettyPrinted())"
+        } else {
+            return ""
         }
-        if !resultText.isEmpty {
-            // Output the tool has already produced beats the arguments it was
-            // called with, finished or not: a `tool_execution_update` carries
-            // both, and showing the arguments hid every partial result until the
-            // call ended.
-            let visible = SessionStream.redactingSecrets(resultText)
-            return truncated(ended && isError ? FriendlyError.message(serverText: visible) : visible)
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = trimmed.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+            .first.map(String.init) ?? trimmed
+        return SessionStream.redactingSecrets(
+            firstLine.count <= 200 ? firstLine : String(firstLine.prefix(200)) + "…"
+        )
+    }
+
+    /// Everything the tool was given, as a person would read it: the command
+    /// itself for `bash`, the arguments otherwise. Empty when the frame names no
+    /// arguments, as the end frame does.
+    private func toolInput(_ toolName: String, _ payload: JSONValue) -> String {
+        guard let args = payload["args"], let object = args.objectValue, !object.isEmpty
+        else { return "" }
+        if toolName == "bash", let command = args["command"]?.stringValue {
+            return truncated(SessionStream.redactingSecrets(command))
         }
-        if let args = payload["args"], args.objectValue != nil {
-            return truncated(SessionStream.redactingSecrets(args.prettyPrinted()))
-        }
-        return truncated(SessionStream.redactingSecrets(resultText))
+        return truncated(SessionStream.redactingSecrets(args.prettyPrinted()))
     }
 
     /// Hides `NAME=value` assignments whose name looks like a credential, so a

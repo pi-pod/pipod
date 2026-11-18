@@ -29,7 +29,9 @@ import com.pipod.app.core.push.NotificationPermission
 import com.pipod.app.core.push.PushController
 import com.pipod.app.core.session.ApiClientSessionStoreApi
 import com.pipod.app.core.session.LiveSessionStreams
+import com.pipod.app.core.session.ModelCatalogCache
 import com.pipod.app.core.session.ModelMemory
+import com.pipod.app.core.session.TranscriptPreferences
 import com.pipod.app.core.session.SecureSessionTokenStorage
 import com.pipod.app.core.session.SessionAuthenticator
 import com.pipod.app.core.session.SessionEnvironment
@@ -237,6 +239,8 @@ class AppContainer(
         // A server chosen at sign-in outlives the process; every client below is built against it.
         RuntimeConfig.restoreServerChoice(context.getSharedPreferences("server", Context.MODE_PRIVATE))
         ModelMemory.attach(context.getSharedPreferences("models", Context.MODE_PRIVATE))
+        TranscriptPreferences.attach(context.getSharedPreferences("transcript", Context.MODE_PRIVATE))
+        ModelCatalogCache.attach(context.getSharedPreferences("models", Context.MODE_PRIVATE))
     }
 
     /**

@@ -433,6 +433,7 @@ public struct PodDetailView: View {
     private func informationSection(_ pod: Pod) -> some View {
         let config = pod.resolvedConfig
         return Section("Pod information") {
+            CopyablePodReference(pod: pod)
             if let project = pod.projectName {
                 DetailRow("Project", value: project)
             }
@@ -445,7 +446,12 @@ public struct PodDetailView: View {
                 .accessibilityLabel("Host, \(hostLabel(pod))")
                 .accessibilityIdentifier("pod.host")
             }
-            DetailRow("Network", value: networkLabel(config))
+            // A pod handed over from the list is a summary without its launch
+            // configuration; the full record replaces it a moment later. Until
+            // then the network policy is unknown, which is not "restricted".
+            if config.egress.mode != "unknown" {
+                DetailRow("Network", value: networkLabel(config))
+            }
             if let minutes = config.idleTimeoutMinutes {
                 DetailRow("Idle timeout", value: "\(minutes) minutes")
                 clamps(config.clamps, for: "idleTimeoutMinutes")
@@ -952,4 +958,43 @@ private func humanised(_ value: String) -> String {
         .replacingOccurrences(of: "-", with: " ")
     guard !words.isEmpty else { return value }
     return words.prefix(1).uppercased() + words.dropFirst()
+}
+
+
+/// The pod's reference, as a row whose value is meant to be carried somewhere
+/// else: tapping it copies. Monospaced, because it is matched character by
+/// character against what a terminal printed.
+private struct CopyablePodReference: View {
+    let pod: Pod
+
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = pod.ref
+            copied = true
+            Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                copied = false
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Pod ID")
+                    .foregroundStyle(AppColors.secondaryLabel)
+                Spacer(minLength: 12)
+                Text(copied ? "Copied" : pod.ref)
+                    .font(.subheadline.monospaced())
+                    .foregroundStyle(AppColors.label)
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.footnote)
+                    .foregroundStyle(AppColors.secondaryLabel)
+            }
+            .font(.subheadline)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Pod ID: \(pod.ref)")
+        .accessibilityHint("Copies the pod ID")
+        .accessibilityIdentifier("podDetail.ref")
+    }
 }

@@ -56,6 +56,13 @@ export interface ActiveSession {
   readyProbe: Promise<unknown> | null;
   /** Last session file mirrored to the pod row; dedupes the durable write, not a cache of truth. */
   piSessionFile: string | null;
+  /**
+   * Settles once a freshly spawned pi is back on the selection this pod was last seen on (or
+   * immediately, when there is nothing to put back). Prompts and selection mirrors wait on it.
+   */
+  selectionRestored: Promise<void>;
+  /** True while that restore is running: pi still reports the default it started on. */
+  restoringSelection: boolean;
   /** Accumulated bash stdout per request id for a client that attaches mid-command. */
   bashSnapshots: Map<string, string>;
   /** In-flight auxiliary completions by caller id; aborted on cancel/detach/session end. */
