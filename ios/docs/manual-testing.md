@@ -419,8 +419,10 @@ Unmarked items are **not yet verified** — that is the point of the list.
       session, then send into the dead socket → the turn parks, wakes the pod,
       flushes on the replacement session ("Pod woke up.") and appears exactly
       once. An explicit stop is dispositioned `unavailable` by the server itself
-      (`session_ended {kind: "unavailable", reason: "explicit_stop"}`), and the
-      client renders the server's kind verbatim.
+      (`session_ended {kind: "unavailable", reason: "explicit_stop"}`, and that
+      is what a stopped pod's history holds), but the client shows it as asleep
+      — `SessionStream.resolveEndKind` lets the reason win — so the screen says
+      "Pod is asleep" with Wake rather than "This pod is unavailable".
 - [unit] a gateway `error` frame ends the turn as failed (with Retry) instead of
       leaving it on "Sending…" forever, and a prompt over the gateway's 64 KiB
       limit is refused before it goes on the wire

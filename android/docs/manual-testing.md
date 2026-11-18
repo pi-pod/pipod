@@ -423,12 +423,16 @@ link doesn't match this attempt" — with no browser ever opening
 (`m3-abandon-browser-open.png` is the failure; `AuthCallbackBroker` now parks
 only a redirect carrying `code` or `error`).
 
-Not reproducible on this backend: a session end whose reason maps to `asleep`.
 `POST /v1/pods/:id/stop` ends the session with `explicit_stop`, which the
-server's own `sessionEndDisposition` classifies `unavailable`, and the fake
-provider's idle timeout is 15 minutes. The asleep-kind mapping (including the
-`persist_failed` / `host_stopped` / `host_archived` reasons this round added) is
-covered by `SessionStreamSessionEndRound2Test` instead.
+server's own `sessionEndDisposition` classifies `unavailable` (and stores that
+kind in the pod's history). The app shows it as asleep instead — `resolveEndKind`
+lets the reason win — because the reader put the pod to sleep themselves:
+reopening a pod stopped that way shows "Asleep", "Pod is asleep — sending a
+message wakes it." with a Wake button, and Wake works; stopping a pod under an
+attached session lands on the same screen (verified on the emulator against the
+fake provider). The fake provider's idle timeout is 15 minutes, so the other
+asleep reasons (including `persist_failed` / `host_stopped` / `host_archived`)
+are covered by `SessionStreamSessionEndRound2Test`.
 
 ### Automated gate for this pass
 
