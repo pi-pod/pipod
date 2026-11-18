@@ -101,6 +101,12 @@ function installRemoteExtensionUi(ui) {
   };
   const emitControl = (action, value) => emit({ v: REMOTE_UI_CONFIG.version, kind: "control", action, value });
 
+  // pi-tui's own test, restated because this module carries no pi-tui import: a kitty
+  // key-release event ends ":3" before its final byte, and pasted text is never a key event.
+  const KEY_RELEASE_SUFFIXES = [":3u", ":3~", ":3A", ":3B", ":3C", ":3D", ":3H", ":3F", ":3P", ":3Q", ":3S"];
+  const isKeyRelease = (data) =>
+    typeof data === "string" && !data.includes("\u001b[200~") && KEY_RELEASE_SUFFIXES.some((suffix) => data.includes(suffix));
+
   const keyMap = {
     "tui.select.up": ["\u001b[A"],
     "tui.select.down": ["\u001b[B"],
@@ -182,6 +188,10 @@ function installRemoteExtensionUi(ui) {
     onTerminalColorSchemeChange() { return () => {}; }
     setTerminalColorSchemeNotifications() {}
     queryTerminalBackgroundColor() { return Promise.resolve(undefined); }
+    /** The component input is delivered to: the topmost visible overlay, else the focused one. */
+    inputTarget() {
+      return [...this.overlays].reverse().find((entry) => !entry.hidden)?.component || this.focusedComponent || this.surface.component;
+    }
     dispatchInput(data) {
       let next = data;
       for (const listener of this.inputListeners) {
@@ -189,7 +199,11 @@ function installRemoteExtensionUi(ui) {
         if (result?.consume) return;
         if (typeof result?.data === "string") next = result.data;
       }
-      const target = [...this.overlays].reverse().find((entry) => !entry.hidden)?.component || this.focusedComponent || this.surface.component;
+      const target = this.inputTarget();
+      // Same contract as pi-tui's own dispatch: a key release reaches only a component that
+      // asked for it. Editors and inputs decode a release as its printable key, so passing
+      // one through types every character twice.
+      if (isKeyRelease(next) && !target?.wantsKeyRelease) return;
       target?.handleInput?.(next);
     }
   }
@@ -232,6 +246,8 @@ function installRemoteExtensionUi(ui) {
         ...(editorSubmit !== undefined
           ? { editorSubmit: editorSubmit.text, editorSubmitId: editorSubmit.id } : {}),
         ...this.metadata,
+        // Lets the client keep releases off the wire unless this input target wants them.
+        ...(this.tui.inputTarget()?.wantsKeyRelease ? { wantsKeyRelease: true } : {}),
         ...(error ? { error: error.slice(0, 1024) } : {}),
       };
     }

@@ -17,7 +17,6 @@ import type {
   RunAccountLaunchOptions,
 } from "./launch-types.js";
 import { seedWorkspace } from "./launch-seed.js";
-import { runAccountSession } from "./session.js";
 import { describeWorkspaceSeed } from "./workspace-seed.js";
 import { displayRef } from "./ref.js";
 import { withCapacityHint } from "./capacity-errors.js";
@@ -290,6 +289,9 @@ export async function runAccountLaunch(opts: RunAccountLaunchOptions): Promise<n
     });
     throwIfCancelled();
 
+    // Loaded here, not at startup: the session is the only part of the CLI that needs pi
+    // itself, and importing pi costs every other command a third of a second.
+    const { runAccountSession } = await import("./session.js");
     const result = await runAccountSession({
       client,
       pod: started,

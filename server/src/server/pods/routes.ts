@@ -157,7 +157,12 @@ export function podConnection(
   return "reconnecting";
 }
 
-function toApi(pod: PodRow, gateway: GatewayService | null = null) {
+/**
+ * A pod as a roster shows it: identity, state and activity. The frozen launch report is most
+ * of a pod's bytes (several kilobytes each) and no listing prints it, so `GET /v1/pods` can
+ * answer with this alone and a few hundred pods stay a small response.
+ */
+function toApiSummary(pod: PodRow, gateway: GatewayService | null = null) {
   const hostPodName = (pod as PodRow & { host_pod_name?: string | null }).host_pod_name ?? null;
   return {
     id: pod.id,
@@ -191,6 +196,12 @@ function toApi(pod: PodRow, gateway: GatewayService | null = null) {
     stateReasonCode: parseLaunchFailureCode(pod.state_reason),
     lastActivityAt: pod.last_activity_at,
     createdAt: pod.created_at,
+  };
+}
+
+function toApi(pod: PodRow, gateway: GatewayService | null = null) {
+  return {
+    ...toApiSummary(pod, gateway),
     resolvedConfig: {
       workdir: pod.resolved_config.workdir,
       clamps: pod.resolved_config.clamps,
@@ -263,7 +274,19 @@ function peerView(api: ReturnType<typeof toApi>): ReturnType<typeof toApi> {
 }
 
 function viewFor(api: ReturnType<typeof toApi>, auth: AuthContext): ReturnType<typeof toApi> {
-  return api.userId === auth.userId || hasPermission(auth.permissions, "pods:manage_any") ? api : peerView(api);
+  return seesAsPeer(api, auth) ? peerView(api) : api;
+}
+
+function seesAsPeer(api: { userId: string }, auth: AuthContext): boolean {
+  return api.userId !== auth.userId && !hasPermission(auth.permissions, "pods:manage_any");
+}
+
+/** The summary under the same rule as {@link peerView}: a peer reads the reason, not the output. */
+function summaryViewFor(
+  api: ReturnType<typeof toApiSummary>,
+  auth: AuthContext,
+): ReturnType<typeof toApiSummary> {
+  return seesAsPeer(api, auth) ? { ...api, stateReason: api.stateReason?.split("\n")[0] ?? null } : api;
 }
 
 function launchAdmissionRefusal(error: unknown): { retryable: boolean; code: string } | null {
@@ -955,6 +978,11 @@ export function registerPodRoutes(
           /** Pods launched from one template — an org's "who is using this environment?". */
           templateId: z.string().uuid().optional(),
           limit: z.coerce.number().int().min(1).max(200).default(100),
+          /**
+           * `summary` leaves each pod's launch report (`resolvedConfig`, `report`) out of the
+           * answer: what a roster needs, at a fraction of the size. Paging is unchanged.
+           */
+          view: z.literal("summary").optional(),
           /** Legacy timestamp-only boundary. Prefer the opaque nextCursor returned by this route. */
           before: z.string().datetime({ offset: true }).optional(),
           cursor: z.string().max(128).transform((value, ctx) => {
@@ -1005,7 +1033,9 @@ export function registerPodRoutes(
       const page = rows.slice(0, req.query.limit);
       const last = page.at(-1);
       return {
-        pods: page.map((row) => viewFor(toApi(row, gateway), req.auth)),
+        pods: req.query.view === "summary"
+          ? page.map((row) => summaryViewFor(toApiSummary(row, gateway), req.auth))
+          : page.map((row) => viewFor(toApi(row, gateway), req.auth)),
         // The cursor captures the boundary itself, so deletion of that pod cannot break paging.
         nextCursor: rows.length > page.length && last ? `${last.list_activity_at}/${last.id}` : null,
       };

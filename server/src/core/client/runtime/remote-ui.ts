@@ -19,7 +19,7 @@ import {
   type RemoteUiInput,
   type RemoteUiSurfaceFrame,
 } from "../../remote-ui-protocol.js";
-import type { HostBridge, HostUiContext } from "./bridge.js";
+import type { EditorComponentFactory, HostBridge, HostUiContext } from "./bridge.js";
 
 export interface RemoteUiExtensionRequest {
   type: "extension_ui_request";
@@ -38,7 +38,6 @@ type Done = (value: unknown) => void;
 
 class RemoteSurfaceComponent {
   focused = true;
-  wantsKeyRelease = true;
   onSubmit?: (text: string) => void;
   onChange?: (text: string) => void;
   private tui: TuiLike | null = null;
@@ -48,6 +47,16 @@ class RemoteSurfaceComponent {
   private lastEditorSubmitId = 0;
 
   constructor(private readonly owner: RemoteSurface) {}
+
+  /**
+   * pi-tui hands a key release only to a focused component that asks for it. This proxy
+   * stands in for a component in the pod, so the pod answers: a release is forwarded only
+   * when the pod component opted in. Anything else — including a pod too old to say —
+   * never sees one, because an editor or input given a release types that key again.
+   */
+  get wantsKeyRelease(): boolean {
+    return this.owner.frame.wantsKeyRelease === true;
+  }
 
   bind(tui: TuiLike, done?: Done): this {
     this.tui = tui;
@@ -150,6 +159,8 @@ class RemoteSurface {
       this.revision = frame.revision;
       this.lines = sanitizeLines(frame.lines ?? []);
       Object.assign(this.frame, frame);
+      // Each frame restates it: the input target changes as overlays open and close in the pod.
+      this.frame.wantsKeyRelease = frame.wantsKeyRelease === true;
       this.component.requestRender();
       this.component.applyEditorFrame(frame.editorText, frame.editorSubmit, frame.editorSubmitId);
     }
@@ -288,6 +299,10 @@ export class RemoteUiBridge {
   private disposed = false;
   private warnedUnavailable = false;
   private activeContextRevision = 0;
+  /** The factory this bridge installed for the pod-rendered editor, while it is mounted. */
+  private remoteEditorFactory: EditorComponentFactory | null = null;
+  /** See {@link localExtensionUi}: a locally rendered extension holds the editor slot. */
+  private localEditorClaimed = false;
   private readonly offUiBound: () => void;
   private readonly offLifecycle: () => void;
 
@@ -317,6 +332,64 @@ export class RemoteUiBridge {
       this.activeContextRevision = 0;
       this.reset();
     });
+  }
+
+  /**
+   * The UI context for extensions rendered in this process. It differs from `ui` only in the
+   * editor slot, the one surface both a local extension and the pod can install into.
+   *
+   * A local editor outranks the pod-rendered one. Typing into it never waits on the pod,
+   * while a pod-rendered editor costs a round trip per key; and the two are usually the same
+   * extension, running on both sides. So a local extension never sees the pod's editor as the
+   * one to wrap, and while it holds the slot the pod's editor stays unmounted. The claim
+   * outlives a UI rebind — pi clears the slot and the extension installs its editor again —
+   * so a reconnect cannot hand the user's prompt to the pod in between. It ends when the
+   * extension gives the slot back, or when {@link localExtensionsGone} says none are left.
+   */
+  localExtensionUi(ui: HostUiContext): HostUiContext {
+    return new Proxy(ui, {
+      get: (target, property) => {
+        if (property === "getEditorComponent") {
+          return () => {
+            const current = target.getEditorComponent?.();
+            return current === this.remoteEditorFactory ? undefined : current;
+          };
+        }
+        if (property === "setEditorComponent") {
+          return (factory: EditorComponentFactory | undefined) => {
+            this.localEditorClaimed = factory !== undefined;
+            if (factory !== undefined) this.yieldEditorSlot();
+            target.setEditorComponent?.(factory);
+            // An extension also lets go on its way out; a session that is ending has no
+            // use for the pod's editor in the slot it leaves behind.
+            if (factory === undefined && this.bridge.intent === null) this.mountEditorSurface();
+          };
+        }
+        return Reflect.get(target, property, target) as unknown;
+      },
+    });
+  }
+
+  /** No extension renders locally any more, so nothing local can hold the editor slot. */
+  localExtensionsGone(): void {
+    if (!this.localEditorClaimed) return;
+    this.localEditorClaimed = false;
+    this.mountEditorSurface();
+  }
+
+  /** The pod's editor is being replaced by a local one; it stays live, just not on screen. */
+  private yieldEditorSlot(): void {
+    const surfaceId = this.slots.get("editor");
+    const surface = surfaceId === undefined ? undefined : this.surfaces.get(surfaceId);
+    if (surface) surface.mounted = false;
+    this.slots.delete("editor");
+    this.remoteEditorFactory = null;
+  }
+
+  private mountEditorSurface(): void {
+    for (const surface of this.surfaces.values()) {
+      if (surface.frame.role === "editor") this.mount(surface);
+    }
   }
 
   /** Intercept reserved input/notify requests before ordinary extension UI dispatch. */
@@ -406,7 +479,13 @@ export class RemoteUiBridge {
         if (this.owns("footer", surface)) ui.setFooter?.(undefined);
         break;
       case "editor":
-        if (this.owns("editor", surface)) ui.setEditorComponent?.(undefined);
+        if (this.owns("editor", surface)) {
+          // Give the slot up with the mount: a surface that is not remounted (a local editor
+          // holds the slot) must not later clear an editor that was never its own.
+          this.slots.delete("editor");
+          this.remoteEditorFactory = null;
+          ui.setEditorComponent?.(undefined);
+        }
         break;
     }
   }
@@ -473,12 +552,17 @@ export class RemoteUiBridge {
         this.slots.set("footer", surface.frame.surfaceId);
         ui.setFooter((tui) => proxy.bind(tui as TuiLike));
         break;
-      case "editor":
+      case "editor": {
         if (!ui.setEditorComponent) return this.unavailable(surface);
+        // The surface stays live and unmounted; it mounts when the local editor lets go.
+        if (this.localEditorClaimed) return;
         surface.mounted = true;
         this.slots.set("editor", surface.frame.surfaceId);
-        ui.setEditorComponent((tui) => proxy.bind(tui as TuiLike));
+        const factory: EditorComponentFactory = (tui) => proxy.bind(tui as TuiLike);
+        this.remoteEditorFactory = factory;
+        ui.setEditorComponent(factory);
         break;
+      }
     }
   }
 

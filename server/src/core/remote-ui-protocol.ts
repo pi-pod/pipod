@@ -44,6 +44,12 @@ export interface RemoteUiSurfaceFrame {
   overlayOptions?: RemoteUiOverlayOptions;
   /** Mirrored overlay-handle focus: the pod extension called handle.focus()/unfocus(). */
   focused?: boolean;
+  /**
+   * The pod component that receives this surface's input opted into key-release events.
+   * Absent means the client must not send them: pi-tui delivers a release only to a component
+   * that asks, and every other component would type the released key a second time.
+   */
+  wantsKeyRelease?: boolean;
   editorText?: string;
   editorSubmit?: string;
   editorSubmitId?: number;
@@ -137,6 +143,7 @@ function isRemoteUiFrame(value: unknown): value is RemoteUiFrame {
   if (typeof value.role !== "string" || !REMOTE_UI_ROLES.has(value.role as RemoteUiRole)) return false;
   if (value.contextRevision !== undefined && (!Number.isInteger(value.contextRevision) || (value.contextRevision as number) < 1)) return false;
   if (value.focused !== undefined && typeof value.focused !== "boolean") return false;
+  if (value.wantsKeyRelease !== undefined && typeof value.wantsKeyRelease !== "boolean") return false;
   if (value.lines !== undefined) {
     if (!Array.isArray(value.lines) || value.lines.length > REMOTE_UI_MAX_LINES) return false;
     if (!value.lines.every((line) => typeof line === "string" && line.length <= REMOTE_UI_MAX_LINE_LENGTH)) return false;

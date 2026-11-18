@@ -10,7 +10,11 @@
  *
  * Reconnects are internal: an abnormal socket drop re-mints a ticket and re-attaches
  * through one backoff loop, then reports through `onRecovered` so the runtime can re-sync
- * state. Connection *state* is reported separately via `onConnectionState` so the session
+ * state. That loop ends only by reconnecting, by finding the pod asleep, or by the user
+ * leaving. A refused attach slows the probing down but does not stop it, so `lost` always
+ * means "still trying" — whatever was wrong can be put right from outside this process
+ * (the network returning, a sign-in renewed in another terminal, a server deploy finishing).
+ * Connection *state* is reported separately via `onConnectionState` so the session
  * driver can render it; the transport itself never writes to the screen.
  */
 import { randomBytes, randomUUID } from "node:crypto";
@@ -47,6 +51,9 @@ import {
   PONG_DEADLINE_MS,
   RECOVERY_RETRY_MAX_MS,
   SEMANTIC_REQUEST_TIMEOUT_MS,
+  WAKE_CHECK_INTERVAL_MS,
+  WAKE_DRIFT_MS,
+  WAKE_PROBE_DEADLINE_MS,
   SYNTHETIC_EVENT_KINDS,
   type ConnectionState,
   type GatewayRpcOptions,
@@ -218,6 +225,7 @@ export class GatewayRpcClient extends RpcClientBase {
   private readonly connectingSockets = new Set<WebSocket>();
   private serverHello: ServerHello | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
+  private wakeTimer: NodeJS.Timeout | null = null;
   private lastActivityAt = 0;
   private keepRetrying = false;
   private keepRetryKick: (() => void) | null = null;
@@ -749,6 +757,8 @@ export class GatewayRpcClient extends RpcClientBase {
       const reason = error.message;
       this.emitConnectionState({ kind: "lost", reason });
       this.opts.onLost?.();
+      // This wake is over, but lost never means abandoned: the recover loop keeps probing.
+      void this.recover(1006, reason, "drop", generation, podId);
       throw error;
     } finally {
       this.waking = false;
@@ -764,6 +774,8 @@ export class GatewayRpcClient extends RpcClientBase {
     this.asleepReason = null;
     if (this.pingTimer) clearInterval(this.pingTimer);
     this.pingTimer = null;
+    if (this.wakeTimer) clearInterval(this.wakeTimer);
+    this.wakeTimer = null;
     for (const socket of this.connectingSockets) {
       try {
         socket.close(1000, "detach");
@@ -812,9 +824,47 @@ export class GatewayRpcClient extends RpcClientBase {
 
   private startPingWatchdog(): void {
     if (this.pingTimer) clearInterval(this.pingTimer);
+    if (this.wakeTimer) clearInterval(this.wakeTimer);
     const intervalMs = this.opts.pingIntervalMs ?? PING_INTERVAL_MS;
     this.pingTimer = setInterval(() => this.pingWatchdogTick(), intervalMs);
     this.pingTimer.unref?.();
+    // A suspended machine freezes timers, so on resume the ping above can be a whole interval
+    // away while the socket is long dead. The wall clock is what moved: a tick that arrives
+    // far later than it was due means the machine slept, and the socket is checked at once.
+    let lastTickAt = this.now();
+    this.wakeTimer = setInterval(() => {
+      const now = this.now();
+      const slept = now - lastTickAt > WAKE_CHECK_INTERVAL_MS + WAKE_DRIFT_MS;
+      lastTickAt = now;
+      if (slept) this.probeAfterWake();
+    }, WAKE_CHECK_INTERVAL_MS);
+    this.wakeTimer.unref?.();
+  }
+
+  /**
+   * The machine just woke. A socket that survived the sleep answers a ping at once; one that
+   * does not answer by the deadline is dead, and waiting out the ordinary pong deadline would
+   * only delay the reconnect the user is already looking at.
+   */
+  private probeAfterWake(): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const sentAt = this.now();
+    try {
+      this.wsSend({ type: "ping" });
+    } catch {
+      return; // The close handler owns reconnection.
+    }
+    const deadline = setTimeout(() => {
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN || this.lastActivityAt >= sentAt) return;
+      debug("gateway-rpc: no answer after resume; terminating the dead socket");
+      try {
+        ws.terminate();
+      } catch {
+        // The close handler owns recovery.
+      }
+    }, WAKE_PROBE_DEADLINE_MS);
+    deadline.unref?.();
   }
 
   private pingWatchdogTick(): void {
@@ -1452,8 +1502,10 @@ export class GatewayRpcClient extends RpcClientBase {
       const helloTimeoutMs = announcedKeepTrying
         ? Math.min(CONNECT_TIMEOUT_MS, this.opts.keepRetryingIntervalMs ?? KEEP_RETRYING_INTERVAL_MS)
         : Math.min(CONNECT_TIMEOUT_MS, remainingMs);
+      let attached = false;
       try {
         await this.attach(generation, podId, retryDelayMs, helloTimeoutMs);
+        attached = true;
         if (!this.hasRecoveryAuthority(generation, podId)) return false;
         this.noteSuccessfulRecovery();
         this.keepRetrying = false;
@@ -1468,12 +1520,26 @@ export class GatewayRpcClient extends RpcClientBase {
           this.enterAsleep(asleepReasonFromError(error));
           return true;
         }
-        if (kind === "fatal") {
+        // The pod was archived while this client was away. That is sleep, not loss: the
+        // keystroke that wakes an asleep pod restores an archived one first.
+        if (isRestoreRequiredError(error)) {
+          this.enterAsleep("archived");
+          return true;
+        }
+        // The transport came back; what was refused is re-syncing the session over it (a
+        // declined pi update, a version it will not run). Attaching again only asks again.
+        if (kind === "fatal" && attached) {
           debug(`gateway-rpc: recovery aborted: ${error.message}`);
           return false;
         }
-        if (!announcedKeepTrying && (attempt >= maxAttempts || this.now() >= deadline)) {
-          debug(`gateway-rpc: recovery budget exhausted: ${error.message}; keep trying`);
+        // A refused attach is not improved by the fast retries, so it is reported at once
+        // instead of after the whole budget. It is still not the end: signing in again in
+        // another terminal, or a server finishing a deploy, makes the very same attach
+        // succeed, and only a client that kept probing notices. Short of success, sleep, or
+        // the user quitting, nothing stops this loop.
+        const exhausted = attempt >= maxAttempts || this.now() >= deadline;
+        if (!announcedKeepTrying && (kind === "fatal" || exhausted)) {
+          debug(`gateway-rpc: ${kind === "fatal" ? "attach refused" : "recovery budget exhausted"}: ${error.message}; keep trying`);
           this.keepRetrying = true;
           this.emitConnectionState({ kind: "lost", reason: error.message });
           this.opts.onLost?.();

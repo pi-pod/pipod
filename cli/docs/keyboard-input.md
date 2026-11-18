@@ -120,6 +120,40 @@ Measured on a live pod with the pinned Pi pair: a single dual-encoded press duri
 reconnect refresh inserted `bb` before the fix and `b` after it. The terminal retained one stdin
 reader; the defect was a missing guard during recovery, not duplicate stdin subscriptions.
 
+## 5. A key release sent to the pod types the key again
+
+An extension's component can run in the pod and render here (`remote-ui.ts`): the local proxy
+forwards input, and the pod's virtual TUI hands it to the real component. pi-tui delivers a key
+*release* only to a focused component that sets `wantsKeyRelease`, because `Editor` and `Input`
+decode a release (`CSI <cp>;1:3u`) as the printable key it names. The proxy claimed
+`wantsKeyRelease` for every surface and the pod's dispatch passed releases straight through, so
+on a terminal that reports releases every pod-rendered text field typed each character twice:
+once for the press, once for the release. `/btw`'s prompt did this on every key.
+
+Both halves now follow pi-tui's contract. The pod's dispatch drops a release unless its input
+target asked for one, and each frame says whether it did (`wantsKeyRelease`); the proxy
+forwards a release only when the latest frame says so. A pod that started before this fix
+never sets the field, so the client alone stops the doubling there, and a release costs no
+round trip anywhere it is not wanted.
+
+## 6. A reconnect must not swap the editor for the pod's copy
+
+The same extension often runs on both sides: in the pod, and here for rendering. One that
+installs a custom editor does it twice, and only one editor can hold the slot. The gateway
+replays the pod's editor surface on every attach, so after a reconnect the pod-rendered copy
+used to replace the local editor the user had been typing in: every key then round-tripped to
+the pod, doubled (section 5), and Ctrl+D no longer reached pi's own exit handling.
+
+`RemoteUiBridge` owns the rule: a locally rendered editor outranks the pod-rendered one. Local
+extensions get a UI context whose editor slot never shows them the pod's editor, and once one
+installs its own, the pod's stays unmounted until the extension gives the slot back. The claim
+survives the UI rebind a reconnect causes, so there is no window in which the prompt belongs
+to the pod. A session with no local editor mounts the pod-rendered one exactly as before.
+
+Measured on a live pod running an extension that installs its editor on both sides: before,
+a transport drop left `RemoteSurfaceComponent` as the editor and `e`, `f` typed `eeff`; after,
+the editor is the same local `CustomEditor` across the drop and they type `ef`.
+
 ## Accepted rows
 
 Measured with a pty harness against pi 1.0.2 + pi-tui 1.0.2 (the pinned pair), driving
