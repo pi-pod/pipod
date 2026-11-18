@@ -1,4 +1,4 @@
-import type { ApiPod } from "./api.js";
+import type { ApiPodSummary } from "./api.js";
 
 /**
  * Storage-aware status vocabulary (cost-control plan §3.4). The logical state keeps its
@@ -27,7 +27,7 @@ export type PodStorageKind =
   | "archived-hidden-retained"
   | "archived-hidden-cold";
 
-export function podStorageKind(pod: ApiPod): PodStorageKind {
+export function podStorageKind(pod: ApiPodSummary): PodStorageKind {
   if (pod.preparationPhase === "failed") return "failed";
   if (pod.initializing) return "starting";
   const sandbox = pod.sandboxState ?? null;
@@ -42,7 +42,7 @@ export function podStorageKind(pod: ApiPod): PodStorageKind {
   return "running";
 }
 
-export function podStatusLabel(pod: ApiPod): string {
+export function podStatusLabel(pod: ApiPodSummary): string {
   if (pod.preparationPhase === "failed") return "failed";
   if (pod.preparationPhase === "waiting-for-capacity") return "waiting for capacity";
   if (pod.initializing) return pod.preparationPhase ?? "preparing";

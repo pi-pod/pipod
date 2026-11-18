@@ -6,6 +6,25 @@ once. Project, template, account and machine-group scopes use the same page walk
 so does bulk archive/restore/GC selection. Short-ref/name resolution uses the
 bounded lookup below; only an older server without that route uses pagination.
 
+## What a listing asks for
+
+`pipod ls` prints identity, state and activity, so it asks for exactly that:
+
+- `view=summary` leaves each pod's frozen launch report (`resolvedConfig`, `report`) out of
+  the response. The report is most of a pod's bytes — a page of 200 pods measured 3.6 MB with
+  it — and no roster prints it. A server that predates the view ignores it and answers with
+  whole pods, which the CLI reads the same way.
+- `state=active` unless `--archived` was given. Archived pods are most of a long-lived account
+  (one measured 98 active of 1,012), and the default listing hides them, so the server leaves
+  them out instead of the CLI paging through them to drop them.
+
+Commands that act on what they select (bulk archive/restore/GC, a bare `attach`) still read
+whole pods and every state.
+
+Measured against one production account, `pipod ls --all` went from 5.6 s (six 200-pod pages)
+to under a second with these two filters, and the process itself starts in about 80 ms instead
+of 400 ms because pi is now loaded only by commands that open a session.
+
 ## API contract
 
 `GET /v1/pods` returns `{ pods, nextCursor }`. A page contains at most `limit`

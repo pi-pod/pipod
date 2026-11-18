@@ -453,7 +453,19 @@ export async function refreshTokens(
     }),
     signal: AbortSignal.timeout(OIDC_NETWORK_TIMEOUT_MS),
   }).catch(() => null);
-  if (!res) throw new PiPodError("your pi pod server session has expired", { hint: "run `pipod login`" });
+  // Only the identity provider's own refusal ends a session. Not reaching it, or reaching it
+  // while it is failing, says nothing about the refresh token: a laptop waking from sleep
+  // asks before its network is back, and "sign in again" would be the wrong answer to that.
+  if (!res) {
+    throw new PiPodError(`cannot reach the identity provider at ${meta.issuer} to renew the sign-in`, {
+      transient: true,
+    });
+  }
+  if (res.status >= 500 || res.status === 429) {
+    throw new PiPodError(`the identity provider could not renew the sign-in right now (HTTP ${res.status})`, {
+      transient: true,
+    });
+  }
   try {
     const tokens = await readTokenResponse(res);
     if (tokens.idToken) {

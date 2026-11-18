@@ -20,6 +20,12 @@ export const CONNECT_NOTICE_MS = 10_000;
 export const PING_INTERVAL_MS = 15_000;
 /** Two missed ping intervals, plus a little slack, before a silent socket is treated as dead. */
 export const PONG_DEADLINE_MS = 40_000;
+/** How often the transport looks for a wall-clock jump, the mark of a machine that slept. */
+export const WAKE_CHECK_INTERVAL_MS = 2_000;
+/** A tick this much later than due was not a busy event loop: the machine was suspended. */
+export const WAKE_DRIFT_MS = 10_000;
+/** After a resume, how long a surviving socket has to answer before it is treated as dead. */
+export const WAKE_PROBE_DEADLINE_MS = 5_000;
 /** Old gateways ignore semantic capability requests; absence is established by this bound. */
 export const SEMANTIC_REQUEST_TIMEOUT_MS = 10_000;
 /** After the drop-recovery budget, keep probing this often instead of sitting permanently lost. */
@@ -95,6 +101,8 @@ export function classifyAttachError(error: Error): AttachErrorClass {
   if (/provider_resource_exhausted|PTY slots are exhausted/i.test(error.message)) return "fatal";
   if (error instanceof PiPodError) {
     if (error.transient) return "retryable";
+    // "Slow down" and "took too long" are 4xx by number only; waiting is the whole remedy.
+    if (error.status === 429 || error.status === 408) return "retryable";
     if (error.status === 401 || error.status === 403) return "fatal";
     if (error.status === 404 || error.status === 410) return "fatal";
     if (error.status !== undefined && error.status >= 400 && error.status < 500) return "fatal";

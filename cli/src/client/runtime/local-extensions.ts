@@ -23,7 +23,7 @@ import * as path from "node:path";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { debug } from "../../log.js";
 import type { AppendEntry } from "./append-entry-bridge.js";
-import type { HostBridge } from "./bridge.js";
+import type { HostBridge, HostUiContext } from "./bridge.js";
 import { findTreeNode, type RemoteStateCache } from "./state.js";
 
 // ---------------------------------------------------------------------------
@@ -168,6 +168,8 @@ export interface LocalExtensionHostOptions {
   modelRegistry: object;
   /** Merged command list for pi.getCommands() — the same view the TUI autocomplete gets. */
   getCommands(): unknown[];
+  /** The UI context local extensions receive, derived from each context pi binds. */
+  localUi(ui: HostUiContext): HostUiContext;
   /** Test seam: substitute pi internals. */
   internals?: PiExtensionInternals;
 }
@@ -422,7 +424,7 @@ export async function createLocalExtensionHost(
 
   // The real local UI context (theme included) — rebound on every session replacement,
   // because InteractiveMode hands over a fresh context each time it rebinds.
-  const unbindUi = bridge.onEveryUiBound((ui) => runner.setUIContext(ui as never, "tui"));
+  const unbindUi = bridge.onEveryUiBound((ui) => runner.setUIContext(opts.localUi(ui) as never, "tui"));
 
   const emitLifecycle = async (event: { type: string; reason: string }): Promise<void> => {
     if (!runner.hasHandlers(event.type)) return;

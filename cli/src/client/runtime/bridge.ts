@@ -30,6 +30,9 @@ export type EndingIntent =
  */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
+/** Builds the component that replaces pi's prompt editor; the editor slot holds one at a time. */
+export type EditorComponentFactory = (tui: unknown, theme: unknown, keybindings: unknown) => unknown;
+
 /**
  * The slice of pi's ExtensionUIContext the runtime keeps a handle on — captured from
  * `bindExtensions`, used by the extension-UI mapping (§5.3), /pod notices and the chords.
@@ -57,7 +60,8 @@ export interface HostUiContext {
   setWorkingIndicator?(options?: unknown): void;
   setHiddenThinkingLabel?(label?: string): void;
   setToolsExpanded?(expanded: boolean): void;
-  setEditorComponent?(factory: ((tui: unknown, theme: unknown, keybindings: unknown) => unknown) | undefined): void;
+  setEditorComponent?(factory: EditorComponentFactory | undefined): void;
+  getEditorComponent?(): EditorComponentFactory | undefined;
   setTitle?(title: string): void;
   setEditorText?(text: string): void;
   onTerminalInput?(handler: TerminalInputHandler): () => void;

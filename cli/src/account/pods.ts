@@ -12,7 +12,7 @@ import { CancelledError, EXIT, PiPodError } from "../errors.js";
 import { withCapacityHint } from "./capacity-errors.js";
 import { color, info, out, warn } from "../log.js";
 import { confirm } from "../prompt.js";
-import type { AccountClient, ApiPod, ApiTemplate } from "./api.js";
+import type { AccountClient, ApiPod, ApiPodSummary, ApiTemplate, PodListQuery } from "./api.js";
 import {
   currentProjectName,
   currentProjectTemplateRef,
@@ -23,7 +23,6 @@ import {
   type AccountLaunchFlags,
 } from "./launch.js";
 import { podStatusLabel, podStorageKind } from "./pod-status.js";
-import { runAccountSession } from "./session.js";
 import { displayRef, isFullUuid, matchesRef } from "./ref.js";
 import { withWorkstationWait } from "./workstation.js";
 import { billingSummaryLine, type AccountBilling } from "./billing.js";
@@ -50,17 +49,17 @@ const PAGE_LIMIT = 200;
  * move between pages, so deduplicate by id. A stalled server is an error, not a complete
  * roster that a caller might trust for a bulk operation.
  */
-async function listAllPods(
-  client: AccountClient,
-  query: { project?: string | undefined; templateId?: string | undefined; includeGone?: boolean | undefined },
-): Promise<{ pods: ApiPod[] }> {
-  const pods: ApiPod[] = [];
+async function walkPodPages<Pod extends ApiPodSummary>(
+  fetchPage: (page: PodListQuery) => Promise<{ pods: Pod[]; nextCursor?: string | null }>,
+  query: PodScopeQuery,
+): Promise<{ pods: Pod[] }> {
+  const pods: Pod[] = [];
   const seenIds = new Set<string>();
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   let before: string | undefined;
   for (;;) {
-    const page = await client.listPods({ mine: true, limit: PAGE_LIMIT, cursor, before, ...query });
+    const page = await fetchPage({ mine: true, limit: PAGE_LIMIT, cursor, before, ...query });
     for (const pod of page.pods) {
       if (!seenIds.has(pod.id)) pods.push(pod);
       seenIds.add(pod.id);
@@ -85,31 +84,51 @@ async function listAllPods(
   }
 }
 
+/** The filters a caller chooses; paging and ownership are the walk's own. */
+type PodScopeQuery = Pick<PodListQuery, "project" | "templateId" | "includeGone" | "state">;
+
+/** Whole pods, launch report included: for callers that go on to act on what they select. */
+function listAllPods(client: AccountClient, query: PodScopeQuery): Promise<{ pods: ApiPod[] }> {
+  return walkPodPages((page) => client.listPods(page), query);
+}
+
+/** What a roster prints, and nothing else: a fraction of the bytes of {@link listAllPods}. */
+function listAllPodSummaries(client: AccountClient, query: PodScopeQuery): Promise<{ pods: ApiPodSummary[] }> {
+  return walkPodPages((page) => client.listPodSummaries(page), query);
+}
+
 /**
  * The pods of the project this directory belongs to, or of the whole account with `all`.
  * `widen` answers with the account's pods when the project has none — older pods recorded no
  * project, and a list or a pick that comes up empty there helps nobody. `project` names the
- * scope the answer actually came from.
+ * scope the answer actually came from. `list` is which of the two listings above to walk.
  */
-async function podsInScope(
-  client: AccountClient,
-  flags: { all: boolean; templateId?: string | undefined; includeGone?: boolean | undefined; widen?: boolean },
+async function podsInScope<Pod extends ApiPodSummary>(
+  list: (query: PodScopeQuery) => Promise<{ pods: Pod[] }>,
+  flags: {
+    all: boolean;
+    templateId?: string | undefined;
+    includeGone?: boolean | undefined;
+    state?: PodScopeQuery["state"];
+    widen?: boolean;
+  },
   cwd?: string,
-): Promise<{ pods: ApiPod[]; project: string | null }> {
-  const query = {
+): Promise<{ pods: Pod[]; project: string | null }> {
+  const query: PodScopeQuery = {
     ...(flags.templateId ? { templateId: flags.templateId } : {}),
     ...(flags.includeGone ? { includeGone: true } : {}),
+    ...(flags.state ? { state: flags.state } : {}),
   };
   const project = flags.all ? null : currentProjectName(cwd);
   if (project) {
-    const scoped = await listAllPods(client, { ...query, project });
+    const scoped = await list({ ...query, project });
     if (scoped.pods.length > 0 || !flags.widen) return { pods: scoped.pods, project };
   }
-  return { pods: (await listAllPods(client, query)).pods, project: null };
+  return { pods: (await list(query)).pods, project: null };
 }
 
 /** When the pod last did something; creation stands in until it has. */
-function activityStamp(pod: ApiPod): string {
+function activityStamp(pod: ApiPodSummary): string {
   return pod.lastActivityAt ?? pod.createdAt;
 }
 
@@ -129,14 +148,14 @@ export function parseIdleDuration(text: string): number {
 }
 
 /** A pod with an unreadable timestamp is not provably idle, so a sweep leaves it alone. */
-function idleLongerThan(pod: ApiPod, idleMs: number, now: number): boolean {
+function idleLongerThan(pod: ApiPodSummary, idleMs: number, now: number): boolean {
   const activity = Date.parse(activityStamp(pod));
   return Number.isFinite(activity) && activity < now - idleMs;
 }
 
 /** Oldest activity first; missing activity falls back to creation time. */
-export function sortPodsByActivity(pods: ApiPod[]): ApiPod[] {
-  const activityTime = (pod: ApiPod): number => {
+export function sortPodsByActivity<Pod extends ApiPodSummary>(pods: Pod[]): Pod[] {
+  const activityTime = (pod: Pod): number => {
     const parsed = Date.parse(activityStamp(pod));
     return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
   };
@@ -150,19 +169,19 @@ export function sortPodsByActivity(pods: ApiPod[]): ApiPod[] {
  * is also the group's only real-provider member. A pod whose group anchor is not in the
  * listing (a project-scoped `ls`, or an older server) is shown as a root rather than hidden.
  */
-export function orderPodsAsTree(pods: ApiPod[]): Array<{ pod: ApiPod; depth: number }> {
+export function orderPodsAsTree<Pod extends ApiPodSummary>(pods: Pod[]): Array<{ pod: Pod; depth: number }> {
   const sorted = sortPodsByActivity(pods);
   const present = new Set(sorted.map((pod) => pod.id));
-  const childrenOf = new Map<string, ApiPod[]>();
-  const roots: ApiPod[] = [];
+  const childrenOf = new Map<string, Pod[]>();
+  const roots: Pod[] = [];
   for (const pod of sorted) {
     const anchorId = pod.hostPodId ?? pod.parentPodId ?? null;
     const anchor = anchorId && present.has(anchorId) ? anchorId : null;
     if (anchor === null) roots.push(pod);
     else childrenOf.set(anchor, [...(childrenOf.get(anchor) ?? []), pod]);
   }
-  const ordered: Array<{ pod: ApiPod; depth: number }> = [];
-  const visit = (pod: ApiPod, depth: number): void => {
+  const ordered: Array<{ pod: Pod; depth: number }> = [];
+  const visit = (pod: Pod, depth: number): void => {
     ordered.push({ pod, depth });
     for (const child of childrenOf.get(pod.id) ?? []) visit(child, depth + 1);
   };
@@ -190,10 +209,13 @@ export async function runAccountList(
   // workstation block beside the pods, and let a server that has no such thing answer nothing.
   // A template belongs to the account, not to a repo, so naming one asks about the account:
   // the project the terminal happens to be sitting in does not narrow the answer further.
+  // Archived pods are most of a long-lived account and the default listing hides them, so
+  // they are left out by the server rather than fetched and dropped here.
   const [scoped, billing] = await Promise.all([
-    podsInScope(client, {
+    podsInScope((query) => listAllPodSummaries(client, query), {
       all: flags.all || template !== null,
       ...(template ? { templateId: template.id } : {}),
+      ...(flags.archived ? {} : { state: "active" as const }),
       widen: true,
     }),
     flags.quiet ? Promise.resolve(null) : client.accountBilling(),
@@ -247,7 +269,7 @@ async function runAccountGroupList(
 ): Promise<number> {
   const named = await selectAccountPod(client, podRef, "list");
   const anchorId = named.hostPodId ?? named.id;
-  const pods = (await listAllPods(client, {})).pods;
+  const pods = (await listAllPodSummaries(client, flags.archived ? {} : { state: "active" })).pods;
   const group = pods.filter(
     (pod) => (pod.id === anchorId || pod.hostPodId === anchorId) && (flags.archived || pod.state !== "archived"),
   );
@@ -261,7 +283,7 @@ async function runAccountGroupList(
   return 0;
 }
 
-function renderPodLines(pods: ApiPod[]): void {
+function renderPodLines(pods: ApiPodSummary[]): void {
   const rows = orderPodsAsTree(pods);
   // Where a pod lives matters only for co-located pods (`on <host>`); every other pod has a
   // machine of its own, and naming the provider there says nothing.
@@ -331,7 +353,7 @@ export async function selectAccountPod(
     if (matches.length > 1) throw ambiguousPodRef(podRef, matches);
     throw new PiPodError(`no pod matches "${podRef}"`, { hint: "see `pipod list --all`" });
   }
-  const scoped = await podsInScope(client, { all: false, widen: true }, cwd);
+  const scoped = await podsInScope((query) => listAllPods(client, query), { all: false, widen: true }, cwd);
   const project = scoped.project;
   // The pod meant is a live one — an archived one only for `restore`, or when there is no other.
   const wanted = scoped.pods.filter((pod) => (pod.state === "archived") === (action === "restore"));
@@ -462,7 +484,7 @@ async function archiveSweep(
   // A limited sign-in sees one template's pods whatever the project pins.
   const templateRef = flags.template ?? (flags.all || client.limitedTo ? null : currentProjectTemplateRef());
   const template = templateRef ? await resolveTemplate(client, templateRef) : null;
-  const { pods: scopedPods, project } = await podsInScope(client, {
+  const { pods: scopedPods, project } = await podsInScope((query) => listAllPods(client, query), {
     all: flags.all || template !== null,
     ...(template ? { templateId: template.id } : {}),
   });
@@ -486,7 +508,7 @@ async function archiveSweep(
 
 /** `restore --all`: every archived pod on the account. */
 async function restoreSweep(client: AccountClient): Promise<{ pods: ApiPod[]; empty: () => void }> {
-  const scope = (await podsInScope(client, { all: true })).pods;
+  const scope = (await podsInScope((query) => listAllPods(client, query), { all: true })).pods;
   return {
     pods: scope.filter((pod) => pod.state !== "active"),
     empty: () => info("every pod is already active"),
@@ -568,7 +590,7 @@ export async function runAccountGc(
 ): Promise<number> {
   // includeGone: failed launches that never acquired compute converge to
   // archived+gone, which default listings omit — gc must still offer them.
-  const pods = (await podsInScope(client, { all: true, includeGone: true })).pods;
+  const pods = (await podsInScope((query) => listAllPods(client, query), { all: true, includeGone: true })).pods;
   // A deleted pod stays as history: archived, its sandbox gone, no failure to report. There is
   // nothing left of it to reclaim, so it is not offered again.
   const archived = pods.filter((p) => p.state === "archived" && !(p.sandboxState === "gone" && p.stateReason === null));
@@ -641,6 +663,9 @@ export async function runAccountAttach(
       throw withCapacityHint(error);
     }
   }
+  // Loaded here, not at startup: the session is the only part of the CLI that needs pi
+  // itself, and importing pi costs every other command a third of a second.
+  const { runAccountSession } = await import("./session.js");
   const result = await runAccountSession({
     client,
     pod,

@@ -456,6 +456,10 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
         }
       }
       await runtimeRef?.recoverAfterReconnect();
+      // The rebind above cleared every extension status, the connection indicator included.
+      if (runtimeRef && latestConnectionState) {
+        applyConnectionStatus(runtimeRef.bridge.ui, latestConnectionState, rpc.podId);
+      }
       modeUi?.requestRender?.(true);
       runtimeRef?.bridge.notify("connection dropped — reconnected to the pi session", "info");
     },
@@ -731,7 +735,9 @@ async function runAccountInteractive(opts: AccountSessionOptions): Promise<Accou
     if (switching) return;
     switching = true;
     try {
-      const { pods } = await opts.client.listPods({ mine: true, limit: 50 });
+      // Only an active pod can be switched to, and a long-lived account is mostly archived
+      // ones: ask for the fifty most recent active pods rather than fifty of anything.
+      const { pods } = await opts.client.listPods({ mine: true, limit: 50, state: "active" });
       const candidates = pods.filter((p) => p.state === "active");
       let target: ApiPod | undefined;
       if (id !== undefined) {

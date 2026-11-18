@@ -1032,7 +1032,9 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
     setSteeringMode: (mode: "all" | "one-at-a-time") => mutate(() => rpc.setSteeringMode(mode)),
     setFollowUpMode: (mode: "all" | "one-at-a-time") => mutate(() => rpc.setFollowUpMode(mode)),
     compact: (customInstructions?: string) => mutate(() => rpc.compact(customInstructions)),
-    abortCompaction: () => {},
+    // Escape during a compaction lands here. Pi's abort cancels a manual or automatic
+    // compaction along with anything else in flight, and compaction_end then reports it.
+    abortCompaction: () => agent.abort(),
     // Unreachable: the remote settings facade always skips branch summaries.
     abortBranchSummary: () => {},
     setAutoCompactionEnabled: (enabled: boolean) => mutate(() => rpc.setAutoCompaction(enabled)),
@@ -1303,6 +1305,7 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
             waitForIdle: (timeoutMs) => rpc.waitForIdle(timeoutMs),
             modelRegistry: extensionModelRegistry,
             getCommands: () => registeredCommands(),
+            localUi: (ui) => remoteUiBridge.localExtensionUi(ui),
           });
           // Deferred to the first UI bind, matching in-process pi: InteractiveMode starts its
           // UI before initializing extensions, "so session_start handlers can use interactive
@@ -1325,6 +1328,7 @@ export function createRemoteRuntime(opts: RemoteRuntimeOptions): RemoteRuntime {
       localHost = null;
       await host.sessionShutdown("resume").catch(() => {});
       await host.dispose();
+      remoteUiBridge.localExtensionsGone();
     },
   };
 }

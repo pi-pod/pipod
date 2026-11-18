@@ -338,6 +338,29 @@ export interface ApiPod {
   };
 }
 
+/**
+ * A pod as a listing shows it: identity, state and activity, without the frozen launch
+ * report. That report is most of a pod's bytes and no listing prints it, so a roster of
+ * hundreds of pods costs a few kilobytes instead of megabytes.
+ */
+export type ApiPodSummary = Omit<ApiPod, "resolvedConfig">;
+
+/** Every way `GET /v1/pods` narrows a listing; an omitted filter narrows nothing. */
+export interface PodListQuery {
+  project?: string | undefined;
+  /** Logical state: `active` leaves out the archived pods `list` hides by default. */
+  state?: "active" | "archived" | undefined;
+  mine?: boolean | undefined;
+  limit?: number | undefined;
+  templateId?: string | undefined;
+  /** Legacy timestamp-only boundary, for servers without nextCursor. */
+  before?: string | undefined;
+  /** Opaque nextCursor from the previous page; keep all other filters unchanged. */
+  cursor?: string | undefined;
+  /** Include provider_state 'gone' rows (failed launches that never acquired compute). */
+  includeGone?: boolean | undefined;
+}
+
 export interface LaunchReport {
   clamps: Array<{ path: string; from: unknown; to: unknown; reason: string }>;
   /** Redacted config origins; values never travel in provenance rows. */
@@ -956,22 +979,16 @@ export class AccountClient {
     });
   }
 
-  listPods(
-    query: {
-      project?: string;
-      state?: string;
-      mine?: boolean;
-      limit?: number;
-      templateId?: string;
-      /** Legacy timestamp-only boundary, for servers without nextCursor. */
-      before?: string;
-      /** Opaque nextCursor from the previous page; keep all other filters unchanged. */
-      cursor?: string;
-      /** Include provider_state 'gone' rows (failed launches that never acquired compute). */
-      includeGone?: boolean;
-    } = {},
-  ): Promise<{ pods: ApiPod[]; nextCursor?: string | null }> {
-    return this.request("/pods", { query });
+  listPods(query: PodListQuery = {}): Promise<{ pods: ApiPod[]; nextCursor?: string | null }> {
+    return this.request("/pods", { query: { ...query } });
+  }
+
+  /**
+   * The same listing without each pod's launch report. A server that predates the view
+   * ignores it and answers with whole pods, which satisfy the summary type as they are.
+   */
+  listPodSummaries(query: PodListQuery = {}): Promise<{ pods: ApiPodSummary[]; nextCursor?: string | null }> {
+    return this.request("/pods", { query: { ...query, view: "summary" } });
   }
 
   /** Null means an older server lacks lookup, not that the ref had no matches. */
