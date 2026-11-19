@@ -316,7 +316,8 @@ public struct SessionView: View {
             }
             .onChange(of: stream.isLoadingHistory, initial: true) { _, isLoading in
                 guard !isLoading, !hasSettledInitialScroll else { return }
-                if rowCache.rows.isEmpty && stream.openDialogs.isEmpty {
+                rowCache.update(stream.items)
+                if stream.items.isEmpty && stream.openDialogs.isEmpty {
                     hasSettledInitialScroll = true
                     return
                 }
@@ -335,9 +336,10 @@ public struct SessionView: View {
             }
             .onChange(of: stream.scrollRevision) { _, _ in
                 guard followsLatest else { return }
+                rowCache.update(stream.items)
                 let isInitialLanding = !hasSettledInitialScroll
                 if isInitialLanding && !stream.isLoadingHistory
-                    && (!rowCache.rows.isEmpty || !stream.openDialogs.isEmpty) {
+                    && (!stream.items.isEmpty || !stream.openDialogs.isEmpty) {
                     hasSettledInitialScroll = true
                 }
                 // Initial history load and high-frequency streaming deltas jump
@@ -415,10 +417,14 @@ public struct SessionView: View {
                 scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
             }
             guard settle else { return }
-            for delayMs in [40, 140] {
+            // The first hop runs unconditionally after SwiftUI commits the new
+            // LazyVStack rows (in case `bottomIsVisible` was still stale-true
+            // from the loading frame); later hops re-snap only if lazy height
+            // estimation left the bottom sentinel off screen.
+            for (index, delayMs) in [50, 150, 320].enumerated() {
                 try? await Task.sleep(for: .milliseconds(delayMs))
                 guard !Task.isCancelled, followsLatest else { return }
-                if !bottomIsVisible {
+                if index == 0 || !bottomIsVisible {
                     scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
