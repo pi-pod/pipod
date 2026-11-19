@@ -23,6 +23,7 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeParseException
 import java.util.Base64
+import java.util.UUID
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
@@ -287,7 +288,6 @@ class SessionStream(
     private var slashCommands: List<SlashCommand> = SlashCommandCatalog.builtins
     private var hasLoadedCommands = false
     private var activeCommand: ActiveSlashCommand? = null
-    private var nextSlashRequestNumber = 0
     private var pendingCommandsRequestId: String? = null
     private val pendingSlashRpcs = mutableMapOf<String, PendingSlashRpc>()
 
@@ -1113,22 +1113,19 @@ class SessionStream(
                 availableThinkingLevels = availableThinkingLevels.toList(),
             )
         }
-        val valid = evaluation as? SlashCommandDraftEvaluation.Valid
-        if (valid == null) {
+        if (evaluation == SlashCommandDraftEvaluation.None) {
             send(text, attachments)
             return null
         }
-        if (!valid.canExecute) return null
+        val valid = evaluation as? SlashCommandDraftEvaluation.Valid ?: return null
+        if (!valid.canExecute || synchronized(lock) { activeCommand != null }) return null
 
         if (valid.command.source == SlashCommandSource.BUILTIN) {
             return executeBuiltinSlashCommand(valid.command, valid.arguments)
         }
-        val useRpc = synchronized(lock) { isConnected && hasModelSnapshot }
-        if (useRpc) {
-            sendPodSlashCommand(valid.command, text, attachments)
-            return null
-        }
-        send(text, attachments)
+        val invocation = if (valid.arguments.isEmpty()) valid.command.displayName
+            else "${valid.command.displayName} ${valid.arguments}"
+        sendPodSlashCommand(valid.command, invocation, attachments)
         return null
     }
 
@@ -1312,27 +1309,40 @@ class SessionStream(
                 ),
                 payload = payload,
             )
-            if (sent) {
-                if (command.source != SlashCommandSource.EXTENSION) {
-                    awaitingReply = true
-                    updateRunningState()
-                }
-                publish()
-            } else {
+            if (!sent) {
                 setDelivery(itemId, StreamItemDelivery.FAILED)
             }
         }
     }
 
-    private fun nextSlashRequestIdLocked(prefix: String): String {
-        nextSlashRequestNumber += 1
-        return "$prefix-$nextSlashRequestNumber"
+    // The gateway retires IDs for the shared pod, not just this socket.
+    private fun nextSlashRequestId(prefix: String): String = "mobile-$prefix-${UUID.randomUUID()}"
+
+    private fun resetSlashCommandsLocked() {
+        val interrupted = activeCommand
+        activeCommand = null
+        for (request in pendingSlashRpcs.values) {
+            val prompt = request.kind as? PendingSlashRpc.Kind.PodPrompt ?: continue
+            transcript.removeAll { it.id == prompt.itemId }
+            pendingAttachments.remove(prompt.itemId)
+            sendWatermarks.remove(prompt.itemId)
+        }
+        pendingSlashRpcs.clear()
+        pendingCommandsRequestId = null
+        slashCommands = SlashCommandCatalog.builtins
+        hasLoadedCommands = false
+        if (interrupted != null) {
+            appendStatus(
+                "Result of /${interrupted.commandName} wasn’t confirmed. Check the session before running it again.",
+                isError = true,
+            )
+        }
     }
 
     private fun requestCommandsLocked() {
         val transport = socket ?: return
         if (!isConnected) return
-        val id = nextSlashRequestIdLocked("commands")
+        val id = nextSlashRequestId("commands")
         pendingCommandsRequestId = id
         transport.rpc(id, buildJsonObject { put("type", "get_commands") })
     }
@@ -1348,7 +1358,7 @@ class SessionStream(
             appendStatus("Connect to the pod to run /$commandName.", isError = true)
             return false
         }
-        val id = nextSlashRequestIdLocked("slash")
+        val id = nextSlashRequestId("slash")
         if (!transport.rpc(id, payload)) {
             appendStatus("Couldn’t send /$commandName. Check the connection and try again.", isError = true)
             return false
@@ -1362,11 +1372,11 @@ class SessionStream(
     private fun handleSlashRpcResultLocked(id: String, response: JsonObject) {
         if (id == pendingCommandsRequestId) {
             pendingCommandsRequestId = null
+            hasLoadedCommands = true
             SlashCommandCatalog.decodeRemote(response)?.let { remote ->
                 slashCommands = SlashCommandCatalog.merge(remote)
-                hasLoadedCommands = true
-                publish()
             }
+            publish()
             return
         }
         val pending = pendingSlashRpcs.remove(id) ?: return
@@ -1424,11 +1434,11 @@ class SessionStream(
 
             is PendingSlashRpc.Kind.PodPrompt -> {
                 if (!success) {
-                    awaitingReply = false
-                    updateRunningState()
-                    if (transcript.any { it.id == kind.itemId }) {
-                        setDelivery(kind.itemId, StreamItemDelivery.FAILED)
-                    }
+                    // Keep the durable gateway echo, if any. An optimistic bubble
+                    // with no echo is not a receipt or a safe ordinary prompt retry.
+                    transcript.removeAll { it.id == kind.itemId }
+                    pendingAttachments.remove(kind.itemId)
+                    sendWatermarks.remove(kind.itemId)
                     appendStatus(
                         errorText?.let { "/${pending.commandName} failed: $it" }
                             ?: "/${pending.commandName} failed.",
@@ -1439,8 +1449,6 @@ class SessionStream(
                 val disposition = (response["data"] as? JsonObject)?.string("disposition")
                 when (disposition) {
                     "handled" -> {
-                        awaitingReply = false
-                        updateRunningState()
                         if (transcript.size <= kind.itemsCountAtSend && dialogs.size <= kind.dialogsCountAtSend) {
                             appendStatus("Ran /${pending.commandName}.")
                         } else {
@@ -1676,9 +1684,7 @@ class SessionStream(
         releaseTransport(socket)
         socket = null
         bashOutput.clear()
-        pendingCommandsRequestId = null
-        pendingSlashRpcs.clear()
-        activeCommand = null
+        resetSlashCommandsLocked()
         failInFlightSends()
     }
 
@@ -1837,6 +1843,7 @@ class SessionStream(
         isInterrupting = false
         pendingModelSwitch = null
         pendingThinkingSwitch = null
+        resetSlashCommandsLocked()
         updateRunningState()
         failInFlightSends()
         when (closeCode) {

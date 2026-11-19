@@ -443,7 +443,7 @@ private suspend fun LazyListState.scrollToBottom(animated: Boolean) {
         scrollToItem(last)
         withFrameNanos {}
         if (canScrollForward) {
-            scrollToItem(last, scrollOffset = Int.MAX_VALUE / 2)
+            scrollToItem(last)
         }
     }
 }
@@ -490,7 +490,7 @@ private fun Transcript(
     // tail) and left the reader stranded at the top of the transcript on open.
     val currentExpectedTotalItems by rememberUpdatedState(expectedTotalItems)
     var didInitialScroll by remember { mutableStateOf(false) }
-    LaunchedEffect(session.scrollRevision, session.isLoadingHistory) {
+    LaunchedEffect(session.scrollRevision, session.isLoadingHistory, followsLatest) {
         if (session.isLoadingHistory) return@LaunchedEffect
         val hasContent = rows.isNotEmpty() || session.openDialogs.isNotEmpty()
         if (!didInitialScroll && !hasContent) {
@@ -514,7 +514,7 @@ private fun Transcript(
             if (listState.canScrollForward) {
                 val settledLast = listState.layoutInfo.totalItemsCount - 1
                 if (settledLast >= 0) {
-                    listState.scrollToItem(settledLast, scrollOffset = Int.MAX_VALUE / 2)
+                    listState.scrollToItem(settledLast)
                 }
             }
         }

@@ -11,6 +11,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -110,9 +114,18 @@ fun AppTextField(
         // A composer has no room for a floating label and no space above it to
         // put one, so the pill carries the name in semantics and shows only the
         // hint. Both indicators are cleared: the fill is the field's edge.
-        AppFieldShape.Pill -> TextField(
-            value = value,
-            onValueChange = onValueChange,
+        AppFieldShape.Pill -> {
+            // An external replacement (command completion, suggestion, restored draft)
+            // puts the caret after the inserted text. IME edits retain their own selection.
+            val editing = remember { mutableStateOf(TextFieldValue()) }
+            val field = editing.value.takeIf { it.text == value }
+                ?: TextFieldValue(value, TextRange(value.length))
+            TextField(
+            value = field,
+            onValueChange = { next ->
+                editing.value = next
+                if (next.text != value) onValueChange(next.text)
+            },
             // The pill shows only a hint, and a hint disappears the moment
             // anything is typed — so the name rides on the field's own node
             // instead, and survives into the state where it matters most.
@@ -140,6 +153,7 @@ fun AppTextField(
                 unfocusedIndicatorColor = Color.Transparent,
                 disabledIndicatorColor = Color.Transparent,
             ),
-        )
+            )
+        }
     }
 }

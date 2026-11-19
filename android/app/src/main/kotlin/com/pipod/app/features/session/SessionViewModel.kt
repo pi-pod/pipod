@@ -54,6 +54,8 @@ data class SessionState(
             slashCommands = stream.slashCommands,
             hasLoadedCommands = stream.hasLoadedCommands,
             availableThinkingLevels = stream.availableThinkingLevels,
+            commandInFlight = stream.activeCommand != null,
+            modelSelectionInFlight = stream.isModelSwitchInFlight || stream.isThinkingSwitchInFlight,
         )
 
     /** The pod's launch failed, so it will never hold a conversation; the error says why. */
@@ -161,7 +163,8 @@ class SessionViewModel(
             isConnected = streamState.isConnected,
             availableThinkingLevels = streamState.availableThinkingLevels,
         )
-        if (evaluation.blocksSend) return null
+        if (evaluation.blocksSend || (evaluation.isSlashInput && streamState.activeCommand != null) ||
+            streamState.isModelSwitchInFlight || streamState.isThinkingSwitchInFlight) return null
         // Refused here rather than at the gateway: over the limit the send
         // becomes an optimistic bubble that fails on arrival, and every Retry
         // fails again the same way. The draft is left exactly as typed.
@@ -169,8 +172,10 @@ class SessionViewModel(
             local.update { it.copy(attachError = PromptLimits.tooLong(text.length)) }
             return null
         }
-        val staged = current.attachments.toList()
-        local.update { it.copy(draft = "", attachments = emptyList(), attachError = null) }
+        // Built-ins act on the session, not the staged images. Keep those for the next message.
+        val keepAttachments = evaluation.validCommand?.source == com.pipod.app.core.session.SlashCommandSource.BUILTIN
+        val staged = if (keepAttachments) emptyList() else current.attachments.toList()
+        local.update { it.copy(draft = "", attachments = if (keepAttachments) it.attachments else emptyList(), attachError = null) }
         drafts.write(current.pod.id, "")
         return stream.sendOrRunSlashCommand(text, staged)
     }

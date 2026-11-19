@@ -256,7 +256,6 @@ public final class SessionStream: ModelSelecting {
     /// only bubbles a replayed `user_prompt` is allowed to adopt.
     @ObservationIgnored private var pendingEchoItemIds: Set<String> = []
     @ObservationIgnored private var isIngestingHistory = false
-    @ObservationIgnored private var nextSlashRequestNumber = 0
     @ObservationIgnored private var pendingCommandsRequestId: String?
     @ObservationIgnored private var pendingSlashRPCs: [String: PendingSlashRPC] = [:]
 
@@ -882,6 +881,7 @@ public final class SessionStream: ModelSelecting {
         isConnected = false
         hasModelSnapshot = false
         socket = nil
+        resetSlashCommands()
         awaitingReply = false
         isInterrupting = false
         if pendingModel != nil || pendingThinkingLevel != nil {
@@ -1017,20 +1017,18 @@ public final class SessionStream: ModelSelecting {
             isConnected: isConnected,
             availableThinkingLevels: availableThinkingLevels
         )
-        guard case .valid(let command, let arguments, _, _, let canExecute, _) = evaluation else {
+        if case .none = evaluation {
             send(text, attachments: attachments)
             return nil
         }
-        guard canExecute else { return nil }
+        guard case .valid(let command, let arguments, _, _, true, _) = evaluation,
+              activeCommand == nil else { return nil }
 
         if command.source == .builtin {
             return executeBuiltinSlashCommand(command, arguments: arguments)
         }
-        if isConnected && hasModelSnapshot {
-            sendPodSlashCommand(command, fullText: text, attachments: attachments)
-            return nil
-        }
-        send(text, attachments: attachments)
+        let invocation = arguments.isEmpty ? command.displayName : "\(command.displayName) \(arguments)"
+        sendPodSlashCommand(command, fullText: invocation, attachments: attachments)
         return nil
     }
 
@@ -1199,18 +1197,25 @@ public final class SessionStream: ModelSelecting {
         ) {
             serverBoundItemIds.insert(itemId)
             pendingEchoItemIds.insert(itemId)
-            if command.source != .extension {
-                awaitingReply = true
-                updateRunningState()
-            }
         } else {
             setDelivery(itemId, .failed)
         }
     }
 
     private func nextSlashRequestId(prefix: String) -> String {
-        nextSlashRequestNumber += 1
-        return "\(prefix)-\(nextSlashRequestNumber)"
+        // The gateway retires IDs for the shared pod, not just this socket.
+        "mobile-\(prefix)-\(UUID().uuidString)"
+    }
+
+    private func resetSlashCommands() {
+        if let activeCommand {
+            appendStatus("Result of /\(activeCommand.commandName) wasn’t confirmed. Check the session before running it again.", isError: true)
+        }
+        activeCommand = nil
+        pendingSlashRPCs.removeAll()
+        pendingCommandsRequestId = nil
+        slashCommands = SlashCommandCatalog.builtins
+        hasLoadedCommands = false
     }
 
     private func requestCommands() {
@@ -1247,9 +1252,9 @@ public final class SessionStream: ModelSelecting {
     private func handleSlashRPCResult(id: String, response: JSONValue) {
         if id == pendingCommandsRequestId {
             pendingCommandsRequestId = nil
+            hasLoadedCommands = true
             if let remote = SlashCommandCatalog.decodeRemote(from: response) {
                 slashCommands = SlashCommandCatalog.merge(remote: remote)
-                hasLoadedCommands = true
             }
             return
         }
@@ -1302,10 +1307,10 @@ public final class SessionStream: ModelSelecting {
 
         case .podPrompt(let itemId, let itemsCountAtSend, let dialogsCountAtSend):
             if !success {
-                awaitingReply = false
-                updateRunningState()
-                if items.contains(where: { $0.id == itemId }) {
-                    setDelivery(itemId, .failed)
+                if items.contains(where: { $0.id == itemId && $0.delivery == .sending }) {
+                    // The gateway may already have recorded the command. Never
+                    // offer the ordinary prompt retry path for an unconfirmed RPC.
+                    setDelivery(itemId, .unknown)
                 }
                 appendStatus(
                     errorText.flatMap { $0.isEmpty ? nil : "/\(pending.commandName) failed: \($0)" }
@@ -1316,8 +1321,6 @@ public final class SessionStream: ModelSelecting {
             }
             let disposition = response["data"]?["disposition"]?.stringValue
             if disposition == "handled" {
-                awaitingReply = false
-                updateRunningState()
                 // If the extension did not produce a visible notice, message or
                 // dialog of its own, leave a quiet confirmation so the command
                 // does not feel silently dropped.
@@ -2529,9 +2532,7 @@ public final class SessionStream: ModelSelecting {
         pendingThinkingMismatchCount = 0
         pendingSelectionRequestID = nil
         allowUncorrelatedSelectionConfirmation = false
-        pendingCommandsRequestId = nil
-        pendingSlashRPCs.removeAll()
-        activeCommand = nil
+        resetSlashCommands()
         failInFlightSends()
     }
 
