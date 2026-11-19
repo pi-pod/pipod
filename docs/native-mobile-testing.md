@@ -17,6 +17,14 @@ build and drive devices on a Mac reached over Tailscale SSH: set
 `PIPOD_MAC_HOST=user@host`. The Mac may be shared, so keep to your own work directory and
 device.
 
+## Session landing, commands and bash summaries
+
+Open a pod with several screens of history and a recognizable final reply. The reply should be visible without a swipe. Scroll up, load earlier messages, then jump to latest. Type `/` and select `/compact`; selection only fills the draft. Add focus instructions and check the preview, then run it. A misspelling should not send an ordinary prompt. Reopen the same pod and run a discovered extension command a second time.
+
+Completed **bash tool calls** show an AI caption by default. This uses the same kind of background request as pi-lightweight-llm, through the pod’s `openai/gpt-6-luna` model, not the conversation model. Only bounded, redacted command/output excerpts are sent; OpenAI model usage can incur charges. Cached summaries are device-local. Expand a row for its original command and output. `/summaries off` stops future requests on this device for this server; `/summaries on` enables them again. No alternate provider is tried when the model, credentials or auxiliary bridge are unavailable: raw tool rows continue to work.
+
+For a no-spend walkthrough start the dev fake provider with `FAKE_BASH_SUMMARIES=1` and send `TOOLS`. Check the completed and failed bash rows, a non-bash row, expansion, and `/summaries off`. Fixture captions are intentionally labeled as such; they prove native rendering and gateway routing, not supplier access.
+
 ## Local API and debug sign-in
 
 The workspace Makefile starts the development API and mints a short-lived JWT.

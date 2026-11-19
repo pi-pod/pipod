@@ -725,9 +725,9 @@ private struct ToolCallRow: View {
                         .lineLimit(1)
                         .fixedSize()
                     Text(item.toolCaption)
-                        .font(.system(.caption, design: .monospaced))
+                        .font(item.bashSummary == nil ? .system(.caption, design: .monospaced) : .footnote)
                         .foregroundStyle(AppColors.secondaryLabel)
-                        .lineLimit(1)
+                        .lineLimit(item.bashSummary == nil ? 1 : (isExpanded ? nil : 3))
                         .truncationMode(Self.truncation(item.toolCaption))
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if hasDetails {

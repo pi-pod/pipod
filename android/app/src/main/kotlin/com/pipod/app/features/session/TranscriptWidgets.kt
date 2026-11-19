@@ -941,9 +941,10 @@ private fun ToolCallRow(item: StreamItem, isExpanded: Boolean, onExpandedChanged
             Spacer(Modifier.width(8.dp))
             Text(
                 text = item.toolCaption,
-                maxLines = 1,
+                maxLines = if (item.bashSummary == null) 1 else if (isExpanded) Int.MAX_VALUE else 3,
                 overflow = toolSummaryOverflow(item.toolCaption),
-                style = MonospaceTextStyle.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize),
+                style = if (item.bashSummary == null) MonospaceTextStyle.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize)
+                    else MaterialTheme.typography.bodySmall,
                 color = appColors.secondaryLabel,
                 modifier = Modifier.weight(1f),
             )
