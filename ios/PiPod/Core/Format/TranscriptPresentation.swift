@@ -87,6 +87,9 @@ public struct StreamItem: Identifiable, Hashable, Sendable {
     /// Everything the tool was given: the whole command for `bash`, the
     /// arguments otherwise.
     public var toolInput: String
+    /// Presentation only. The raw arguments and result always remain available in the expanded row.
+    public var bashSummary: String? = nil
+    public var toolCaption: String { bashSummary.map { "AI: \($0)" } ?? toolSummary }
 
     public init(
         id: String,

@@ -241,6 +241,7 @@ class AppContainer(
         ModelMemory.attach(context.getSharedPreferences("models", Context.MODE_PRIVATE))
         TranscriptPreferences.attach(context.getSharedPreferences("transcript", Context.MODE_PRIVATE))
         ModelCatalogCache.attach(context.getSharedPreferences("models", Context.MODE_PRIVATE))
+        com.pipod.app.core.session.BashSummaries.attach(context)
     }
 
     /**
