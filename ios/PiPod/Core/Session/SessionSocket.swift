@@ -116,6 +116,7 @@ public enum SessionServerMessage: Sendable {
     case modelScope(patterns: [String]?)
     /// pi's answer to an `rpc` command this client sent, under the client's id.
     case rpcResult(id: String, response: JSONValue)
+    case bashSummary(id: String, text: String?)
     case pong
     /// `detail` carries the gateway's typed refusal body. A host-demand refusal
     /// arrives as an `error` frame immediately before close code 4420, and that
@@ -150,9 +151,11 @@ public protocol SessionTransport: AnyObject {
         model: [String: String]?, thinkingLevel: String?, requestID: String?
     ) -> Bool
     @discardableResult func rpc(id: String, command: JSONValue) -> Bool
+    @discardableResult func auxiliary(_ frame: JSONValue) -> Bool
 }
 
 extension SessionTransport {
+    public func auxiliary(_ frame: JSONValue) -> Bool { false }
     /// A transport that cannot ask simply never reports a scope.
     @discardableResult public func requestModelScope() -> Bool { false }
 }
@@ -342,6 +345,8 @@ public final class SessionSocket: SessionTransport {
         send(.object(["type": .string("rpc"), "id": .string(id), "command": command]))
     }
 
+    public func auxiliary(_ frame: JSONValue) -> Bool { send(frame) }
+
     private func send(_ message: JSONValue) -> Bool {
         guard let channel, isConnected else { return false }
         guard let data = try? JSONCoding.data(from: message),
@@ -446,6 +451,9 @@ public final class SessionSocket: SessionTransport {
             let patterns = object["manifest"]?["uiSettings"]?["enabledModels"]?.arrayValue?
                 .compactMap(\.stringValue)
             return .modelScope(patterns: patterns)
+        case "aux_complete_result":
+            guard let id = object["id"]?.stringValue else { return nil }
+            return .bashSummary(id: id, text: object["ok"]?.boolValue == true ? object["text"]?.stringValue : nil)
         case "rpc_result":
             guard let id = object["id"]?.stringValue, let response = map(object["response"])
             else { return nil }

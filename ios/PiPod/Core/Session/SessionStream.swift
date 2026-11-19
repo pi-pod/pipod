@@ -42,6 +42,7 @@ public final class SessionStream: ModelSelecting {
     // MARK: - Identity
 
     public let podId: String
+    @ObservationIgnored private let bashSummaries: BashSummaries
 
     /// Extension-owned TUI surfaces rendered in the pod. Empty unless the pod
     /// runs an extension that opens one.
@@ -291,6 +292,7 @@ public final class SessionStream: ModelSelecting {
         localIDPrefix: String = "local"
     ) {
         self.podId = podId
+        self.bashSummaries = BashSummaries(pod: podId)
         self.lastSeq = fromSeq ?? 0
         self.currentSessionId = sessionId
         self.api = api
@@ -513,6 +515,7 @@ public final class SessionStream: ModelSelecting {
             self.error = "Conversation history couldn’t be loaded. Retry."
         }
         isLoadingHistory = false
+        updateBashSummaries()
     }
 
     /// Events per history request. One page is what opening a conversation
@@ -536,6 +539,7 @@ public final class SessionStream: ModelSelecting {
                 )
                 let shown = Set(self.items.map(\.id))
                 self.items.insert(contentsOf: earlier.filter { !shown.contains($0.id) }, at: 0)
+                self.updateBashSummaries()
                 self.earlierHistoryCursor = page.nextBefore
                 self.hasEarlierHistory = page.nextBefore != nil
             } catch {
@@ -1036,6 +1040,17 @@ public final class SessionStream: ModelSelecting {
         _ command: SlashCommand, arguments: String
     ) -> SlashCommandLocalAction? {
         switch command.name {
+        case "summaries":
+            if !arguments.isEmpty {
+                bashSummaries.configure(arguments.lowercased() == "on", socket: socket)
+                if !bashSummaries.enabled {
+                    for i in items.indices where items[i].bashSummary != nil { items[i].bashSummary = nil }
+                }
+                updateBashSummaries()
+            }
+            let on = bashSummaries.enabled
+            appendStatus(on ? "Bash summaries on · openai/gpt-6-luna. If unavailable, the original command is shown. Use /summaries off to disable." : "Bash summaries off. Showing original commands.")
+            return nil
         case "compact":
             var payload: [String: JSONValue] = ["type": .string("compact")]
             if !arguments.isEmpty {
@@ -1207,7 +1222,13 @@ public final class SessionStream: ModelSelecting {
         "mobile-\(prefix)-\(UUID().uuidString)"
     }
 
+    private func updateBashSummaries() {
+        let available = hasModelSnapshot && availableModels.contains { $0.provider == BashSummaries.provider && $0.modelId == BashSummaries.model }
+        bashSummaries.advance(&items, socket: isConnected ? socket : nil, modelAvailable: available)
+    }
+
     private func resetSlashCommands() {
+        bashSummaries.reset(socket)
         if let activeCommand {
             appendStatus("Result of /\(activeCommand.commandName) wasn’t confirmed. Check the session before running it again.", isError: true)
         }
@@ -2002,6 +2023,9 @@ public final class SessionStream: ModelSelecting {
         case .modelScope(let patterns):
             if let patterns { applyModelScope(patterns) }
 
+        case .bashSummary(let id, let text):
+            bashSummaries.accept(id, text: text, items: &items)
+            updateBashSummaries()
         case .rpcResult(let id, let response):
             handleSlashRPCResult(id: id, response: response)
             usage.accept(id: id, response: response)
@@ -2244,6 +2268,7 @@ public final class SessionStream: ModelSelecting {
         } else if let thinkingLevel {
             currentThinkingLevel = thinkingLevel
         }
+        updateBashSummaries()
         applyDeferredSelection(choices)
         startOnRememberedModel(choices)
         // A parked prompt may only cross the socket after the requested model
@@ -2469,6 +2494,7 @@ public final class SessionStream: ModelSelecting {
 
         case "tool_execution_start", "tool_execution_update", "tool_execution_end":
             upsertTool(id: id, seq: seq, kind: kind, timestamp: timestamp, payload: payload)
+            if kind == "tool_execution_end", !isIngestingHistory { updateBashSummaries() }
 
         case "bash_execution_update":
             appendBashOutput(id: id, timestamp: timestamp, payload: payload)

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A461CEE4B37944A2822626F1 /* BashSummaries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342E09C1EE264A1D82E14481 /* BashSummaries.swift */; };
 		085D1D3750176B3501E30D79 /* PodRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E9F8DCB83F537A108A43E62 /* PodRowView.swift */; };
 		0A3B7356B1AA2BA012AE4E2B /* ModelPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 700A9892A11FCE466658F12A /* ModelPickerView.swift */; };
 		0A694C3BBBA25F2217998668 /* FormURLEncoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD87D280BF3E28B933F32D7 /* FormURLEncoding.swift */; };
@@ -124,6 +125,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		342E09C1EE264A1D82E14481 /* BashSummaries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BashSummaries.swift; sourceTree = "<group>"; };
 		0263466F2A10E0DCACC2B52E /* SessionStreamRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStreamRegistry.swift; sourceTree = "<group>"; };
 		027AB87868124150A69369B9 /* RemoteUIKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteUIKeys.swift; sourceTree = "<group>"; };
 		03738AAD5DBBDACFB2245533 /* CredentialsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialsView.swift; sourceTree = "<group>"; };
@@ -477,6 +479,7 @@
 				4787C53A15D971932DEAF0E6 /* SessionStream.swift */,
 				AC493F74FB63E17D2D4F7B4F /* SessionUsage.swift */,
 				B2C3D4E5F60718293A4B5C6D /* SlashCommand.swift */,
+				342E09C1EE264A1D82E14481 /* BashSummaries.swift */,
 			);
 			path = Session;
 			sourceTree = "<group>";
@@ -732,6 +735,7 @@
 				6353F63817D09B9E851050E3 /* SettingsView.swift in Sources */,
 				3848A54D3CD68F4BDEA0DE56 /* SignInView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* SlashCommand.swift in Sources */,
+				A461CEE4B37944A2822626F1 /* BashSummaries.swift in Sources */,
 				C3D4E5F60718293A4B5C6D7E /* SlashCommandViews.swift in Sources */,
 				EB70787CB5C2B3F6B25FEF69 /* StatusTone.swift in Sources */,
 				CDA6B8CF15C4B000C0DB526D /* TemplateDetailView.swift in Sources */,

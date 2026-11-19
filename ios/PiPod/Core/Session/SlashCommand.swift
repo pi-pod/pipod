@@ -165,6 +165,7 @@ public enum SlashCommandCatalog {
     /// Built-in pi commands that work cleanly on mobile via dedicated RPC calls
     /// or native app controls. Pi's `get_commands` omits built-in commands.
     public static let builtins: [SlashCommand] = [
+        SlashCommand(name: "summaries", description: "Summarize bash commands and output with OpenAI GPT-6 Luna (uses your pod’s model quota)", source: .builtin, argumentHint: "[on|off]", requiresConnection: false),
         SlashCommand(
             name: "compact",
             description: "Compact conversation context, optionally with focus instructions",
@@ -422,6 +423,9 @@ public enum SlashCommandCatalog {
                 )
             }
             switch command.name {
+            case "summaries":
+                if !["", "on", "off"].contains(arguments.lowercased()) { return (command.description, "Use /summaries on or /summaries off.", false) }
+                return (command.description, nil, true)
             case "compact":
                 if arguments.isEmpty {
                     return ("Compacts conversation context on the pod", nil, true)

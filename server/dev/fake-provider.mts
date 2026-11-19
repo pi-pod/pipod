@@ -26,6 +26,8 @@ import {
 import { SHIM_VERSION } from "../src/core/shim/agentd.js";
 import {
   POD_EXTENSION_VERSION,
+  AUX_COMPLETE_COMMAND,
+  AUX_NOTIFICATION_PREFIX,
   SEED_BRIDGE_NOTIFICATION_PREFIX,
   SEED_CONTEXT_COMMAND,
   SEED_TREE_SUMMARY_COMMAND,
@@ -76,6 +78,9 @@ function fakeModelCatalog(): Array<Record<string, unknown>> {
     { provider: "fake", id: "fast", name: "Fake Fast" },
     { provider: "fake", id: "careful", name: "Fake Careful", reasoning: true },
   ];
+  if (process.env["FAKE_BASH_SUMMARIES"] === "1") {
+    models.push({ provider: "openai", id: "gpt-6-luna", name: "GPT-6 Luna (fixture)" });
+  }
   if (process.env["FAKE_MODEL_CATALOG"] !== "large") return models;
   const families: Array<[string, string[]]> = [
     ["acme", ["sonnet", "opus", "haiku"]],
@@ -501,6 +506,16 @@ class FakePty implements PtySession {
   }
 
   private handleSeedPrompt(message: string): boolean {
+    if (process.env["FAKE_BASH_SUMMARIES"] === "1" && message.startsWith(`/${AUX_COMPLETE_COMMAND} `)) {
+      const request = JSON.parse(Buffer.from(message.split(" ")[1]!, "base64url").toString("utf8"));
+      const content = request.messages?.[0]?.content ?? "";
+      const supported = request.provider === "openai" && request.model === "gpt-6-luna" && content.startsWith("Command:\n");
+      const reply = { v: 1, id: request.id, op: "complete", ok: supported, ...(supported
+        ? { data: { text: content.includes("Failed: true") ? "Fixture: command failed." : "Fixture: command completed.", stopReason: "stop" } }
+        : { error: { code: "unsupported", message: "Unsupported fixture request" } }) };
+      this.emitEvent({ type: "extension_ui_request", method: "notify", message: AUX_NOTIFICATION_PREFIX + Buffer.from(JSON.stringify(reply)).toString("base64url") });
+      return true;
+    }
     const match = /^\/(pod:_get-(?:context|tree-summary)-v1)\s+(\S+)/.exec(message);
     if (!match) return false;
     try {

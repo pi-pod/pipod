@@ -73,4 +73,8 @@ data class StreamItem(
     val toolSummary: String = "",
     /** Everything the tool was given: the whole command for `bash`, the arguments otherwise. */
     val toolInput: String = "",
-)
+    val bashSummary: String? = null,
+) {
+    /** Presentation only; expansion still shows the raw arguments and result. */
+    val toolCaption: String get() = bashSummary?.let { "AI: $it" } ?: toolSummary
+}

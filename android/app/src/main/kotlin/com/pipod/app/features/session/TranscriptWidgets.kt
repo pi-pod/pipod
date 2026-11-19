@@ -905,7 +905,7 @@ private fun ToolGroupHeader(items: List<StreamItem>, expanded: Boolean, onToggle
 private fun ToolCallRow(item: StreamItem, isExpanded: Boolean, onExpandedChanged: (Boolean) -> Unit) {
     val name = item.toolName.ifEmpty { item.title }
     // The input is worth a block of its own only when the one-line summary left some out.
-    val input = item.toolInput.takeIf { it.isNotEmpty() && it.trim() != item.toolSummary.trim() }
+    val input = item.toolInput.takeIf { it.isNotEmpty() && it.trim() != item.toolCaption.trim() }
     val hasDetails = input != null || item.text.isNotEmpty()
     val toggle = { onExpandedChanged(!isExpanded) }
     val label = toolCallLabel(item)
@@ -940,10 +940,11 @@ private fun ToolCallRow(item: StreamItem, isExpanded: Boolean, onExpandedChanged
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = item.toolSummary,
-                maxLines = 1,
-                overflow = toolSummaryOverflow(item.toolSummary),
-                style = MonospaceTextStyle.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize),
+                text = item.toolCaption,
+                maxLines = if (item.bashSummary == null) 1 else if (isExpanded) Int.MAX_VALUE else 3,
+                overflow = toolSummaryOverflow(item.toolCaption),
+                style = if (item.bashSummary == null) MonospaceTextStyle.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize)
+                    else MaterialTheme.typography.bodySmall,
                 color = appColors.secondaryLabel,
                 modifier = Modifier.weight(1f),
             )
@@ -1047,12 +1048,12 @@ internal fun toolSummaryOverflow(summary: String): TextOverflow =
 /** A tool call as one line of text: its tool and what it was pointed at. */
 internal fun toolCallLine(item: StreamItem): String {
     val name = item.toolName.ifEmpty { item.title }
-    return if (item.toolSummary.isEmpty()) name else "$name ${item.toolSummary}"
+    return if (item.toolCaption.isEmpty()) name else "$name ${item.toolCaption}"
 }
 
 /** What a tool call row is named: how it went, then what it was. */
 internal fun toolCallLabel(item: StreamItem): String =
-    if (item.toolSummary.isEmpty()) item.title else "${item.title}: ${item.toolSummary}"
+    if (item.toolCaption.isEmpty()) item.title else "${item.title}: ${item.toolCaption}"
 
 /** What a run of tool calls is named: the count, how many failed, and what is running. */
 internal fun toolActivityLabel(items: List<StreamItem>): String {

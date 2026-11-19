@@ -140,6 +140,7 @@ object SlashCommandCatalog {
      * or native app controls. Pi's `get_commands` omits built-in commands.
      */
     val builtins: List<SlashCommand> = listOf(
+        SlashCommand("summaries", "Summarize bash commands and output with OpenAI GPT-6 Luna (uses your pod’s model quota)", SlashCommandSource.BUILTIN, "[on|off]", requiresConnection = false),
         SlashCommand(
             name = "compact",
             description = "Compact conversation context, optionally with focus instructions",
@@ -385,6 +386,8 @@ object SlashCommandCatalog {
                 )
             }
             return when (command.name) {
+                "summaries" -> if (arguments.lowercase() in listOf("", "on", "off")) ValidationResult(command.description, null, true)
+                    else ValidationResult(command.description, "Use /summaries on or /summaries off.", false)
                 "compact" -> if (arguments.isEmpty()) {
                     ValidationResult("Compacts conversation context on the pod", null, true)
                 } else {

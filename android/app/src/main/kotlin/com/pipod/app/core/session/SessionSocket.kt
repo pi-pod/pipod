@@ -120,6 +120,8 @@ sealed interface SessionServerMessage {
     /** pi's answer to an `rpc` command this client sent, under the client's id. */
     data class RpcResult(val id: String, val response: JsonObject?) : SessionServerMessage
 
+    data class BashSummary(val id: String, val text: String?) : SessionServerMessage
+
     data object Pong : SessionServerMessage
 
     /**
@@ -174,6 +176,7 @@ interface SessionTransport {
      * unique: pi retires an id once it has answered it.
      */
     fun rpc(id: String, command: JsonObject): Boolean
+    fun auxiliary(frame: JsonObject): Boolean = false
 }
 
 /**
@@ -331,6 +334,8 @@ class SessionSocket(
         },
     )
 
+    override fun auxiliary(frame: JsonObject): Boolean = send(frame)
+
     private fun send(message: JsonObject): Boolean {
         val socket = webSocket
         if (socket == null || !isConnected) return false
@@ -427,6 +432,9 @@ class SessionSocket(
                 ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content },
         )
 
+        "aux_complete_result" -> obj.string("id")?.let { id ->
+            SessionServerMessage.BashSummary(id, if (obj["ok"] == JsonPrimitive(true)) obj.string("text") else null)
+        }
         "rpc_result" -> obj.string("id")?.let { id ->
             SessionServerMessage.RpcResult(id = id, response = obj["response"] as? JsonObject)
         }

@@ -270,6 +270,7 @@ class SessionStream(
     // --- transcript and protocol state --------------------------------------
 
     private val transcript = mutableListOf<StreamItem>()
+    private val bashSummaries = BashSummaries(podId)
     private val dialogs = mutableListOf<PiDialog>()
     private val availableModels = mutableListOf<ModelChoice>()
     private val availableThinkingLevels = mutableListOf<String>()
@@ -616,6 +617,7 @@ class SessionStream(
         } finally {
             synchronized(lock) {
                 isLoadingHistory = false
+                updateBashSummaries()
                 publish()
             }
         }
@@ -642,6 +644,7 @@ class SessionStream(
                 synchronized(lock) {
                     val shown = transcript.mapTo(HashSet()) { it.id }
                     transcript.addAll(0, earlier.filter { it.id !in shown })
+                    updateBashSummaries()
                     earlierHistoryCursor = page.nextBefore
                 }
             } catch (cancelled: CancellationException) {
@@ -1134,6 +1137,15 @@ class SessionStream(
         arguments: String,
     ): SlashCommandLocalAction? {
         return when (command.name) {
+            "summaries" -> synchronized(lock) {
+                if (arguments.isNotEmpty()) {
+                    bashSummaries.configure(arguments.equals("on", true), socket)
+                    if (!bashSummaries.enabled) transcript.replaceAll { if (it.bashSummary != null) it.copy(bashSummary = null) else it }
+                    updateBashSummaries()
+                }
+                appendStatus(if (bashSummaries.enabled) "Bash summaries on · openai/gpt-6-luna. If unavailable, the original command is shown. Use /summaries off to disable." else "Bash summaries off. Showing original commands.")
+                null
+            }
             "compact" -> {
                 val payload = buildJsonObject {
                     put("type", "compact")
@@ -1318,7 +1330,13 @@ class SessionStream(
     // The gateway retires IDs for the shared pod, not just this socket.
     private fun nextSlashRequestId(prefix: String): String = "mobile-$prefix-${UUID.randomUUID()}"
 
+    private fun updateBashSummaries() {
+        val available = hasModelSnapshot && availableModels.any { it.provider == BashSummaries.PROVIDER && it.modelId == BashSummaries.MODEL }
+        bashSummaries.advance(transcript, socket.takeIf { isConnected }, available)
+    }
+
     private fun resetSlashCommandsLocked() {
+        bashSummaries.reset(socket)
         val interrupted = activeCommand
         activeCommand = null
         for (request in pendingSlashRpcs.values) {
@@ -2078,6 +2096,10 @@ class SessionStream(
 
             is SessionServerMessage.ModelScope -> message.patterns?.let(::handleModelScope)
 
+            is SessionServerMessage.BashSummary -> {
+                bashSummaries.accept(message.id, message.text, transcript)
+                updateBashSummaries()
+            }
             is SessionServerMessage.RpcResult -> {
                 message.response?.let { handleSlashRpcResultLocked(message.id, it) }
                 usageTracker.accept(message.id, message.response)
@@ -2218,6 +2240,7 @@ class SessionStream(
             currentThinkingLevel = message.thinkingLevel
         }
         modelCatalogRevision += 1
+        updateBashSummaries()
         refreshScopedModels()
         if (choices.isNotEmpty()) {
             ModelCatalogCache.write(
@@ -2435,8 +2458,10 @@ class SessionStream(
                 usageTracker.refresh()
             }
 
-            "tool_execution_start", "tool_execution_update", "tool_execution_end" ->
+            "tool_execution_start", "tool_execution_update", "tool_execution_end" -> {
                 upsertTool(id, seq, kind, timestamp, payload)
+                if (kind == "tool_execution_end" && !isIngestingHistory) updateBashSummaries()
+            }
 
             "bash_execution_update" -> appendBashOutput(payload)
 

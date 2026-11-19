@@ -686,7 +686,7 @@ private struct ToolCallRow: View {
     private var input: String? {
         let trimmed = item.toolInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              trimmed != item.toolSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+              trimmed != item.toolCaption.trimmingCharacters(in: .whitespacesAndNewlines)
         else { return nil }
         return item.toolInput
     }
@@ -696,12 +696,12 @@ private struct ToolCallRow: View {
     /// A tool call as one line of text: its tool and what it was pointed at.
     static func line(_ item: StreamItem) -> String {
         let name = item.toolName.isEmpty ? item.title : item.toolName
-        return item.toolSummary.isEmpty ? name : "\(name) \(item.toolSummary)"
+        return item.toolCaption.isEmpty ? name : "\(name) \(item.toolCaption)"
     }
 
     /// What a tool call row is named: how it went, then what it was.
     static func label(_ item: StreamItem) -> String {
-        item.toolSummary.isEmpty ? item.title : "\(item.title): \(item.toolSummary)"
+        item.toolCaption.isEmpty ? item.title : "\(item.title): \(item.toolCaption)"
     }
 
     /// Where a summary too long for its line gives way. A path is recognised by
@@ -724,11 +724,11 @@ private struct ToolCallRow: View {
                         .foregroundStyle(item.isError ? AppColors.destructive : AppColors.label)
                         .lineLimit(1)
                         .fixedSize()
-                    Text(item.toolSummary)
-                        .font(.system(.caption, design: .monospaced))
+                    Text(item.toolCaption)
+                        .font(item.bashSummary == nil ? .system(.caption, design: .monospaced) : .footnote)
                         .foregroundStyle(AppColors.secondaryLabel)
-                        .lineLimit(1)
-                        .truncationMode(Self.truncation(item.toolSummary))
+                        .lineLimit(item.bashSummary == nil ? 1 : (isExpanded ? nil : 3))
+                        .truncationMode(Self.truncation(item.toolCaption))
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if hasDetails {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
