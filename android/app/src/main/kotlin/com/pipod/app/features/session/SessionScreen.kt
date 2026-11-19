@@ -180,7 +180,7 @@ fun SessionScreen(
                     is SlashCommandLocalAction.CopyLastAssistantReply -> {
                         action.text?.let { reply ->
                             clipboard.setText(AnnotatedString(reply))
-                            scope.launch { toastHost.showAppToast("Copied last reply") }
+                            scope.launch { showAppToast(toastHost, "Copied last reply") }
                         }
                     }
 

@@ -2072,7 +2072,7 @@ class SessionStream(
             is SessionServerMessage.ModelScope -> message.patterns?.let(::handleModelScope)
 
             is SessionServerMessage.RpcResult -> {
-                handleSlashRpcResultLocked(message.id, message.response)
+                message.response?.let { handleSlashRpcResultLocked(message.id, it) }
                 usageTracker.accept(message.id, message.response)
             }
 
