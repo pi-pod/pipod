@@ -152,25 +152,43 @@ struct EventRow: View {
         Group {
             switch item.style {
             case .status, .tool:
-                Text(item.text)
-                    .font(.footnote)
-                    .foregroundStyle(AppColors.secondaryLabel)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 2)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel(item.text)
-                    // What the app says it just did to the stream ("You
-                    // stopped this turn.") is a localized sentence, and
-                    // `.combine` collapses the row into one element that is
-                    // not a static text — so neither the wording nor the
-                    // XCTest type is a contract. A tool line is a different
-                    // fact and carries a different identifier, so a tool
-                    // mentioning a word can never pass for a status line.
-                    .accessibilityIdentifier(
-                        item.style == .status
-                            ? "session.statusMessage" : "session.toolMessage"
-                    )
+                Group {
+                    if item.isError {
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2)
+                            Text(item.text)
+                                .font(.footnote)
+                                .multilineTextAlignment(.center)
+                        }
+                        .foregroundStyle(AppColors.destructive)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(AppColors.destructiveFill, in: RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 2)
+                    } else {
+                        Text(item.text)
+                            .font(.footnote)
+                            .foregroundStyle(AppColors.secondaryLabel)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 2)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(item.text)
+                // What the app says it just did to the stream ("You
+                // stopped this turn.") is a localized sentence, and
+                // `.combine` collapses the row into one element that is
+                // not a static text — so neither the wording nor the
+                // XCTest type is a contract. A tool line is a different
+                // fact and carries a different identifier, so a tool
+                // mentioning a word can never pass for a status line.
+                .accessibilityIdentifier(
+                    item.style == .status
+                        ? "session.statusMessage" : "session.toolMessage"
+                )
             case .user:
                 userBubble
             case .assistant:
@@ -373,7 +391,9 @@ struct EventRow: View {
     private var assistantBlock: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                if showsMeta { metaRow(sender: "pi", alignment: .leading) }
+                if showsMeta {
+                    metaRow(sender: item.title.isEmpty ? "pi" : item.title, alignment: .leading)
+                }
                 assistantContent
             }
             .frame(maxWidth: Self.measure, alignment: .leading)

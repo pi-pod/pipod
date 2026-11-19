@@ -44,6 +44,10 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 
@@ -106,6 +110,15 @@ data class SessionStreamState(
     /** Bumped for every transcript mutation; a screen watches it to decide when to scroll. */
     val scrollRevision: Int = 0,
     val scrollIsStreamingUpdate: Boolean = false,
+    /** False during bulk history ingestion so opening a pod snaps straight to the bottom. */
+    val scrollAnimated: Boolean = true,
+    /** Built-in commands merged with commands discovered from the pod (`get_commands`). */
+    val slashCommands: List<SlashCommand> = SlashCommandCatalog.builtins,
+    /** True once `get_commands` has answered for the active connection. */
+    val hasLoadedCommands: Boolean = false,
+    /** Set while a slash command RPC is in flight so the working indicator names it. */
+    val activeCommand: ActiveSlashCommand? = null,
+    val isCompacting: Boolean = false,
     val currentModel: ModelChoice? = null,
     val currentThinkingLevel: String? = null,
     /**
@@ -168,6 +181,13 @@ data class SessionStreamState(
 ) {
     /** Tool cards the user has opened, keyed as the transcript presentation keys them. */
     fun isToolExpanded(key: String): Boolean = toolsExpandedByExtension || key in expandedToolDetails
+
+    /** Human-readable status for the transcript's typing/activity indicator. */
+    val workingDisplayLabel: String?
+        get() = activeCommand?.statusLabel
+            ?: (if (isCompacting) "Compacting context…" else null)
+            ?: workingMessage
+            ?: workingIndicator
 }
 
 /**
@@ -262,6 +282,31 @@ class SessionStream(
     private var isInterrupting = false
     private var scrollRevision = 0
     private var scrollIsStreamingUpdate = false
+    private var scrollAnimated = true
+    private var isIngestingHistory = false
+    private var slashCommands: List<SlashCommand> = SlashCommandCatalog.builtins
+    private var hasLoadedCommands = false
+    private var activeCommand: ActiveSlashCommand? = null
+    private var nextSlashRequestNumber = 0
+    private var pendingCommandsRequestId: String? = null
+    private val pendingSlashRpcs = mutableMapOf<String, PendingSlashRpc>()
+
+    private data class PendingSlashRpc(
+        val id: String,
+        val commandName: String,
+        val kind: Kind,
+    ) {
+        sealed interface Kind {
+            data object Compact : Kind
+            data object NewSession : Kind
+            data class RenameSession(val name: String) : Kind
+            data class PodPrompt(
+                val itemId: String,
+                val itemsCountAtSend: Int,
+                val dialogsCountAtSend: Int,
+            ) : Kind
+        }
+    }
     private var currentModel: ModelChoice? = null
     private var currentThinkingLevel: String? = null
     private var hasModelSnapshot = false
@@ -620,22 +665,27 @@ class SessionStream(
     }
 
     private fun ingestHistory(events: List<ConversationEventRecord>) {
-        for (event in events) {
-            val id = eventId(event.sessionId, event.seq)
-            if (!seenEventIds.add(id)) continue
-            val payload = event.payload as? JsonObject ?: JsonObject(emptyMap())
-            handleEvent(
-                id = id,
-                seq = event.seq,
-                kind = event.kind,
-                timestamp = parseTimestamp(event.createdAt),
-                payload = payload,
-                reason = payload.string("reason"),
-            )
-            streamSessionId = event.sessionId
-            seqCursor = event.seq
+        isIngestingHistory = true
+        try {
+            for (event in events) {
+                val id = eventId(event.sessionId, event.seq)
+                if (!seenEventIds.add(id)) continue
+                val payload = event.payload as? JsonObject ?: JsonObject(emptyMap())
+                handleEvent(
+                    id = id,
+                    seq = event.seq,
+                    kind = event.kind,
+                    timestamp = parseTimestamp(event.createdAt),
+                    payload = payload,
+                    reason = payload.string("reason"),
+                )
+                streamSessionId = event.sessionId
+                seqCursor = event.seq
+            }
+            serverWatermark = maxOf(serverWatermark, seqCursor)
+        } finally {
+            isIngestingHistory = false
         }
-        serverWatermark = maxOf(serverWatermark, seqCursor)
     }
 
     /**
@@ -1043,7 +1093,367 @@ class SessionStream(
         attachOutcome = null
     }
 
-    // --- sending ------------------------------------------------------------
+    // --- sending and slash commands -----------------------------------------
+
+    /**
+     * Executes a slash command when the draft matches one, or falls back to
+     * sending an ordinary prompt. Returns a local UI action (picker, usage
+     * sheet or clipboard copy) when the command drives an app screen directly.
+     */
+    fun sendOrRunSlashCommand(
+        text: String,
+        attachments: List<ChatAttachment> = emptyList(),
+    ): SlashCommandLocalAction? {
+        val evaluation = synchronized(lock) {
+            SlashCommandCatalog.evaluate(
+                draft = text,
+                commands = slashCommands,
+                hasLoadedCommands = hasLoadedCommands,
+                isConnected = isConnected,
+                availableThinkingLevels = availableThinkingLevels.toList(),
+            )
+        }
+        val valid = evaluation as? SlashCommandDraftEvaluation.Valid
+        if (valid == null) {
+            send(text, attachments)
+            return null
+        }
+        if (!valid.canExecute) return null
+
+        if (valid.command.source == SlashCommandSource.BUILTIN) {
+            return executeBuiltinSlashCommand(valid.command, valid.arguments)
+        }
+        val useRpc = synchronized(lock) { isConnected && hasModelSnapshot }
+        if (useRpc) {
+            sendPodSlashCommand(valid.command, text, attachments)
+            return null
+        }
+        send(text, attachments)
+        return null
+    }
+
+    private fun executeBuiltinSlashCommand(
+        command: SlashCommand,
+        arguments: String,
+    ): SlashCommandLocalAction? {
+        return when (command.name) {
+            "compact" -> {
+                val payload = buildJsonObject {
+                    put("type", "compact")
+                    if (arguments.isNotEmpty()) put("customInstructions", arguments)
+                }
+                val label = if (arguments.isEmpty()) {
+                    "Compacting conversation context…"
+                } else {
+                    "Compacting context ($arguments)…"
+                }
+                synchronized(lock) {
+                    dispatchSlashRpcLocked(
+                        commandName = command.name,
+                        statusLabel = label,
+                        kind = PendingSlashRpc.Kind.Compact,
+                        payload = payload,
+                    )
+                }
+                null
+            }
+
+            "new" -> {
+                synchronized(lock) {
+                    dispatchSlashRpcLocked(
+                        commandName = command.name,
+                        statusLabel = "Starting a new session…",
+                        kind = PendingSlashRpc.Kind.NewSession,
+                        payload = buildJsonObject { put("type", "new_session") },
+                    )
+                }
+                null
+            }
+
+            "name" -> {
+                if (arguments.isEmpty()) {
+                    synchronized(lock) {
+                        val current = podRecord?.name?.takeIf { it.isNotBlank() } ?: "Untitled session"
+                        appendStatus("Session name: $current")
+                    }
+                    return null
+                }
+                synchronized(lock) {
+                    dispatchSlashRpcLocked(
+                        commandName = command.name,
+                        statusLabel = "Renaming session to “$arguments”…",
+                        kind = PendingSlashRpc.Kind.RenameSession(arguments),
+                        payload = buildJsonObject {
+                            put("type", "set_session_name")
+                            put("name", arguments)
+                        },
+                    )
+                }
+                null
+            }
+
+            "model" -> {
+                if (arguments.isEmpty()) return SlashCommandLocalAction.OpenModelPicker
+                val match = synchronized(lock) { matchModelLocked(arguments) }
+                if (match != null) {
+                    selectModel(match)
+                    return null
+                }
+                synchronized(lock) {
+                    appendStatus("No single model matched “$arguments” — choose one from the picker.")
+                }
+                SlashCommandLocalAction.OpenModelPicker
+            }
+
+            "thinking" -> {
+                if (arguments.isEmpty()) return SlashCommandLocalAction.OpenModelPicker
+                val target = synchronized(lock) {
+                    availableThinkingLevels.firstOrNull { it.equals(arguments, ignoreCase = true) }
+                        ?: arguments.lowercase()
+                }
+                selectThinkingLevel(target)
+                null
+            }
+
+            "session" -> {
+                synchronized(lock) { usageTracker.refresh() }
+                SlashCommandLocalAction.OpenUsage
+            }
+
+            "copy" -> {
+                val reply = synchronized(lock) {
+                    val last = transcript.lastOrNull {
+                        it.style == StreamItemStyle.ASSISTANT && it.text.isNotBlank()
+                    }?.text
+                    if (last == null) {
+                        appendStatus("No assistant reply to copy yet.")
+                    } else {
+                        appendStatus("Copied last assistant reply to clipboard.")
+                    }
+                    last
+                }
+                SlashCommandLocalAction.CopyLastAssistantReply(reply)
+            }
+
+            else -> null
+        }
+    }
+
+    private fun matchModelLocked(query: String): ModelChoice? {
+        val needle = query.trim().lowercase()
+        if (needle.isEmpty()) return null
+        availableModels.firstOrNull {
+            it.id.lowercase() == needle ||
+                it.modelId.lowercase() == needle ||
+                it.name.lowercase() == needle
+        }?.let { return it }
+        val partial = availableModels.filter {
+            needle in it.id.lowercase() || needle in it.name.lowercase()
+        }
+        return partial.singleOrNull()
+    }
+
+    private fun sendPodSlashCommand(
+        command: SlashCommand,
+        fullText: String,
+        attachments: List<ChatAttachment>,
+    ) {
+        synchronized(lock) {
+            val itemId = "$localIdPrefix:$syntheticId"
+            syntheticId -= 1
+            val staged = attachments.map {
+                StreamImageAttachment(id = it.id, name = it.name, mimeType = it.mimeType, bytes = it.bytes)
+            }
+            if (staged.isNotEmpty()) pendingAttachments[itemId] = staged
+            sendWatermarks[itemId] = maxOf(serverWatermark, seqCursor)
+            append(
+                StreamItem(
+                    id = itemId,
+                    style = StreamItemStyle.USER,
+                    title = "You",
+                    text = fullText,
+                    timestamp = now(),
+                    delivery = StreamItemDelivery.SENDING,
+                    attachments = staged,
+                ),
+            )
+            val images = wireImages(itemId)
+            val payload = buildJsonObject {
+                put("type", "prompt")
+                put("message", fullText)
+                if (!images.isNullOrEmpty()) {
+                    putJsonArray("images") {
+                        for (image in images) {
+                            add(
+                                buildJsonObject {
+                                    put("type", "image")
+                                    put("data", image.base64Data)
+                                    put("mimeType", image.mimeType)
+                                },
+                            )
+                        }
+                    }
+                }
+                // Extension commands execute immediately even while pi is streaming;
+                // prompt templates and skills expand into prompts and need followUp.
+                if (command.source != SlashCommandSource.EXTENSION && isRunning) {
+                    put("streamingBehavior", "followUp")
+                }
+            }
+            val itemsCount = transcript.size
+            val dialogsCount = dialogs.size
+            val sent = dispatchSlashRpcLocked(
+                commandName = command.name,
+                statusLabel = "Running ${command.displayName}…",
+                kind = PendingSlashRpc.Kind.PodPrompt(
+                    itemId = itemId,
+                    itemsCountAtSend = itemsCount,
+                    dialogsCountAtSend = dialogsCount,
+                ),
+                payload = payload,
+            )
+            if (sent) {
+                if (command.source != SlashCommandSource.EXTENSION) {
+                    awaitingReply = true
+                    updateRunningState()
+                }
+                publish()
+            } else {
+                setDelivery(itemId, StreamItemDelivery.FAILED)
+            }
+        }
+    }
+
+    private fun nextSlashRequestIdLocked(prefix: String): String {
+        nextSlashRequestNumber += 1
+        return "$prefix-$nextSlashRequestNumber"
+    }
+
+    private fun requestCommandsLocked() {
+        val transport = socket ?: return
+        if (!isConnected) return
+        val id = nextSlashRequestIdLocked("commands")
+        pendingCommandsRequestId = id
+        transport.rpc(id, buildJsonObject { put("type", "get_commands") })
+    }
+
+    private fun dispatchSlashRpcLocked(
+        commandName: String,
+        statusLabel: String,
+        kind: PendingSlashRpc.Kind,
+        payload: JsonObject,
+    ): Boolean {
+        val transport = socket
+        if (!isConnected || transport == null) {
+            appendStatus("Connect to the pod to run /$commandName.", isError = true)
+            return false
+        }
+        val id = nextSlashRequestIdLocked("slash")
+        if (!transport.rpc(id, payload)) {
+            appendStatus("Couldn’t send /$commandName. Check the connection and try again.", isError = true)
+            return false
+        }
+        pendingSlashRpcs[id] = PendingSlashRpc(id = id, commandName = commandName, kind = kind)
+        activeCommand = ActiveSlashCommand(id = id, commandName = commandName, statusLabel = statusLabel)
+        bump(streaming = false)
+        return true
+    }
+
+    private fun handleSlashRpcResultLocked(id: String, response: JsonObject) {
+        if (id == pendingCommandsRequestId) {
+            pendingCommandsRequestId = null
+            SlashCommandCatalog.decodeRemote(response)?.let { remote ->
+                slashCommands = SlashCommandCatalog.merge(remote)
+                hasLoadedCommands = true
+                publish()
+            }
+            return
+        }
+        val pending = pendingSlashRpcs.remove(id) ?: return
+        if (activeCommand?.id == id) {
+            activeCommand = null
+        }
+        val success = (response["success"] as? JsonPrimitive)?.booleanOrNull == true
+        val errorText = response.string("error")?.trim()?.takeIf { it.isNotEmpty() }
+
+        when (val kind = pending.kind) {
+            PendingSlashRpc.Kind.Compact -> {
+                if (!success) {
+                    appendStatus(
+                        errorText?.let { "Compaction failed: $it" } ?: "Compaction failed.",
+                        isError = true,
+                    )
+                } else {
+                    publish()
+                }
+            }
+
+            PendingSlashRpc.Kind.NewSession -> {
+                if (!success) {
+                    appendStatus(
+                        errorText?.let { "Couldn’t start a new session: $it" }
+                            ?: "Couldn’t start a new session.",
+                        isError = true,
+                    )
+                    return
+                }
+                val cancelled = ((response["data"] as? JsonObject)?.get("cancelled") as? JsonPrimitive)
+                    ?.booleanOrNull == true
+                if (cancelled) {
+                    appendStatus("New session was cancelled.")
+                    return
+                }
+                appendStatus("Started a new session — context cleared.")
+                usageTracker.refresh()
+                socket?.requestModels()
+                requestCommandsLocked()
+            }
+
+            is PendingSlashRpc.Kind.RenameSession -> {
+                if (!success) {
+                    appendStatus(
+                        errorText?.let { "Couldn’t rename session: $it" }
+                            ?: "Couldn’t rename session.",
+                        isError = true,
+                    )
+                    return
+                }
+                applyPodUpdated(podId, kind.name)
+                appendStatus("Session renamed to “${kind.name}”.")
+            }
+
+            is PendingSlashRpc.Kind.PodPrompt -> {
+                if (!success) {
+                    awaitingReply = false
+                    updateRunningState()
+                    if (transcript.any { it.id == kind.itemId }) {
+                        setDelivery(kind.itemId, StreamItemDelivery.FAILED)
+                    }
+                    appendStatus(
+                        errorText?.let { "/${pending.commandName} failed: $it" }
+                            ?: "/${pending.commandName} failed.",
+                        isError = true,
+                    )
+                    return
+                }
+                val disposition = (response["data"] as? JsonObject)?.string("disposition")
+                when (disposition) {
+                    "handled" -> {
+                        awaitingReply = false
+                        updateRunningState()
+                        if (transcript.size <= kind.itemsCountAtSend && dialogs.size <= kind.dialogsCountAtSend) {
+                            appendStatus("Ran /${pending.commandName}.")
+                        } else {
+                            publish()
+                        }
+                    }
+
+                    "queued" -> appendStatus("Queued /${pending.commandName} as a follow-up.")
+                    else -> publish()
+                }
+            }
+        }
+    }
 
     fun send(text: String, attachments: List<ChatAttachment> = emptyList()) {
         val id = synchronized(lock) {
@@ -1266,6 +1676,9 @@ class SessionStream(
         releaseTransport(socket)
         socket = null
         bashOutput.clear()
+        pendingCommandsRequestId = null
+        pendingSlashRpcs.clear()
+        activeCommand = null
         failInFlightSends()
     }
 
@@ -1562,10 +1975,12 @@ class SessionStream(
 
             is SessionServerMessage.Ephemeral -> {
                 if (message.kind == "extension_ui_request") {
-                    // Remote-UI surfaces own their frames; anything else is a
-                    // dialog pi is waiting on, live or re-sent for this attach.
+                    // Remote-UI surfaces own their frames; non-bridge `notify`
+                    // frames become status lines; anything else is a dialog.
                     if (!remoteUi.applyExtensionRequest(message.payload)) {
-                        showDialog(message.payload)
+                        if (!appendExtensionNotificationIfApplicable(message.payload, now())) {
+                            showDialog(message.payload)
+                        }
                     }
                     publish()
                     return
@@ -1656,7 +2071,10 @@ class SessionStream(
 
             is SessionServerMessage.ModelScope -> message.patterns?.let(::handleModelScope)
 
-            is SessionServerMessage.RpcResult -> usageTracker.accept(message.id, message.response)
+            is SessionServerMessage.RpcResult -> {
+                message.response?.let { handleSlashRpcResultLocked(message.id, it) }
+                usageTracker.accept(message.id, message.response)
+            }
 
             is SessionServerMessage.Error -> {
                 // Remote-UI errors are scoped to one extension surface: the
@@ -1759,6 +2177,7 @@ class SessionStream(
         dialogs.clear()
         socket?.requestModels()
         socket?.requestModelScope()
+        requestCommandsLocked()
         usageTracker.attached()
         // A model chosen before this connection, or remembered for a pod this app just launched,
         // is switched to once the catalog arrives; parked messages wait for that so they run on
@@ -1935,8 +2354,20 @@ class SessionStream(
             "compaction_end" -> {
                 isCompacting = false
                 updateRunningState()
+                appendCompactionEndStatus(payload, timestamp)
                 // Summarizing the history is itself priced usage.
                 usageTracker.refresh()
+            }
+
+            "extension_ui_request" -> {
+                appendExtensionNotificationIfApplicable(payload, timestamp)
+            }
+
+            "extension_error" -> {
+                val extError = payload.string("error")?.trim().orEmpty()
+                if (extError.isNotEmpty()) {
+                    appendStatus("Extension error: $extError", isError = true, timestamp = timestamp)
+                }
             }
 
             "agent_end", "turn_end" -> Unit
@@ -1968,7 +2399,12 @@ class SessionStream(
             }
 
             "message_end" -> {
-                if (messageRole(payload) != "assistant") return
+                val role = messageRole(payload)
+                if (role == "custom") {
+                    appendCustomMessageIfDisplayed(id, payload, timestamp)
+                    return
+                }
+                if (role != "assistant") return
                 val itemId = activeAssistantItemId ?: id
                 val text = visibleMessageText(payload)
                 val thinking = visibleThinkingText(payload)
@@ -2213,13 +2649,89 @@ class SessionStream(
         bump()
     }
 
-    private fun appendStatus(text: String) {
+    private fun appendCompactionEndStatus(payload: JsonObject, timestamp: Instant?) {
+        val aborted = (payload["aborted"] as? JsonPrimitive)?.booleanOrNull == true
+        if (aborted) {
+            appendStatus("Compaction cancelled.", timestamp = timestamp)
+            return
+        }
+        val err = payload.string("errorMessage")?.trim().orEmpty()
+        if (err.isNotEmpty()) {
+            appendStatus("Compaction failed: $err", isError = true, timestamp = timestamp)
+            return
+        }
+        val result = payload["result"] as? JsonObject
+        val before = (result?.get("tokensBefore") as? JsonPrimitive)?.longOrNull
+        val after = (result?.get("estimatedTokensAfter") as? JsonPrimitive)?.longOrNull
+        val text = when {
+            before != null && before > 0 && after != null && after > 0 ->
+                "Context compacted (${SessionUsage.tokens(before)} → ${SessionUsage.tokens(after)} tokens)."
+
+            before != null && before > 0 ->
+                "Context compacted (from ${SessionUsage.tokens(before)} tokens)."
+
+            else -> "Context compacted."
+        }
+        appendStatus(text, timestamp = timestamp)
+    }
+
+    private fun appendExtensionNotificationIfApplicable(
+        payload: JsonObject,
+        timestamp: Instant?,
+    ): Boolean {
+        if (payload.string("method") != "notify") return false
+        val trimmed = payload.string("message")?.trim().orEmpty()
+        if (trimmed.isEmpty() ||
+            trimmed.startsWith("pi-pod-internal/") ||
+            trimmed.startsWith("pi-pod-remote-ui:")
+        ) {
+            return true
+        }
+        val notifyType = payload.string("notifyType") ?: "info"
+        appendStatus(
+            text = redactingSecrets(trimmed),
+            isError = notifyType == "error",
+            timestamp = timestamp,
+        )
+        return true
+    }
+
+    private fun appendCustomMessageIfDisplayed(
+        id: String,
+        payload: JsonObject,
+        timestamp: Instant?,
+    ) {
+        val message = payload["message"] as? JsonObject ?: return
+        val display = (message["display"] as? JsonPrimitive)?.booleanOrNull
+        if (display == false) return
+        val text = visibleMessageText(payload).trim()
+        if (text.isEmpty()) return
+        val title = message.string("customType")?.trim().orEmpty().ifEmpty { "Extension" }
+        append(
+            StreamItem(
+                id = id,
+                style = StreamItemStyle.ASSISTANT,
+                title = title,
+                text = text,
+                timestamp = timestamp,
+                isInProgress = false,
+            ),
+        )
+    }
+
+    private fun appendStatus(
+        text: String,
+        isError: Boolean = false,
+        timestamp: Instant? = null,
+    ) {
         append(
             StreamItem(
                 id = "$localIdPrefix:$syntheticId",
                 style = StreamItemStyle.STATUS,
                 title = "",
                 text = text,
+                timestamp = timestamp,
+                isError = isError,
             ),
         )
         syntheticId -= 1
@@ -2250,6 +2762,7 @@ class SessionStream(
     /** One transcript mutation: a scroll revision, a streaming hint, a repaint. */
     private fun bump(streaming: Boolean = false) {
         scrollIsStreamingUpdate = streaming
+        scrollAnimated = !isIngestingHistory
         scrollRevision += 1
         publish()
     }
@@ -2487,6 +3000,11 @@ class SessionStream(
             isInterrupting = isInterrupting,
             scrollRevision = scrollRevision,
             scrollIsStreamingUpdate = scrollIsStreamingUpdate,
+            scrollAnimated = scrollAnimated,
+            slashCommands = slashCommands,
+            hasLoadedCommands = hasLoadedCommands,
+            activeCommand = activeCommand,
+            isCompacting = isCompacting,
             currentModel = currentModel,
             currentThinkingLevel = currentThinkingLevel,
             hasModelSnapshot = hasModelSnapshot,

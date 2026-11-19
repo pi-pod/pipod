@@ -51,6 +51,11 @@ public struct SessionView: View {
     /// the whole transcript on every bump, including the ones that changed no
     /// items at all.
     @State private var rowCache = TranscriptRowCache()
+    /// True once the initial transcript landing has snapped to the latest row,
+    /// so later single-message arrivals animate while opening a pod jumps
+    /// straight to the bottom without racing `LazyVStack` layout.
+    @State private var hasSettledInitialScroll = false
+    @State private var scrollTask: Task<Void, Never>?
     @FocusState private var composerFocused: Bool
 
     private var preferences: TranscriptPreferences { .shared }
@@ -106,6 +111,8 @@ public struct SessionView: View {
             // A notification for this pod is only redundant while it is on screen.
             if push.visiblePodId == podId { push.visiblePodId = nil }
             guard Self.shouldDetach(route: route, from: router.podsPath) else { return }
+            scrollTask?.cancel()
+            scrollTask = nil
             if let stream {
                 streams.forget(stream, for: podId)
                 stream.detach()
@@ -277,10 +284,11 @@ public struct SessionView: View {
                             .id(dialog.id)
                     }
                     if stream.workingVisible
+                        || stream.activeCommand != nil
                         || TranscriptPresentation.showsTypingIndicator(
                             isRunning: stream.isRunning, lastItem: stream.items.last
                         ) {
-                        TypingIndicator(label: stream.workingMessage ?? stream.workingIndicator)
+                        TypingIndicator(label: stream.workingDisplayLabel)
                     }
                     // The sentinel that re-arms auto-follow. Reaching the bottom
                     // is how someone says "keep up with the conversation again";
@@ -306,17 +314,44 @@ public struct SessionView: View {
             .onChange(of: stream.items, initial: true) { _, items in
                 rowCache.update(items)
             }
+            .onChange(of: stream.isLoadingHistory, initial: true) { _, isLoading in
+                guard !isLoading, !hasSettledInitialScroll else { return }
+                rowCache.update(stream.items)
+                if stream.items.isEmpty && stream.openDialogs.isEmpty {
+                    hasSettledInitialScroll = true
+                    return
+                }
+                guard followsLatest else { return }
+                hasSettledInitialScroll = true
+                scheduleScrollToBottom(using: scroller, animated: false, settle: true)
+            }
+            .onChange(of: rowCache.rows.last?.id, initial: true) { _, lastID in
+                guard !hasSettledInitialScroll,
+                      !stream.isLoadingHistory,
+                      lastID != nil,
+                      followsLatest
+                else { return }
+                hasSettledInitialScroll = true
+                scheduleScrollToBottom(using: scroller, animated: false, settle: true)
+            }
             .onChange(of: stream.scrollRevision) { _, _ in
                 guard followsLatest else { return }
-                // Streaming deltas arrive many times a second; animating each
-                // scroll makes the transcript judder.
-                if stream.scrollIsStreamingUpdate {
-                    scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
-                } else {
-                    withAnimation(.easeOut(duration: 0.22)) {
-                        scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
-                    }
+                rowCache.update(stream.items)
+                let isInitialLanding = !hasSettledInitialScroll
+                if isInitialLanding && !stream.isLoadingHistory
+                    && (!stream.items.isEmpty || !stream.openDialogs.isEmpty) {
+                    hasSettledInitialScroll = true
                 }
+                // Initial history load and high-frequency streaming deltas jump
+                // immediately; single live turns animate smoothly.
+                let animated = !isInitialLanding
+                    && stream.scrollAnimated
+                    && !stream.scrollIsStreamingUpdate
+                scheduleScrollToBottom(
+                    using: scroller,
+                    animated: animated,
+                    settle: isInitialLanding || !stream.scrollAnimated
+                )
             }
             .onChange(of: stream.isLoadingEarlierHistory) { _, isLoading in
                 // Earlier turns arrive above the reader. Left alone, the list
@@ -335,12 +370,11 @@ public struct SessionView: View {
             }
             .onChange(of: followsLatest) { _, follows in
                 guard follows else {
+                    scrollTask?.cancel()
                     readThroughID = stream.items.last?.id
                     return
                 }
-                withAnimation(.easeOut(duration: 0.22)) {
-                    scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
-                }
+                scheduleScrollToBottom(using: scroller, animated: true, settle: false)
             }
             .simultaneousGesture(
                 // Dragging away from the bottom stops the transcript chasing new
@@ -349,9 +383,11 @@ public struct SessionView: View {
                 // so a scroll the app performed itself cannot disarm it.
                 DragGesture()
                     .onChanged { value in
-                        followsLatest = TranscriptScrollPolicy.shouldFollow(
+                        let next = TranscriptScrollPolicy.shouldFollow(
                             wasFollowing: followsLatest, draggedBy: value.translation.height
                         )
+                        if !next { scrollTask?.cancel() }
+                        followsLatest = next
                     }
                     .onEnded { _ in
                         followsLatest = TranscriptScrollPolicy.shouldFollowAfterDrag(
@@ -359,6 +395,39 @@ public struct SessionView: View {
                         )
                     }
             )
+        }
+    }
+
+    /// Defers `scrollTo(bottomAnchor)` until after `rowCache.update(items)` has
+    /// laid out its rows in `LazyVStack`. On initial open (`settle: true`),
+    /// re-snaps briefly if `LazyVStack`'s lazy height estimates left the bottom
+    /// sentinel off screen, stopping immediately if the user drags away.
+    private func scheduleScrollToBottom(
+        using scroller: ScrollViewProxy, animated: Bool, settle: Bool
+    ) {
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled, followsLatest else { return }
+            if animated {
+                withAnimation(.easeOut(duration: 0.22)) {
+                    scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
+            } else {
+                scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
+            }
+            guard settle else { return }
+            // The first hop runs unconditionally after SwiftUI commits the new
+            // LazyVStack rows (in case `bottomIsVisible` was still stale-true
+            // from the loading frame); later hops re-snap only if lazy height
+            // estimation left the bottom sentinel off screen.
+            for (index, delayMs) in [50, 150, 320].enumerated() {
+                try? await Task.sleep(for: .milliseconds(delayMs))
+                guard !Task.isCancelled, followsLatest else { return }
+                if index == 0 || !bottomIsVisible {
+                    scroller.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
+            }
         }
     }
 
@@ -577,9 +646,19 @@ public struct SessionView: View {
     private func sendDraft(_ stream: SessionStream) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachments.isEmpty else { return }
+        let evaluation = SlashCommandCatalog.evaluate(
+            draft: text,
+            commands: stream.slashCommands,
+            hasLoadedCommands: stream.hasLoadedCommands,
+            isConnected: stream.isConnected,
+            availableThinkingLevels: stream.availableThinkingLevels
+        )
+        guard !evaluation.blocksSend else { return }
         // A selected model is not usable until the live catalog confirms it.
         // Refuse before clearing the draft so a pending switch cannot lose work.
-        guard !stream.isModelSwitchInFlight, !stream.isThinkingSwitchInFlight else { return }
+        if evaluation.validCommand?.source != .builtin {
+            guard !stream.isModelSwitchInFlight, !stream.isThinkingSwitchInFlight else { return }
+        }
         // The composer already disables Send past the gateway's prompt cap; this
         // is the same refusal one layer down, so no path can hand the socket a
         // prompt the server will throw away with the turn already on screen.
@@ -590,7 +669,18 @@ public struct SessionView: View {
         attachments = []
         attachError = nil
         followsLatest = true
-        stream.send(text, attachments: staged)
+        if let localAction = stream.sendOrRunSlashCommand(text, attachments: staged) {
+            switch localAction {
+            case .openModelPicker:
+                router.openModelPicker(podId: podId)
+            case .openUsage:
+                showsUsage = true
+            case .copyLastAssistantReply(let reply):
+                if let reply {
+                    UIPasteboard.general.string = reply
+                }
+            }
+        }
     }
 
     /// Deleting an undelivered message moves its text back into the composer
