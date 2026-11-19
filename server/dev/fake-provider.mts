@@ -509,7 +509,7 @@ class FakePty implements PtySession {
     if (process.env["FAKE_BASH_SUMMARIES"] === "1" && message.startsWith(`/${AUX_COMPLETE_COMMAND} `)) {
       const request = JSON.parse(Buffer.from(message.split(" ")[1]!, "base64url").toString("utf8"));
       const content = request.messages?.[0]?.content ?? "";
-      const supported = request.provider === "openai" && request.model === "gpt-6-luna" && content.startsWith("Command:\\n");
+      const supported = request.provider === "openai" && request.model === "gpt-6-luna" && content.startsWith("Command:\n");
       const reply = { v: 1, id: request.id, op: "complete", ok: supported, ...(supported
         ? { data: { text: content.includes("Failed: true") ? "Fixture: command failed." : "Fixture: command completed.", stopReason: "stop" } }
         : { error: { code: "unsupported", message: "Unsupported fixture request" } }) };
