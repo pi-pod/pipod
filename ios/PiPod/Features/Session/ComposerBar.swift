@@ -39,12 +39,11 @@ struct ComposerBar: View {
 
     private var canSend: Bool {
         guard !isOverLimit else { return false }
-        if slashEvaluation.blocksSend { return false }
-        if slashEvaluation.validCommand?.source != .builtin {
-            guard !stream.isModelSwitchInFlight,
-                  !stream.isThinkingSwitchInFlight
-            else { return false }
-        }
+        let evaluation = slashEvaluation
+        guard !evaluation.blocksSend,
+              !evaluation.isSlashInput || stream.activeCommand == nil,
+              !stream.isModelSwitchInFlight, !stream.isThinkingSwitchInFlight
+        else { return false }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !attachments.isEmpty
     }
@@ -221,14 +220,8 @@ struct ComposerBar: View {
             // One-tap entry into the slash-command picker without switching
             // the touch keyboard to the symbols layer.
             Button {
-                if text.trimmingCharacters(in: .whitespacesAndNewlines) == "/" {
-                    text = ""
-                } else if !slashEvaluation.isSlashInput {
-                    text = "/"
-                    isFocused = true
-                } else {
-                    text = ""
-                }
+                if text == "/" { text = "" }
+                else { text = "/"; isFocused = true }
             } label: {
                 Text("/")
                     .font(.footnote.monospaced().weight(.semibold))
@@ -243,7 +236,8 @@ struct ComposerBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(slashEvaluation.isSlashInput ? "Close slash commands" : "Slash commands")
+            .disabled(!text.isEmpty && text != "/")
+            .accessibilityLabel(text == "/" ? "Close slash commands" : "Slash commands")
             .accessibilityIdentifier("composer.slashCommands")
 
             // The gap yields first, so the model name is never squeezed for it.

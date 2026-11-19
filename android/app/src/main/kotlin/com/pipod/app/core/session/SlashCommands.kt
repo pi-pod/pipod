@@ -123,7 +123,7 @@ sealed interface SlashCommandDraftEvaluation {
             None -> false
             is Browsing -> true
             is Valid -> !canExecute
-            is Unknown -> !isLoadingCatalog && isConnected
+            is Unknown -> true // Never turn an unverified command into a model prompt.
         }
 }
 
@@ -261,13 +261,14 @@ object SlashCommandCatalog {
         isConnected: Boolean,
         availableThinkingLevels: List<String>,
     ): SlashCommandDraftEvaluation {
-        val trimmedLeading = draft.dropWhile { it == ' ' || it == '\t' }
+        val trimmedLeading = draft.trimStart()
         if (!trimmedLeading.startsWith("/")) return SlashCommandDraftEvaluation.None
         val afterSlash = trimmedLeading.drop(1)
-        // A bare `/ ` or `//` is ordinary text, not a slash command.
-        if (afterSlash.isNotEmpty() && (afterSlash[0] == '/' || afterSlash[0].isWhitespace())) {
-            return SlashCommandDraftEvaluation.None
-        }
+        // Paths and slash followed by prose are not commands. A bare slash,
+        // even with trailing whitespace, keeps the command menu open.
+        if (afterSlash.startsWith('/') ||
+            (afterSlash.firstOrNull()?.isWhitespace() == true && afterSlash.isNotBlank())
+        ) return SlashCommandDraftEvaluation.None
 
         val tokenEnd = afterSlash.indexOfFirst { it.isWhitespace() }.let { if (it < 0) afterSlash.length else it }
         val token = afterSlash.substring(0, tokenEnd)
@@ -370,6 +371,9 @@ object SlashCommandCatalog {
         availableThinkingLevels: List<String>,
     ): ValidationResult {
         if (command.source == SlashCommandSource.BUILTIN) {
+            if (!command.acceptsArguments && arguments.isNotEmpty()) {
+                return ValidationResult(command.description, "${command.displayName} doesn’t take arguments.", false)
+            }
             if (command.requiresConnection && !isConnected) {
                 if (command.name == "name" && arguments.isEmpty()) {
                     return ValidationResult("Show the current session name", null, true)
@@ -425,8 +429,8 @@ object SlashCommandCatalog {
         if (!isConnected) {
             return ValidationResult(
                 command.description,
-                "Pod is not connected — sending will queue or wake the pod.",
-                true,
+                "Connect to the pod to run ${command.displayName}.",
+                false,
             )
         }
         return if (arguments.isEmpty()) {

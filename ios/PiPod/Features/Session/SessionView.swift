@@ -653,20 +653,19 @@ public struct SessionView: View {
             isConnected: stream.isConnected,
             availableThinkingLevels: stream.availableThinkingLevels
         )
-        guard !evaluation.blocksSend else { return }
-        // A selected model is not usable until the live catalog confirms it.
-        // Refuse before clearing the draft so a pending switch cannot lose work.
-        if evaluation.validCommand?.source != .builtin {
-            guard !stream.isModelSwitchInFlight, !stream.isThinkingSwitchInFlight else { return }
-        }
+        guard !evaluation.blocksSend,
+              !evaluation.isSlashInput || stream.activeCommand == nil,
+              !stream.isModelSwitchInFlight, !stream.isThinkingSwitchInFlight else { return }
         // The composer already disables Send past the gateway's prompt cap; this
         // is the same refusal one layer down, so no path can hand the socket a
         // prompt the server will throw away with the turn already on screen.
         guard text.utf16.count <= ComposerLimits.maxPromptTextChars else { return }
-        let staged = attachments
+        // Built-ins act on the session, not the staged images. Keep those for the next message.
+        let keepAttachments = evaluation.validCommand?.source == .builtin
+        let staged = keepAttachments ? [] : attachments
         draft = ""
         SessionDraftStore.write(podId: podId, draft: "")
-        attachments = []
+        if !keepAttachments { attachments = [] }
         attachError = nil
         followsLatest = true
         if let localAction = stream.sendOrRunSlashCommand(text, attachments: staged) {

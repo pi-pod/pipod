@@ -149,8 +149,9 @@ public enum SlashCommandDraftEvaluation: Equatable, Sendable {
             return true
         case .valid(_, _, _, _, let canExecute, _):
             return !canExecute
-        case .unknown(_, _, let isLoadingCatalog, let isConnected):
-            return !isLoadingCatalog && isConnected
+        case .unknown:
+            // Never turn an unverified command into a model prompt.
+            return true
         }
     }
 }
@@ -289,13 +290,14 @@ public enum SlashCommandCatalog {
         isConnected: Bool,
         availableThinkingLevels: [String]
     ) -> SlashCommandDraftEvaluation {
-        let trimmedLeading = draft.drop { $0 == " " || $0 == "\t" }
+        let trimmedLeading = draft.drop(while: \.isWhitespace)
         guard trimmedLeading.first == "/" else { return .none }
         let afterSlash = trimmedLeading.dropFirst()
-        // A bare `/ ` or `//` is ordinary text, not a slash command.
-        if let first = afterSlash.first, first == "/" || first.isWhitespace {
-            return .none
-        }
+        // Paths and slash followed by prose are not commands. A bare slash,
+        // even with trailing whitespace, keeps the command menu open.
+        if afterSlash.first == "/" { return .none }
+        if afterSlash.first?.isWhitespace == true,
+           afterSlash.contains(where: { !$0.isWhitespace }) { return .none }
 
         let tokenEnd = afterSlash.firstIndex(where: { $0.isWhitespace }) ?? afterSlash.endIndex
         let token = String(afterSlash[..<tokenEnd])
@@ -405,6 +407,9 @@ public enum SlashCommandCatalog {
         availableThinkingLevels: [String]
     ) -> (summary: String, warning: String?, canExecute: Bool) {
         if command.source == .builtin {
+            if !command.acceptsArguments && !arguments.isEmpty {
+                return (command.description, "\(command.displayName) doesn’t take arguments.", false)
+            }
             if command.requiresConnection && !isConnected {
                 // `/name` with no args only reads the current name locally.
                 if command.name == "name" && arguments.isEmpty {
@@ -461,8 +466,8 @@ public enum SlashCommandCatalog {
         if !isConnected {
             return (
                 command.description,
-                "Pod is not connected — sending will queue or wake the pod.",
-                true
+                "Connect to the pod to run \(command.displayName).",
+                false
             )
         }
         if arguments.isEmpty {

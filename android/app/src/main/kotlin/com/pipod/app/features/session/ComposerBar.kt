@@ -96,6 +96,8 @@ data class ComposerState(
     val slashCommands: List<SlashCommand> = SlashCommandCatalog.builtins,
     val hasLoadedCommands: Boolean = false,
     val availableThinkingLevels: List<String> = emptyList(),
+    val commandInFlight: Boolean = false,
+    val modelSelectionInFlight: Boolean = false,
 ) {
     val slashEvaluation: SlashCommandDraftEvaluation
         get() = SlashCommandCatalog.evaluate(
@@ -108,7 +110,9 @@ data class ComposerState(
 
     val canSend: Boolean
         get() = !isDisabled &&
+            !modelSelectionInFlight &&
             !slashEvaluation.blocksSend &&
+            (!slashEvaluation.isSlashInput || !commandInFlight) &&
             (text.trim().isNotEmpty() || attachments.isNotEmpty())
 
     val sendSemanticsLabel: String
@@ -190,10 +194,10 @@ fun ComposerBar(
                     if (model != null) ModelPickerButton(state = model, onClick = onChooseModel)
                     Spacer(Modifier.width(6.dp))
                     SlashToggleButton(
-                        active = evaluation.isSlashInput,
-                        enabled = !state.isDisabled,
+                        active = state.text == "/",
+                        enabled = !state.isDisabled && (state.text.isEmpty() || state.text == "/"),
                         onClick = {
-                            if (evaluation.isSlashInput) {
+                            if (state.text == "/") {
                                 onValueChange("")
                             } else {
                                 onValueChange("/")
