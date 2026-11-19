@@ -50,6 +50,8 @@
 		563F315452D7ABD629FA78F7 /* SessionStreamRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0263466F2A10E0DCACC2B52E /* SessionStreamRegistry.swift */; };
 		58739A46A10FB153127CF4C9 /* JobSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 540F2606299FA4E0A630684D /* JobSchedule.swift */; };
 		5CFD8DD83A578FC87DAADDF4 /* SessionUsageViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 389D6CF50208F2ECDF4ABA18 /* SessionUsageViews.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* SlashCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* SlashCommand.swift */; };
+		C3D4E5F60718293A4B5C6D7E /* SlashCommandViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* SlashCommandViews.swift */; };
 		5D6F8A92421577121F153C66 /* ComposerBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8F4AAF1610F5DBF066EB59D /* ComposerBar.swift */; };
 		622FD11E63B2014DE4A01458 /* PiPodApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70BDC5CE590436FAA5ABF3F0 /* PiPodApp.swift */; };
 		6353F63817D09B9E851050E3 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09D79060E7B657927AB3F0A /* SettingsView.swift */; };
@@ -148,6 +150,8 @@
 		332C9B6C1FE26AE6A548DCA1 /* GateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GateTests.swift; sourceTree = "<group>"; };
 		34E5CD43E5B7178F2829103B /* DecodedList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecodedList.swift; sourceTree = "<group>"; };
 		389D6CF50208F2ECDF4ABA18 /* SessionUsageViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionUsageViews.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D /* SlashCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashCommand.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5C6D7E8F /* SlashCommandViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashCommandViews.swift; sourceTree = "<group>"; };
 		399B3C874A5B43A821FE3FFF /* SessionLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLimits.swift; sourceTree = "<group>"; };
 		3F58108D08FAB381A9507CC3 /* PodListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PodListView.swift; sourceTree = "<group>"; };
 		3FD8610B6262D5891CDC5F2A /* AttachmentThumbnail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentThumbnail.swift; sourceTree = "<group>"; };
@@ -354,6 +358,7 @@
 				0263466F2A10E0DCACC2B52E /* SessionStreamRegistry.swift */,
 				389D6CF50208F2ECDF4ABA18 /* SessionUsageViews.swift */,
 				F41F1338594F20941780A77E /* SessionView.swift */,
+				D4E5F60718293A4B5C6D7E8F /* SlashCommandViews.swift */,
 				5C359697F23A9D07061D1870 /* TranscriptViews.swift */,
 			);
 			path = Session;
@@ -471,6 +476,7 @@
 				6F7FB07F415A2C70B95FA608 /* SessionSocket.swift */,
 				4787C53A15D971932DEAF0E6 /* SessionStream.swift */,
 				AC493F74FB63E17D2D4F7B4F /* SessionUsage.swift */,
+				B2C3D4E5F60718293A4B5C6D /* SlashCommand.swift */,
 			);
 			path = Session;
 			sourceTree = "<group>";
@@ -725,6 +731,8 @@
 				431FAACF630694612BFE87E1 /* Settings.swift in Sources */,
 				6353F63817D09B9E851050E3 /* SettingsView.swift in Sources */,
 				3848A54D3CD68F4BDEA0DE56 /* SignInView.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* SlashCommand.swift in Sources */,
+				C3D4E5F60718293A4B5C6D7E /* SlashCommandViews.swift in Sources */,
 				EB70787CB5C2B3F6B25FEF69 /* StatusTone.swift in Sources */,
 				CDA6B8CF15C4B000C0DB526D /* TemplateDetailView.swift in Sources */,
 				324BBB49B186EFAE588AF8B9 /* TemplateListView.swift in Sources */,

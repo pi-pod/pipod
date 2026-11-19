@@ -11,6 +11,8 @@ import com.pipod.app.core.session.RemoteUiSnapshot
 import com.pipod.app.core.session.SessionApi
 import com.pipod.app.core.session.SessionStream
 import com.pipod.app.core.session.SessionStreamState
+import com.pipod.app.core.session.SlashCommandCatalog
+import com.pipod.app.core.session.SlashCommandLocalAction
 import com.pipod.app.core.session.StreamItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -49,6 +51,9 @@ data class SessionState(
             canAttach = !isPickingImages && !launchFailed,
             isDisabled = launchFailed,
             usage = stream.usage,
+            slashCommands = stream.slashCommands,
+            hasLoadedCommands = stream.hasLoadedCommands,
+            availableThinkingLevels = stream.availableThinkingLevels,
         )
 
     /** The pod's launch failed, so it will never hold a conversation; the error says why. */
@@ -144,21 +149,30 @@ class SessionViewModel(
         drafts.write(state.value.pod.id, text)
     }
 
-    fun send() {
+    fun send(): SlashCommandLocalAction? {
         val current = local.value
         val text = current.draft.trim()
-        if (text.isEmpty() && current.attachments.isEmpty()) return
+        if (text.isEmpty() && current.attachments.isEmpty()) return null
+        val streamState = stream.state.value
+        val evaluation = SlashCommandCatalog.evaluate(
+            draft = text,
+            commands = streamState.slashCommands,
+            hasLoadedCommands = streamState.hasLoadedCommands,
+            isConnected = streamState.isConnected,
+            availableThinkingLevels = streamState.availableThinkingLevels,
+        )
+        if (evaluation.blocksSend) return null
         // Refused here rather than at the gateway: over the limit the send
         // becomes an optimistic bubble that fails on arrival, and every Retry
         // fails again the same way. The draft is left exactly as typed.
         if (text.length > PromptLimits.maxPromptTextChars) {
             local.update { it.copy(attachError = PromptLimits.tooLong(text.length)) }
-            return
+            return null
         }
         val staged = current.attachments.toList()
         local.update { it.copy(draft = "", attachments = emptyList(), attachError = null) }
         drafts.write(current.pod.id, "")
-        stream.send(text, staged)
+        return stream.sendOrRunSlashCommand(text, staged)
     }
 
     fun interrupt() = stream.interrupt()

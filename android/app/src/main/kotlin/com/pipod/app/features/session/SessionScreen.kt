@@ -32,12 +32,16 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -45,6 +49,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -66,6 +71,7 @@ import com.pipod.app.core.session.RemoteUiPlacement
 import com.pipod.app.core.session.RemoteUiRole
 import com.pipod.app.core.session.RemoteUiSurface
 import com.pipod.app.core.session.SessionStream
+import com.pipod.app.core.session.SlashCommandLocalAction
 import com.pipod.app.core.session.TranscriptPreferences
 import com.pipod.app.core.session.StreamItem
 import com.pipod.app.features.pods.ModelPickerButton
@@ -80,9 +86,12 @@ import com.pipod.app.ui.AppButtonSize
 import com.pipod.app.ui.AppIconButton
 import com.pipod.app.ui.AppIcons
 import com.pipod.app.ui.AppScaffold
+import com.pipod.app.ui.LocalAppToastHost
 import com.pipod.app.ui.rememberAnsiCellMetrics
+import com.pipod.app.ui.showAppToast
 import com.pipod.app.ui.theme.MonospaceTextStyle
 import com.pipod.app.ui.theme.appColors
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -155,12 +164,29 @@ fun SessionScreen(
         onError = viewModel::onAttachFailed,
         onPickingChanged = viewModel::setPickingImages,
     )
+    val clipboard = LocalClipboardManager.current
+    val toastHost = LocalAppToastHost.current
+    val scope = rememberCoroutineScope()
+    var openUsageRevision by remember { mutableIntStateOf(0) }
 
     SessionScreen(
         state = state,
         actions = SessionScreenActions(
             onDraftChange = viewModel::onDraftChange,
-            onSend = viewModel::send,
+            onSend = {
+                when (val action = viewModel.send()) {
+                    SlashCommandLocalAction.OpenModelPicker -> onOpenModelPicker(viewModel.stream)
+                    SlashCommandLocalAction.OpenUsage -> openUsageRevision += 1
+                    is SlashCommandLocalAction.CopyLastAssistantReply -> {
+                        action.text?.let { reply ->
+                            clipboard.setText(AnnotatedString(reply))
+                            scope.launch { toastHost.showAppToast("Copied last reply") }
+                        }
+                    }
+
+                    null -> Unit
+                }
+            },
             onInterrupt = viewModel::interrupt,
             onAttach = pickImages,
             onRemoveAttachment = viewModel::removeAttachment,
@@ -179,6 +205,7 @@ fun SessionScreen(
             onNavigateBack = onNavigateBack,
         ),
         modifier = modifier,
+        openUsageRevision = openUsageRevision,
     )
 }
 
@@ -196,6 +223,7 @@ fun SessionScreen(
     actions: SessionScreenActions,
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
+    openUsageRevision: Int = 0,
 ) {
     val subtitle = state.statusSubtitle
     val pod = state.livePod
@@ -216,6 +244,9 @@ fun SessionScreen(
     // count: earlier history arriving above the transcript is not news.
     var readThroughId by remember { mutableStateOf<String?>(null) }
     var showsUsage by remember { mutableStateOf(false) }
+    LaunchedEffect(openUsageRevision) {
+        if (openUsageRevision > 0) showsUsage = true
+    }
     val isDragged by listState.interactionSource.collectIsDraggedAsState()
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
 
@@ -334,6 +365,7 @@ fun SessionScreen(
                         state = state,
                         actions = actions,
                         listState = listState,
+                        followsLatest = followsLatest,
                         viewportWidth = viewportWidth,
                         onChooseSuggestion = chooseSuggestion,
                     )
@@ -395,17 +427,6 @@ fun SessionScreen(
             if (showsUsage) {
                 SessionUsageSheet(usage = state.stream.usage, onDismiss = { showsUsage = false })
             }
-
-            // Watch the reducer's own revision rather than the item list: a
-            // streaming delta mutates the last row without changing its
-            // identity, and only the reducer knows that happened.
-            LaunchedEffect(state.stream.scrollRevision) {
-                if (followsLatest && state.stream.scrollRevision > 0) {
-                    // Streaming deltas arrive many times a second; animating
-                    // each scroll makes the transcript judder.
-                    listState.scrollToBottom(animated = !state.stream.scrollIsStreamingUpdate)
-                }
-            }
         }
     }
 }
@@ -416,7 +437,15 @@ private fun widgets(surfaces: List<RemoteUiSurface>, placement: RemoteUiPlacemen
 private suspend fun LazyListState.scrollToBottom(animated: Boolean) {
     val last = layoutInfo.totalItemsCount - 1
     if (last < 0) return
-    if (animated) animateScrollToItem(last) else scrollToItem(last)
+    if (animated) {
+        animateScrollToItem(last)
+    } else {
+        scrollToItem(last)
+        withFrameNanos {}
+        if (canScrollForward) {
+            scrollToItem(last, scrollOffset = Int.MAX_VALUE / 2)
+        }
+    }
 }
 
 @Composable
@@ -424,6 +453,7 @@ private fun Transcript(
     state: SessionState,
     actions: SessionScreenActions,
     listState: LazyListState,
+    followsLatest: Boolean,
     viewportWidth: Dp,
     onChooseSuggestion: (String) -> Unit,
 ) {
@@ -433,6 +463,60 @@ private fun Transcript(
     val rows = remember(session.items) {
         runCatching { TranscriptPresentation.rows(session.items) }.getOrElse {
             session.items.map { item -> TranscriptRow.Item(item, MessageChrome.STANDALONE) }
+        }
+    }
+
+    val hasLeadingItem = session.preparingPod != null ||
+        (session.historyLoadFailed && session.items.isEmpty()) ||
+        session.isLoadingHistory ||
+        (session.podRecord?.didFail != true && session.items.isEmpty() && session.openDialogs.isEmpty())
+    val hasLoadEarlier = session.hasEarlierHistory && rows.isNotEmpty()
+    val hasTyping = session.workingVisible ||
+        session.activeCommand != null ||
+        TranscriptPresentation.showsTypingIndicator(
+            isRunning = session.isRunning,
+            lastItem = session.items.lastOrNull(),
+        )
+    val expectedTotalItems = (if (hasLeadingItem) 1 else 0) +
+        (if (hasLoadEarlier) 1 else 0) +
+        rows.size +
+        session.openDialogs.size +
+        (if (hasTyping) 1 else 0) +
+        1 // transcript-tail
+
+    // Wait until LazyColumn has actually measured the newly arrived rows before
+    // scrolling. Reading `layoutInfo.totalItemsCount` directly inside a
+    // LaunchedEffect saw the previous frame's count (often just 2: spinner +
+    // tail) and left the reader stranded at the top of the transcript on open.
+    val currentExpectedTotalItems by rememberUpdatedState(expectedTotalItems)
+    var didInitialScroll by remember { mutableStateOf(false) }
+    LaunchedEffect(session.scrollRevision, session.isLoadingHistory) {
+        if (session.isLoadingHistory) return@LaunchedEffect
+        val hasContent = rows.isNotEmpty() || session.openDialogs.isNotEmpty()
+        if (!didInitialScroll && !hasContent) {
+            didInitialScroll = true
+            return@LaunchedEffect
+        }
+        if (!followsLatest || !hasContent) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount to currentExpectedTotalItems }
+            .first { (actual, expected) -> actual >= expected && actual > 0 }
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (last < 0) return@LaunchedEffect
+        val shouldAnimate = didInitialScroll && session.scrollAnimated && !session.scrollIsStreamingUpdate
+        didInitialScroll = true
+        if (shouldAnimate) {
+            listState.animateScrollToItem(last)
+        } else {
+            listState.scrollToItem(last)
+            // After jumping across unmeasured lazy items, re-snap once the tail
+            // items have measured so tall final messages sit flush at the bottom.
+            withFrameNanos {}
+            if (listState.canScrollForward) {
+                val settledLast = listState.layoutInfo.totalItemsCount - 1
+                if (settledLast >= 0) {
+                    listState.scrollToItem(settledLast, scrollOffset = Int.MAX_VALUE / 2)
+                }
+            }
         }
     }
 
@@ -550,14 +634,9 @@ private fun Transcript(
             }
         }
 
-        if (session.workingVisible ||
-            TranscriptPresentation.showsTypingIndicator(
-                isRunning = session.isRunning,
-                lastItem = session.items.lastOrNull(),
-            )
-        ) {
+        if (hasTyping) {
             item(key = "typing") {
-                TypingIndicator(label = session.workingMessage ?: session.workingIndicator)
+                TypingIndicator(label = session.workingDisplayLabel)
             }
         }
 

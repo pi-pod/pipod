@@ -70,6 +70,30 @@ public final class SessionStream: ModelSelecting {
     /// True when the change was a streaming delta: the view jumps rather than
     /// animating, because animating many times a second judders.
     public private(set) var scrollIsStreamingUpdate = false
+    /// False during bulk history ingestion and streaming updates so opening a
+    /// pod snaps straight to the latest message instead of animating from top.
+    public private(set) var scrollAnimated = true
+
+    /// Built-in commands merged with commands discovered from the pod (`get_commands`).
+    public private(set) var slashCommands: [SlashCommand] = SlashCommandCatalog.builtins
+    /// True once `get_commands` has answered for the active connection.
+    public private(set) var hasLoadedCommands = false
+    /// Set while a slash command RPC is in flight so the working indicator names it.
+    public private(set) var activeCommand: ActiveSlashCommand?
+
+    /// Human-readable status for the transcript's typing/activity indicator.
+    public var workingDisplayLabel: String? {
+        if let activeCommand { return activeCommand.statusLabel }
+        if compacting { return "Compacting context…" }
+        return workingMessage ?? workingIndicator
+    }
+
+    /// Plain text of the newest non-empty assistant reply, for `/copy`.
+    public var lastAssistantReplyText: String? {
+        items.last {
+            $0.style == .assistant && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }?.text
+    }
 
     /// The last model and thinking snapshot the server confirmed. Pending
     /// choices stay separate so the composer never sends a prompt under an
@@ -231,6 +255,22 @@ public final class SessionStream: ModelSelecting {
     /// Of those, the ones still unconfirmed when the current attach began: the
     /// only bubbles a replayed `user_prompt` is allowed to adopt.
     @ObservationIgnored private var pendingEchoItemIds: Set<String> = []
+    @ObservationIgnored private var isIngestingHistory = false
+    @ObservationIgnored private var nextSlashRequestNumber = 0
+    @ObservationIgnored private var pendingCommandsRequestId: String?
+    @ObservationIgnored private var pendingSlashRPCs: [String: PendingSlashRPC] = [:]
+
+    private struct PendingSlashRPC {
+        enum Kind {
+            case compact
+            case newSession
+            case renameSession(String)
+            case podPrompt(itemId: String, itemsCountAtSend: Int, dialogsCountAtSend: Int)
+        }
+        let id: String
+        let commandName: String
+        let kind: Kind
+    }
 
     public var lastSequence: Int { lastSeq }
     public var sessionId: String? { currentSessionId }
@@ -536,6 +576,8 @@ public final class SessionStream: ModelSelecting {
     }
 
     private func ingestHistory(_ events: [ConversationEventRecord]) {
+        isIngestingHistory = true
+        defer { isIngestingHistory = false }
         for event in events {
             let id = eventId(event.sessionId, event.seq)
             guard seenEventIds.insert(id).inserted else { continue }
@@ -959,7 +1001,334 @@ public final class SessionStream: ModelSelecting {
         }
     }
 
-    // MARK: - Sending
+    // MARK: - Sending and slash commands
+
+    /// Executes a slash command when the draft matches one, or falls back to
+    /// sending an ordinary prompt. Returns a local UI action (picker, usage
+    /// sheet or clipboard copy) when the command drives an app screen directly.
+    @discardableResult
+    public func sendOrRunSlashCommand(
+        _ text: String, attachments: [ChatAttachment] = []
+    ) -> SlashCommandLocalAction? {
+        let evaluation = SlashCommandCatalog.evaluate(
+            draft: text,
+            commands: slashCommands,
+            hasLoadedCommands: hasLoadedCommands,
+            isConnected: isConnected,
+            availableThinkingLevels: availableThinkingLevels
+        )
+        guard case .valid(let command, let arguments, _, _, let canExecute, _) = evaluation else {
+            send(text, attachments: attachments)
+            return nil
+        }
+        guard canExecute else { return nil }
+
+        if command.source == .builtin {
+            return executeBuiltinSlashCommand(command, arguments: arguments)
+        }
+        if isConnected && hasModelSnapshot {
+            sendPodSlashCommand(command, fullText: text, attachments: attachments)
+            return nil
+        }
+        send(text, attachments: attachments)
+        return nil
+    }
+
+    private func executeBuiltinSlashCommand(
+        _ command: SlashCommand, arguments: String
+    ) -> SlashCommandLocalAction? {
+        switch command.name {
+        case "compact":
+            var payload: [String: JSONValue] = ["type": .string("compact")]
+            if !arguments.isEmpty {
+                payload["customInstructions"] = .string(arguments)
+            }
+            let label = arguments.isEmpty
+                ? "Compacting conversation context…"
+                : "Compacting context (\(arguments))…"
+            _ = dispatchSlashRPC(
+                commandName: command.name,
+                statusLabel: label,
+                kind: .compact,
+                payload: .object(payload)
+            )
+            return nil
+
+        case "new":
+            _ = dispatchSlashRPC(
+                commandName: command.name,
+                statusLabel: "Starting a new session…",
+                kind: .newSession,
+                payload: .object(["type": .string("new_session")])
+            )
+            return nil
+
+        case "name":
+            if arguments.isEmpty {
+                let current = podName ?? "Untitled session"
+                appendStatus("Session name: \(current)")
+                return nil
+            }
+            _ = dispatchSlashRPC(
+                commandName: command.name,
+                statusLabel: "Renaming session to “\(arguments)”…",
+                kind: .renameSession(arguments),
+                payload: .object([
+                    "type": .string("set_session_name"),
+                    "name": .string(arguments),
+                ])
+            )
+            return nil
+
+        case "model":
+            if arguments.isEmpty { return .openModelPicker }
+            if let match = matchModel(query: arguments) {
+                if selectModel(match) {
+                    if !isConnected {
+                        appendStatus("Model queued: \(match.name) (applies on connect).")
+                    }
+                }
+                return nil
+            }
+            appendStatus("No single model matched “\(arguments)” — choose one from the picker.")
+            return .openModelPicker
+
+        case "thinking":
+            if arguments.isEmpty { return .openModelPicker }
+            let target = availableThinkingLevels.first {
+                $0.caseInsensitiveCompare(arguments) == .orderedSame
+            } ?? arguments.lowercased()
+            _ = selectThinkingLevel(target)
+            return nil
+
+        case "session":
+            usage.refresh()
+            return .openUsage
+
+        case "copy":
+            let reply = lastAssistantReplyText
+            if reply == nil {
+                appendStatus("No assistant reply to copy yet.")
+            } else {
+                appendStatus("Copied last assistant reply to clipboard.")
+            }
+            return .copyLastAssistantReply(reply)
+
+        default:
+            return nil
+        }
+    }
+
+    private func matchModel(query: String) -> ModelChoice? {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return nil }
+        if let exact = availableModels.first(where: {
+            $0.id.lowercased() == needle
+                || $0.modelId.lowercased() == needle
+                || $0.name.lowercased() == needle
+        }) {
+            return exact
+        }
+        let partial = availableModels.filter {
+            $0.id.lowercased().contains(needle) || $0.name.lowercased().contains(needle)
+        }
+        return partial.count == 1 ? partial[0] : nil
+    }
+
+    private func sendPodSlashCommand(
+        _ command: SlashCommand, fullText: String, attachments: [ChatAttachment]
+    ) {
+        guard pendingModel == nil, pendingThinkingLevel == nil else {
+            blockedPromptDrafts.append(fullText)
+            error = "Wait for the model change to finish before running \(command.displayName)."
+            return
+        }
+        let itemId = "\(localIDPrefix):\(syntheticId)"
+        let isTooLong = fullText.utf16.count > SessionLimits.maxPromptTextChars
+        syntheticId -= 1
+        let staged = attachments.map {
+            StreamImageAttachment(
+                id: $0.id, name: $0.name, mimeType: $0.mimeType, bytes: $0.bytes
+            )
+        }
+        if !staged.isEmpty { pendingAttachments[itemId] = staged }
+        append(
+            StreamItem(
+                id: itemId,
+                style: .user,
+                title: "You",
+                text: fullText,
+                timestamp: now(),
+                delivery: .sending,
+                attachments: staged
+            )
+        )
+        guard !isTooLong else {
+            setDelivery(itemId, .failed)
+            writeError(SessionLimits.promptTooLongMessage)
+            return
+        }
+
+        var rpcCommand: [String: JSONValue] = [
+            "type": .string("prompt"),
+            "message": .string(fullText),
+        ]
+        let images = wireImages(itemId)
+        if !images.isEmpty {
+            rpcCommand["images"] = .array(images.map(\.json))
+        }
+        // Extension commands run immediately even while pi is streaming;
+        // prompt templates and skills expand into ordinary prompts and need a
+        // streamingBehavior when a turn is already active.
+        if command.source != .extension && isRunning {
+            rpcCommand["streamingBehavior"] = .string("followUp")
+        }
+
+        let itemsCount = items.count
+        let dialogsCount = openDialogs.count
+        let statusLabel = "Running \(command.displayName)…"
+        if dispatchSlashRPC(
+            commandName: command.name,
+            statusLabel: statusLabel,
+            kind: .podPrompt(
+                itemId: itemId,
+                itemsCountAtSend: itemsCount,
+                dialogsCountAtSend: dialogsCount
+            ),
+            payload: .object(rpcCommand)
+        ) {
+            serverBoundItemIds.insert(itemId)
+            pendingEchoItemIds.insert(itemId)
+            if command.source != .extension {
+                awaitingReply = true
+                updateRunningState()
+            }
+        } else {
+            setDelivery(itemId, .failed)
+        }
+    }
+
+    private func nextSlashRequestId(prefix: String) -> String {
+        nextSlashRequestNumber += 1
+        return "\(prefix)-\(nextSlashRequestNumber)"
+    }
+
+    private func requestCommands() {
+        guard isConnected, let socket else { return }
+        let id = nextSlashRequestId(prefix: "commands")
+        pendingCommandsRequestId = id
+        _ = socket.rpc(id: id, command: .object(["type": .string("get_commands")]))
+    }
+
+    @discardableResult
+    private func dispatchSlashRPC(
+        commandName: String,
+        statusLabel: String,
+        kind: PendingSlashRPC.Kind,
+        payload: JSONValue
+    ) -> Bool {
+        guard isConnected, let socket else {
+            appendStatus("Connect to the pod to run /\(commandName).", isError: true)
+            return false
+        }
+        let id = nextSlashRequestId(prefix: "slash")
+        guard socket.rpc(id: id, command: payload) else {
+            appendStatus("Couldn’t send /\(commandName). Check the connection and try again.", isError: true)
+            return false
+        }
+        pendingSlashRPCs[id] = PendingSlashRPC(id: id, commandName: commandName, kind: kind)
+        activeCommand = ActiveSlashCommand(id: id, commandName: commandName, statusLabel: statusLabel)
+        scrollIsStreamingUpdate = false
+        scrollAnimated = true
+        scrollRevision += 1
+        return true
+    }
+
+    private func handleSlashRPCResult(id: String, response: JSONValue) {
+        if id == pendingCommandsRequestId {
+            pendingCommandsRequestId = nil
+            if let remote = SlashCommandCatalog.decodeRemote(from: response) {
+                slashCommands = SlashCommandCatalog.merge(remote: remote)
+                hasLoadedCommands = true
+            }
+            return
+        }
+        guard let pending = pendingSlashRPCs.removeValue(forKey: id) else { return }
+        if activeCommand?.id == id {
+            activeCommand = nil
+        }
+        let success = response["success"]?.boolValue == true
+        let errorText = response["error"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch pending.kind {
+        case .compact:
+            if !success {
+                appendStatus(
+                    errorText.flatMap { $0.isEmpty ? nil : "Compaction failed: \($0)" }
+                        ?? "Compaction failed.",
+                    isError: true
+                )
+            }
+
+        case .newSession:
+            if !success {
+                appendStatus(
+                    errorText.flatMap { $0.isEmpty ? nil : "Couldn’t start a new session: \($0)" }
+                        ?? "Couldn’t start a new session.",
+                    isError: true
+                )
+                return
+            }
+            if response["data"]?["cancelled"]?.boolValue == true {
+                appendStatus("New session was cancelled.")
+                return
+            }
+            appendStatus("Started a new session — context cleared.")
+            usage.refresh()
+            _ = socket?.requestModels()
+            requestCommands()
+
+        case .renameSession(let newName):
+            if !success {
+                appendStatus(
+                    errorText.flatMap { $0.isEmpty ? nil : "Couldn’t rename session: \($0)" }
+                        ?? "Couldn’t rename session.",
+                    isError: true
+                )
+                return
+            }
+            applyPodUpdated(id: podId, name: newName)
+            appendStatus("Session renamed to “\(newName)”.")
+
+        case .podPrompt(let itemId, let itemsCountAtSend, let dialogsCountAtSend):
+            if !success {
+                awaitingReply = false
+                updateRunningState()
+                if items.contains(where: { $0.id == itemId }) {
+                    setDelivery(itemId, .failed)
+                }
+                appendStatus(
+                    errorText.flatMap { $0.isEmpty ? nil : "/\(pending.commandName) failed: \($0)" }
+                        ?? "/\(pending.commandName) failed.",
+                    isError: true
+                )
+                return
+            }
+            let disposition = response["data"]?["disposition"]?.stringValue
+            if disposition == "handled" {
+                awaitingReply = false
+                updateRunningState()
+                // If the extension did not produce a visible notice, message or
+                // dialog of its own, leave a quiet confirmation so the command
+                // does not feel silently dropped.
+                if items.count <= itemsCountAtSend && openDialogs.count <= dialogsCountAtSend {
+                    appendStatus("Ran /\(pending.commandName).")
+                }
+            } else if disposition == "queued" {
+                appendStatus("Queued /\(pending.commandName) as a follow-up.")
+            }
+        }
+    }
 
     @discardableResult
     public func send(_ text: String, attachments: [ChatAttachment] = []) -> Bool {
@@ -1539,10 +1908,12 @@ public final class SessionStream: ModelSelecting {
 
         case .ephemeral(let kind, let payload):
             if kind == "extension_ui_request" {
-                // Remote-UI surfaces own their frames; anything else is a
-                // dialog pi is waiting on, live or re-sent for this attach.
+                // Remote-UI surfaces own their frames; non-bridge `notify` frames
+                // become visible status lines; anything else is a blocking dialog.
                 if !remoteUI.applyExtensionRequest(payload) {
-                    showDialog(payload)
+                    if !appendExtensionNotificationIfApplicable(payload, timestamp: now()) {
+                        showDialog(payload)
+                    }
                 }
                 return
             }
@@ -1629,6 +2000,7 @@ public final class SessionStream: ModelSelecting {
             if let patterns { applyModelScope(patterns) }
 
         case .rpcResult(let id, let response):
+            handleSlashRPCResult(id: id, response: response)
             usage.accept(id: id, response: response)
 
         case .error(let code, let message, let detail):
@@ -1770,6 +2142,7 @@ public final class SessionStream: ModelSelecting {
         openDialogs.removeAll()
         _ = socket?.requestModels()
         _ = socket?.requestModelScope()
+        requestCommands()
         usage.attached()
         flushQueuedOffline()
         Task { await refreshPodRecord() }
@@ -2021,8 +2394,22 @@ public final class SessionStream: ModelSelecting {
         case "compaction_end":
             compacting = false
             updateRunningState()
+            appendCompactionEndStatus(payload: payload, timestamp: timestamp)
             // Summarizing the history is itself priced usage.
             usage.refresh()
+
+        case "extension_ui_request":
+            // Persisted extension notifications (e.g. from `/pod:info` or `/btw`)
+            // arrive as durable events and on history replay; internal bridge and
+            // remote-UI frames are filtered out.
+            _ = appendExtensionNotificationIfApplicable(payload, timestamp: timestamp)
+
+        case "extension_error":
+            let extError = payload["error"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !extError.isEmpty {
+                appendStatus("Extension error: \(extError)", isError: true)
+            }
 
         case "agent_end", "turn_end", "session_info_changed":
             break
@@ -2049,7 +2436,12 @@ public final class SessionStream: ModelSelecting {
             )
 
         case "message_end":
-            guard messageRole(payload) == "assistant" else { return }
+            let role = messageRole(payload)
+            if role == "custom" {
+                appendCustomMessageIfDisplayed(id: id, payload: payload, timestamp: timestamp)
+                return
+            }
+            guard role == "assistant" else { return }
             let itemId = activeAssistantItemId ?? id
             let text = visibleMessageText(payload)
             let thinking = visibleThinkingText(payload)
@@ -2137,6 +2529,9 @@ public final class SessionStream: ModelSelecting {
         pendingThinkingMismatchCount = 0
         pendingSelectionRequestID = nil
         allowUncorrelatedSelectionConfirmation = false
+        pendingCommandsRequestId = nil
+        pendingSlashRPCs.removeAll()
+        activeCommand = nil
         failInFlightSends()
     }
 
@@ -2280,7 +2675,79 @@ public final class SessionStream: ModelSelecting {
     private func append(_ item: StreamItem) {
         items.append(item)
         scrollIsStreamingUpdate = false
+        scrollAnimated = !isIngestingHistory
         scrollRevision += 1
+    }
+
+    private func appendCompactionEndStatus(payload: JSONValue, timestamp: Date?) {
+        if payload["aborted"]?.boolValue == true {
+            appendStatus("Compaction cancelled.", timestamp: timestamp)
+            return
+        }
+        if let err = payload["errorMessage"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
+            appendStatus("Compaction failed: \(err)", isError: true, timestamp: timestamp)
+            return
+        }
+        let result = payload["result"]
+        let before = result?["tokensBefore"]?.intValue
+        let after = result?["estimatedTokensAfter"]?.intValue
+        if let before, before > 0, let after, after > 0 {
+            appendStatus(
+                "Context compacted (\(SessionUsage.tokens(before)) → \(SessionUsage.tokens(after)) tokens).",
+                timestamp: timestamp
+            )
+        } else if let before, before > 0 {
+            appendStatus(
+                "Context compacted (from \(SessionUsage.tokens(before)) tokens).",
+                timestamp: timestamp
+            )
+        } else {
+            appendStatus("Context compacted.", timestamp: timestamp)
+        }
+    }
+
+    /// Turns a user-facing `extension_ui_request` with `method: "notify"` into a
+    /// visible transcript status row. Returns true when the frame was a `notify`
+    /// (whether rendered or filtered as internal bridge/remote-UI traffic).
+    private func appendExtensionNotificationIfApplicable(
+        _ payload: JSONValue, timestamp: Date?
+    ) -> Bool {
+        guard payload["method"]?.stringValue == "notify" else { return false }
+        guard let raw = payload["message"]?.stringValue else { return true }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("pi-pod-internal/"),
+              !trimmed.hasPrefix("pi-pod-remote-ui:")
+        else { return true }
+        let notifyType = payload["notifyType"]?.stringValue ?? "info"
+        let text = SessionStream.redactingSecrets(trimmed)
+        appendStatus(text, isError: notifyType == "error", timestamp: timestamp)
+        return true
+    }
+
+    /// Renders a displayed `role: "custom"` message from an extension command
+    /// (such as `/pod:info` or `/btw`) as a readable block in the transcript.
+    private func appendCustomMessageIfDisplayed(
+        id: String, payload: JSONValue, timestamp: Date?
+    ) {
+        guard let message = payload["message"], message.objectValue != nil else { return }
+        if message["display"]?.boolValue == false { return }
+        let text = visibleMessageText(payload).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let customType = message["customType"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = customType.isEmpty ? "Extension" : customType
+        append(
+            StreamItem(
+                id: id,
+                style: .assistant,
+                title: title,
+                text: text,
+                timestamp: timestamp,
+                isInProgress: false
+            )
+        )
     }
 
     /// The one place that words a hole in the transcript. A bounded replay and a
@@ -2298,9 +2765,16 @@ public final class SessionStream: ModelSelecting {
         )
     }
 
-    private func appendStatus(_ text: String) {
+    private func appendStatus(_ text: String, isError: Bool = false, timestamp: Date? = nil) {
         append(
-            StreamItem(id: "\(localIDPrefix):\(syntheticId)", style: .status, title: "", text: text)
+            StreamItem(
+                id: "\(localIDPrefix):\(syntheticId)",
+                style: .status,
+                title: "",
+                text: text,
+                timestamp: timestamp,
+                isError: isError
+            )
         )
         syntheticId -= 1
     }

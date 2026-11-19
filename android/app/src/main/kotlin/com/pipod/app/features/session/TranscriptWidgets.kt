@@ -300,11 +300,43 @@ fun EventRow(
 
 @Composable
 private fun StatusLine(item: StreamItem) {
+    val colors = appColors
+    if (item.isError) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+                .clearAndSetSemantics { contentDescription = item.text },
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(
+                modifier = Modifier
+                    .background(colors.destructive.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Icon(
+                    imageVector = AppIcons.warning,
+                    contentDescription = null,
+                    tint = colors.destructive,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = item.text,
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.destructive,
+                )
+            }
+        }
+        return
+    }
     Text(
         text = item.text,
         textAlign = TextAlign.Center,
         style = MaterialTheme.typography.bodySmall,
-        color = appColors.secondaryLabel,
+        color = colors.secondaryLabel,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
@@ -409,6 +441,7 @@ private fun AssistantBlock(
     onShowsThinkingChanged: (Boolean) -> Unit,
 ) {
     val colors = appColors
+    val sender = item.title.ifBlank { "pi" }
     val showsMeta = chrome.showsSender || (chrome.showsTimestamp && timeLabel != null)
     val copy = rememberCopyAction(item.text)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
@@ -421,7 +454,7 @@ private fun AssistantBlock(
                     .widthIn(max = TranscriptMeasure)
                     .padding(end = 20.dp)
                     .semantics(mergeDescendants = false) {
-                        contentDescription = transcriptAccessibilityText(item, "pi", timeLabel)
+                        contentDescription = transcriptAccessibilityText(item, sender, timeLabel)
                         customActions = listOf(
                             CustomAccessibilityAction("Copy message") {
                                 copy()
@@ -430,7 +463,7 @@ private fun AssistantBlock(
                         )
                     },
             ) {
-                if (showsMeta) MetaRow(item, chrome, "pi", timeLabel, Arrangement.Start)
+                if (showsMeta) MetaRow(item, chrome, sender, timeLabel, Arrangement.Start)
                 if (item.thinking.isNotBlank()) {
                     ThinkingBlock(
                         item = item,

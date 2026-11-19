@@ -58,6 +58,13 @@ import com.pipod.app.ui.theme.appColors
 import com.pipod.app.features.pods.ModelPickerButton
 import com.pipod.app.features.pods.ModelPickerState
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import com.pipod.app.core.session.SlashCommand
+import com.pipod.app.core.session.SlashCommandCatalog
+import com.pipod.app.core.session.SlashCommandDraftEvaluation
+import com.pipod.app.ui.theme.MonospaceTextStyle
 
 /**
  * Everything the composer draws.
@@ -85,8 +92,27 @@ data class ComposerState(
     val isDisabled: Boolean = false,
     /** What pi has spent in this session; the readout stays away until something has been. */
     val usage: SessionUsage? = null,
+    /** Built-in and pod-discovered slash commands for autocomplete and validation. */
+    val slashCommands: List<SlashCommand> = SlashCommandCatalog.builtins,
+    val hasLoadedCommands: Boolean = false,
+    val availableThinkingLevels: List<String> = emptyList(),
 ) {
-    val canSend: Boolean get() = !isDisabled && (text.trim().isNotEmpty() || attachments.isNotEmpty())
+    val slashEvaluation: SlashCommandDraftEvaluation
+        get() = SlashCommandCatalog.evaluate(
+            draft = text,
+            commands = slashCommands,
+            hasLoadedCommands = hasLoadedCommands,
+            isConnected = isConnected,
+            availableThinkingLevels = availableThinkingLevels,
+        )
+
+    val canSend: Boolean
+        get() = !isDisabled &&
+            !slashEvaluation.blocksSend &&
+            (text.trim().isNotEmpty() || attachments.isNotEmpty())
+
+    val sendSemanticsLabel: String
+        get() = slashEvaluation.validCommand?.let { "Run ${it.displayName}" } ?: "Send message"
 }
 
 /** Test handles the acceptance pass addresses the composer by. */
@@ -139,21 +165,55 @@ fun ComposerBar(
             .testTag(ComposerTestTags.ROOT),
     ) {
         ContentPane {
+            val evaluation = state.slashEvaluation
             Column(
                 Modifier.padding(start = 12.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
             ) {
+                if (evaluation.showsPalette) {
+                    SlashCommandPalette(
+                        commands = evaluation.paletteMatches,
+                        isLoadingPodCommands = state.isConnected && !state.hasLoadedCommands,
+                        onSelect = { command ->
+                            onValueChange(SlashCommandCatalog.insertionText(command))
+                            focusRequester?.requestFocus()
+                        },
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
+                }
                 // The two halves of pi's own footer, where the message is written: what the
-                // next turn runs on, and what the session has spent.
+                // next turn runs on, a one-tap `/` command trigger, and what the session spent.
                 val usage = state.usage?.takeUnless { it.isEmpty }
-                if (model != null || usage != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (model != null) ModelPickerButton(state = model, onClick = onChooseModel)
-                        if (usage != null) {
-                            SessionUsageStrip(usage = usage, onClick = onShowUsage, modifier = Modifier.weight(1f))
-                        } else {
-                            Spacer(Modifier.weight(1f))
-                        }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(end = 4.dp),
+                ) {
+                    if (model != null) ModelPickerButton(state = model, onClick = onChooseModel)
+                    Spacer(Modifier.width(6.dp))
+                    SlashToggleButton(
+                        active = evaluation.isSlashInput,
+                        enabled = !state.isDisabled,
+                        onClick = {
+                            if (evaluation.isSlashInput) {
+                                onValueChange("")
+                            } else {
+                                onValueChange("/")
+                                focusRequester?.requestFocus()
+                            }
+                        },
+                    )
+                    if (usage != null) {
+                        SessionUsageStrip(usage = usage, onClick = onShowUsage, modifier = Modifier.weight(1f))
+                    } else {
+                        Spacer(Modifier.weight(1f))
                     }
+                }
+                if (evaluation is SlashCommandDraftEvaluation.Valid ||
+                    evaluation is SlashCommandDraftEvaluation.Unknown
+                ) {
+                    SlashCommandStatusBar(
+                        evaluation = evaluation,
+                        modifier = Modifier.padding(end = 8.dp),
+                    )
                 }
                 if (state.attachments.isNotEmpty() || state.attachError != null) {
                     AttachmentStrip(
@@ -262,13 +322,54 @@ fun ComposerBar(
                     AppIconButton(
                         icon = AppIcons.send,
                         onClick = onSend,
-                        semanticsLabel = "Send message",
+                        semanticsLabel = state.sendSemanticsLabel,
                         enabled = state.canSend,
                         tint = if (state.canSend) appColors.accent else appColors.secondaryLabel,
                         modifier = Modifier.testTag(ComposerTestTags.SEND),
                     )
                 }
             }
+        }
+    }
+}
+
+/** One-tap entry into the slash-command picker without switching keyboard layers. */
+@Composable
+private fun SlashToggleButton(
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = appColors
+    val label = if (active) "Close slash commands" else "Slash commands"
+    Box(
+        modifier = Modifier
+            .defaultMinSize(minWidth = 36.dp, minHeight = 36.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .testTag(SlashCommandTestTags.TOGGLE_BUTTON)
+            .clearAndSetSemantics {
+                contentDescription = label
+                role = Role.Button
+                if (!enabled) disabled()
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .background(if (active) colors.accent else colors.fill, CircleShape)
+                .padding(horizontal = 9.dp, vertical = 3.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "/",
+                style = MonospaceTextStyle.copy(
+                    fontSize = MaterialTheme.typography.labelMedium.fontSize,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                color = if (active) colors.onAccent else colors.accent,
+            )
         }
     }
 }

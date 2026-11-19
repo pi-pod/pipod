@@ -27,13 +27,33 @@ struct ComposerBar: View {
 
     @FocusState.Binding var isFocused: Bool
 
+    private var slashEvaluation: SlashCommandDraftEvaluation {
+        SlashCommandCatalog.evaluate(
+            draft: text,
+            commands: stream.slashCommands,
+            hasLoadedCommands: stream.hasLoadedCommands,
+            isConnected: stream.isConnected,
+            availableThinkingLevels: stream.availableThinkingLevels
+        )
+    }
+
     private var canSend: Bool {
-        guard !isOverLimit,
-              !stream.isModelSwitchInFlight,
-              !stream.isThinkingSwitchInFlight
-        else { return false }
+        guard !isOverLimit else { return false }
+        if slashEvaluation.blocksSend { return false }
+        if slashEvaluation.validCommand?.source != .builtin {
+            guard !stream.isModelSwitchInFlight,
+                  !stream.isThinkingSwitchInFlight
+            else { return false }
+        }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !attachments.isEmpty
+    }
+
+    private var sendAccessibilityLabel: String {
+        if let command = slashEvaluation.validCommand {
+            return "Run \(command.displayName)"
+        }
+        return "Send message"
     }
 
     /// UTF-16 units, because that is what the server counts: its check is
@@ -51,8 +71,25 @@ struct ComposerBar: View {
     private var showsCounter: Bool { remainingChars <= ComposerLimits.counterThreshold }
 
     var body: some View {
+        let evaluation = slashEvaluation
         VStack(spacing: 4) {
+            if evaluation.showsPalette {
+                SlashCommandPalette(
+                    commands: evaluation.paletteMatches,
+                    isLoadingPodCommands: stream.isConnected && !stream.hasLoadedCommands
+                ) { command in
+                    text = SlashCommandCatalog.insertionText(for: command)
+                    isFocused = true
+                }
+            }
+
             modelRow
+
+            if case .valid = evaluation {
+                SlashCommandStatusBar(evaluation: evaluation)
+            } else if case .unknown = evaluation {
+                SlashCommandStatusBar(evaluation: evaluation)
+            }
 
             if !attachments.isEmpty || attachError != nil {
                 AttachmentStrip(
@@ -158,7 +195,7 @@ struct ComposerBar: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(canSend ? AppColors.accent : AppColors.secondaryLabel)
                 .disabled(!canSend)
-                .accessibilityLabel("Send message")
+                .accessibilityLabel(sendAccessibilityLabel)
                 .accessibilityIdentifier("composer.send")
             }
         }
@@ -180,6 +217,35 @@ struct ComposerBar: View {
                 identifier: "composer.modelPicker"
             )
             .frame(minWidth: Self.modelMinWidth, alignment: .leading)
+
+            // One-tap entry into the slash-command picker without switching
+            // the touch keyboard to the symbols layer.
+            Button {
+                if text.trimmingCharacters(in: .whitespacesAndNewlines) == "/" {
+                    text = ""
+                } else if !slashEvaluation.isSlashInput {
+                    text = "/"
+                    isFocused = true
+                } else {
+                    text = ""
+                }
+            } label: {
+                Text("/")
+                    .font(.footnote.monospaced().weight(.semibold))
+                    .foregroundStyle(slashEvaluation.isSlashInput ? AppColors.onAccent : AppColors.accent)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(
+                        slashEvaluation.isSlashInput ? AppColors.accent : AppColors.fill,
+                        in: Capsule()
+                    )
+                    .frame(minWidth: 32, minHeight: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(slashEvaluation.isSlashInput ? "Close slash commands" : "Slash commands")
+            .accessibilityIdentifier("composer.slashCommands")
+
             // The gap yields first, so the model name is never squeezed for it.
             Spacer(minLength: 0).layoutPriority(-1)
             if let usage = stream.usage.latest, !usage.isEmpty {

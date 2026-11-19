@@ -118,11 +118,37 @@ const CANNED: Record<string, unknown> = {
   get_available_models: { models: fakeModelCatalog() },
   get_available_thinking_levels: { levels: ["off", "low", "high"] },
   get_commands: {
-    commands: [SEED_CONTEXT_COMMAND, SEED_TREE_SUMMARY_COMMAND].map((name) => ({
-      name,
-      source: "extension",
-      sourceInfo: { path: "internal", source: "auto", scope: "user", origin: "top-level" },
-    })),
+    commands: [
+      ...[SEED_CONTEXT_COMMAND, SEED_TREE_SUMMARY_COMMAND].map((name) => ({
+        name,
+        source: "extension",
+        sourceInfo: { path: "internal", source: "auto", scope: "user", origin: "top-level" },
+      })),
+      {
+        name: "pod:info",
+        description: "Describe this pod to the agent (enters conversation context)",
+        source: "extension",
+        sourceInfo: { path: "internal", source: "auto", scope: "user", origin: "top-level" },
+      },
+      {
+        name: "btw",
+        description: "Ask a quick side question without interrupting the main thread",
+        source: "extension",
+        sourceInfo: { path: "fake/btw.ts", source: "local", scope: "user", origin: "top-level" },
+      },
+      {
+        name: "review",
+        description: "Review recent workspace changes for bugs and edge cases",
+        source: "prompt",
+        sourceInfo: { path: ".pi/prompts/review.md", source: "local", scope: "project", origin: "top-level" },
+      },
+      {
+        name: "skill:deploy-check",
+        description: "Run the deployment readiness checklist",
+        source: "skill",
+        sourceInfo: { path: ".pi/skills/deploy-check/SKILL.md", source: "local", scope: "project", origin: "top-level" },
+      },
+    ],
   },
   get_last_assistant_text: { text: "fake pi says hi" },
 };
@@ -176,9 +202,15 @@ const FAKE_PRICES = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } a
 function replyFor(message: string): string {
   const echo = /reply with exactly ([^.\n]+)/i.exec(message);
   if (echo?.[1]) return echo[1].trim();
+  if (/\bLONG\b/i.test(message)) return LONG_REPLY;
   if (/\bMARKDOWN\b/i.test(message)) return MARKDOWN_REPLY;
   return `fake pi received: ${message}`;
 }
+
+const LONG_REPLY = Array.from(
+  { length: 24 },
+  (_, index) => `### Section ${index + 1}\n\nParagraph ${index + 1} of a long transcript used to verify that reopening a pod lands directly at the latest message at the bottom.`,
+).join("\n\n") + "\n\n**LATEST-BOTTOM-MARKER**";
 
 /** What a real model's reasoning reads like: several short paragraphs before the reply. */
 const THINKING_TRACE = [
@@ -256,6 +288,8 @@ class FakePty implements PtySession {
         provider?: string;
         modelId?: string;
         level?: string;
+        name?: string;
+        customInstructions?: string;
       };
       if (command.type === "extension_ui_response") {
         // Remote-UI surfaces own their own responses; a blocking dialog owns the rest.
@@ -297,6 +331,60 @@ class FakePty implements PtySession {
         else apply();
         continue;
       }
+      if (command.type === "compact") {
+        void this.runCompaction(command.id, command.customInstructions);
+        continue;
+      }
+      if (command.type === "new_session") {
+        this.totals.contextTokens = 0;
+        this.totals.userMessages = 0;
+        this.totals.assistantMessages = 0;
+        this.totals.toolCalls = 0;
+        this.emitEvent({
+          type: "response",
+          command: "new_session",
+          ...(command.id !== undefined ? { id: command.id } : {}),
+          success: true,
+          data: { cancelled: false },
+        });
+        continue;
+      }
+      if (command.type === "set_session_name") {
+        const nextName = (command.name ?? "").trim();
+        this.emitEvent({ type: "session_info_changed", ...(nextName ? { name: nextName } : {}) });
+        this.emitEvent({
+          type: "response",
+          command: "set_session_name",
+          ...(command.id !== undefined ? { id: command.id } : {}),
+          success: true,
+        });
+        continue;
+      }
+      if (command.type === "prompt") {
+        const message = command.message ?? "";
+        if (this.handleSeedPrompt(message)) {
+          this.emitEvent({
+            type: "response",
+            command: "prompt",
+            ...(command.id !== undefined ? { id: command.id } : {}),
+            success: true,
+            data: { disposition: "handled" },
+          });
+          continue;
+        }
+        if (this.handleExtensionSlashPrompt(command.id, message)) {
+          continue;
+        }
+        this.emitEvent({
+          type: "response",
+          command: "prompt",
+          ...(command.id !== undefined ? { id: command.id } : {}),
+          success: true,
+          data: { disposition: "started" },
+        });
+        this.turnTail = this.turnTail.then(() => this.runTurn(message));
+        continue;
+      }
       const data = command.type === "get_state"
         ? this.state
         : command.type === "get_session_stats"
@@ -309,13 +397,107 @@ class FakePty implements PtySession {
         success: true,
         ...(data !== undefined ? { data } : {}),
       });
-      if (command.type === "prompt") {
-        if (!this.handleSeedPrompt(command.message ?? "")) {
-          const message = command.message ?? "";
-          this.turnTail = this.turnTail.then(() => this.runTurn(message));
-        }
-      }
     }
+  }
+
+  private async runCompaction(id: string | undefined, instructions?: string): Promise<void> {
+    this.state.isCompacting = true;
+    this.emitEvent({ type: "compaction_start", reason: "manual" });
+    await delay(500);
+    const tokensBefore = Math.max(this.totals.contextTokens, 48_200);
+    const tokensAfter = Math.max(4_200, Math.round(tokensBefore * 0.2));
+    this.totals.contextTokens = tokensAfter;
+    this.state.isCompacting = false;
+    const summary = instructions?.trim()
+      ? `Compacted conversation focusing on: ${instructions.trim()}`
+      : "Compacted earlier conversation turns into a concise summary.";
+    const result = {
+      summary,
+      firstKeptEntryId: "fake-root",
+      tokensBefore,
+      estimatedTokensAfter: tokensAfter,
+    };
+    this.emitEvent({
+      type: "compaction_end",
+      reason: "manual",
+      result,
+      aborted: false,
+      willRetry: false,
+    });
+    this.emitEvent({
+      type: "response",
+      command: "compact",
+      ...(id !== undefined ? { id } : {}),
+      success: true,
+      data: result,
+    });
+  }
+
+  private handleExtensionSlashPrompt(id: string | undefined, message: string): boolean {
+    const trimmed = message.trim();
+    if (trimmed === "/pod:info" || trimmed.startsWith("/pod:info ")) {
+      const info = [
+        "You are running inside a fake pi-pod sandbox.",
+        "  pod id       fake-pod",
+        "  provider     fake",
+        "  workdir      /workspace",
+      ].join("\n");
+      const msg = {
+        role: "custom",
+        customType: "pi-pod-info",
+        content: info,
+        display: true,
+        timestamp: Date.now(),
+      };
+      this.emitEvent({ type: "message_start", message: msg });
+      this.emitEvent({ type: "message_end", message: msg });
+      this.emitEvent({
+        type: "extension_ui_request",
+        id: randomBytes(8).toString("hex"),
+        method: "notify",
+        message: "Pod info added to the conversation.",
+        notifyType: "info",
+      });
+      this.emitEvent({
+        type: "response",
+        command: "prompt",
+        ...(id !== undefined ? { id } : {}),
+        success: true,
+        data: { disposition: "handled" },
+      });
+      return true;
+    }
+    if (trimmed === "/btw" || trimmed.startsWith("/btw ")) {
+      const question = trimmed.slice(4).trim();
+      const answer = question
+        ? `Side answer for “${question}”: everything in this fake pod looks healthy.`
+        : "Usage: /btw <question>";
+      const msg = {
+        role: "custom",
+        customType: "btw",
+        content: answer,
+        display: true,
+        timestamp: Date.now(),
+      };
+      this.emitEvent({ type: "message_start", message: msg });
+      this.emitEvent({ type: "message_end", message: msg });
+      this.emitEvent({
+        type: "extension_ui_request",
+        id: randomBytes(8).toString("hex"),
+        method: "notify",
+        message: question ? "Side question answered." : "Pass a question after /btw.",
+        notifyType: question ? "info" : "warning",
+      });
+      this.emitEvent({
+        type: "response",
+        command: "prompt",
+        ...(id !== undefined ? { id } : {}),
+        success: true,
+        data: { disposition: "handled" },
+      });
+      return true;
+    }
+    return false;
   }
 
   private handleSeedPrompt(message: string): boolean {
