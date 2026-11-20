@@ -716,7 +716,7 @@ function isEmptyObject(value: unknown): boolean {
 /** A resolved config as a client is allowed to see it. See {@link clientFacingConfig}. */
 export type ClientFacingConfig = Omit<
   PiPodConfig,
-  "providers" | "envFile" | "initScript" | "bakeScript" | "template" | "reuse" | "pi"
+  "providers" | "credentialProviders" | "envFile" | "initScript" | "bakeScript" | "template" | "reuse" | "pi"
 > & {
   pi: Omit<PiPodConfig["pi"], "hostConfig"> & {
     hostConfig: Pick<PiPodConfig["pi"]["hostConfig"], "settings" | "packages">;
@@ -724,7 +724,10 @@ export type ClientFacingConfig = Omit<
 };
 
 /**
- * Everything in a resolved config except `providers` and the retired client-only keys.
+ * Everything in a resolved config except `providers`, `credentialProviders` and the retired
+ * client-only keys. `credentialProviders` is enforced at planning and reported back as the
+ * credentials the pod actually holds (`piAuthProviders`), so no client needs the pin itself, and
+ * a CLI that predates the key would warn "unknown key (ignored)" about a setting that is not.
  *
  * The CLI retired the providers key, and its validator warns about every top-level key it
  * does not know — so a server that sends `providers` (even the empty default) makes `pipod
@@ -740,6 +743,7 @@ export type ClientFacingConfig = Omit<
 export function clientFacingConfig(config: PiPodConfig): ClientFacingConfig {
   const {
     providers: _providers,
+    credentialProviders: _credentialProviders,
     envFile: _envFile,
     initScript: _initScript,
     bakeScript: _bakeScript,

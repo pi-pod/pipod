@@ -238,51 +238,41 @@ function reconnectRequiredError(providerId: string, requiredBy: string, sharedBy
 }
 
 /**
- * Account credential metadata for a launch: ready stored ids (no contents) plus the
- * authorized contract. `metas` are the credentials that serve the launcher, one per provider:
- * their own, else one shared with them (model-credentials/sharing.ts). Throws 409
- * `credential_reconnect_required` when a required provider is already in terminal reconnect
- * state. Missing required rows are allowed.
+ * Account credential metadata for a launch: the credentials a pod may hold (its contract) and
+ * the ready ones among them (what its pi can sign in with). `metas` are the credentials that
+ * serve the launcher, one per provider: their own, else one shared with them
+ * (model-credentials/sharing.ts).
+ *
+ * A pod holds every one of them unless `credentialProviders` pins it to fewer (see
+ * {@link resolvePodCredentialContract}). That is not a convenience: the catalog a pod's pi can
+ * offer is exactly the providers it holds auth for, and pi only learns of those from its
+ * pod-local auth.json. A contract narrowed by what the settings happen to select leaves a
+ * connected provider's models unlistable, with nothing to say why.
+ *
+ * Throws 409 `credential_reconnect_required` when a required provider is already in terminal
+ * reconnect state. Missing required rows are allowed. Delegated child pods narrow the result
+ * afterwards ({@link delegateCredentials}), never widen it.
  */
 export function planLaunchCredentials(args: {
   metas: ServingCredentialMeta[];
-  config: Pick<PiPodConfig, "pi">;
+  /** An absent `credentialProviders` is unpinned, as in any config frozen before the key existed. */
+  config: Pick<PiPodConfig, "pi"> & Partial<Pick<PiPodConfig, "credentialProviders">>;
   piSettings: PlannedPiSettings | null;
-}): { piAuth: { providers: string[] } | null; credentialContract: string[] } {
+}): { piAuth: { providers: string[] } | null; credentialContract: string[]; warnings: string[] } {
   const modelProvider = launchModelProvider(args.config, args.piSettings);
   const packages = args.piSettings?.plan.packages ?? [];
-  const selectableProviders = args.piSettings?.plan.providers ?? [];
-  const accountProviders = args.metas.map((meta) => meta.providerId);
+  const credentialContract = resolvePodCredentialContract({
+    modelProvider: modelProvider ?? "",
+    packages,
+    accountProviders: args.metas.map((meta) => meta.providerId),
+    pinnedProviders: args.config.credentialProviders ?? null,
+  }).filter((id) => id.length > 0);
+  const leased = new Set(credentialContract);
   const readyProviders = args.metas
     .filter((meta) => classifyCredentialMeta(meta).state === "ready")
     .map((meta) => meta.providerId);
-  // A launch that names no model choice (no pinned model, no selectable settings
-  // providers) would otherwise materialize an empty lease: the catalog a pod's pi can
-  // offer is exactly the providers it holds auth for, and pi only discovers those from
-  // its pod-local auth.json. Pi then answers an empty catalog with an unknown current
-  // model and no client can ever discover or select the ready provider — the model-less
-  // deadlock (M5). Only this case bootstraps the contract from ready providers, the
-  // same ready set already advertised as piAuthProviders and already unioned into the
-  // egress endpoints. Launches with an explicit model or settings selection keep their
-  // narrow contract (least privilege; multi-provider reachability stays on the
-  // settings-selectables path and on `set`, which extends the contract per model).
-  // Reconnect-required and missing rows stay out: the lease tolerates them the same
-  // way it tolerates missing required rows.
-  const namesModelChoice =
-    (modelProvider ?? "").length > 0 || selectableProviders.some((id) => id.length > 0);
-  const credentialContract = [
-    ...new Set([
-      ...resolvePodCredentialContract({
-        modelProvider: modelProvider ?? "",
-        selectableProviders,
-        packages,
-        accountProviders,
-      }),
-      ...(namesModelChoice ? [] : readyProviders),
-    ]),
-  ]
-    .filter((id) => id.length > 0)
-    .sort();
+  const readyInContract = readyProviders.filter((id) => leased.has(id));
+  const withheld = readyProviders.filter((id) => !leased.has(id));
   const required = resolveRequiredCredentialProviders({
     modelProvider: modelProvider ?? "",
     packages,
@@ -297,8 +287,13 @@ export function planLaunchCredentials(args: {
   }
 
   return {
-    piAuth: readyProviders.length > 0 ? { providers: readyProviders } : null,
+    piAuth: readyInContract.length > 0 ? { providers: readyInContract } : null,
     credentialContract,
+    // Only a pin withholds a connected credential; say so, or its models just fail to appear.
+    warnings:
+      withheld.length > 0
+        ? [`credentialProviders limits this pod's model credentials; connected but not leased: ${withheld.join(", ")}`]
+        : [],
   };
 }
 
@@ -767,6 +762,7 @@ export async function planPodLaunch(
     workdir,
     warnings: [
       ...resolved.warnings,
+      ...planned.warnings,
       ...(retiredProjectInputsPresent ? [LEGACY_PROJECT_LAYERS_WARNING] : []),
       ...(template !== null && projectConfigRaw !== null ? [TEMPLATE_PROJECT_PREVIEW_WARNING] : []),
       ...(deps.env.PUBLIC_URL ? [] : [PUBLIC_URL_UNSET_WARNING]),

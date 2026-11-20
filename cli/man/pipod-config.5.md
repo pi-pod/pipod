@@ -87,6 +87,14 @@ image                    a custom pod image (default: the managed image matching
 name                     the project's name in pod names and listings: letters,
                          digits, dots, dashes, underscores (default: the directory's)
 labels                   string-to-string labels for the pod
+credentialProviders      which of your connected model credentials a pod may hold.
+                         Absent, a pod holds all of them, so a connected provider's
+                         models are always available. A list such as ["anthropic",
+                         "openai"] limits the pod to those, plus whatever its own model
+                         needs: how a template keeps a pod away from keys it should
+                         not have. Credentials are read when a pod launches or is
+                         reused. The last layer to set it wins; the launch prints what
+                         it withheld.
 ```
 
 ## MACHINE KEYS
