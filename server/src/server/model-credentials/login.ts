@@ -59,6 +59,7 @@ export interface ConsumedLoginTicket {
   providerId: string;
   authType: BrokerAuthType;
   podId: string | null;
+  customBinding: string | null;
   expiresAt: string;
 }
 
@@ -75,13 +76,14 @@ export async function createLoginTicket(
   providerId: string,
   authType: BrokerAuthType,
   podId?: string | null,
+  customBinding?: string,
 ): Promise<{ ticket: string; expiresAt: string }> {
   const ticket = mintLoginTicketValue();
   const expiresAt = new Date(Date.now() + LOGIN_TICKET_TTL_MS).toISOString();
   await query(
     `INSERT INTO model_credential_login_tickets
-       (id, ticket_hash, org_id, user_id, provider_id, auth_type, pod_id, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (id, ticket_hash, org_id, user_id, provider_id, auth_type, pod_id, expires_at, custom_binding)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       uuidv7(),
       hashLoginTicket(ticket),
@@ -91,6 +93,7 @@ export async function createLoginTicket(
       authType,
       podId ?? null,
       expiresAt,
+      customBinding ?? null,
     ],
   );
   return { ticket, expiresAt };
@@ -108,11 +111,12 @@ export async function consumeLoginTicket(ticket: string): Promise<ConsumedLoginT
     provider_id: string;
     auth_type: BrokerAuthType;
     pod_id: string | null;
+    custom_binding: string | null;
     expires_at: Date | string;
   }>(
     `DELETE FROM model_credential_login_tickets
       WHERE ticket_hash = $1
-      RETURNING id, org_id, user_id, provider_id, auth_type, pod_id, expires_at`,
+      RETURNING id, org_id, user_id, provider_id, auth_type, pod_id, expires_at, custom_binding`,
     [hashLoginTicket(ticket)],
   );
   const row = rows.rows[0];
@@ -126,6 +130,7 @@ export async function consumeLoginTicket(ticket: string): Promise<ConsumedLoginT
     providerId: row.provider_id,
     authType: row.auth_type,
     podId: row.pod_id,
+    customBinding: row.custom_binding,
     expiresAt,
   };
 }
@@ -352,7 +357,7 @@ function abortReason(signal: AbortSignal): Error {
  * (or a pool connection inside dbCredentialStore.modify) indefinitely; the caller's abort
  * and the 10-minute deadline both cancel the in-flight interaction.
  */
-async function runWithLoginDeadline<T>(
+export async function runWithLoginDeadline<T>(
   external: AbortSignal | undefined,
   interactionSignal: AbortSignal | undefined,
   work: (signal: AbortSignal) => Promise<T>,

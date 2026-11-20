@@ -1,12 +1,12 @@
 {
   "name": "@pipod/cli",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@pipod/cli",
-      "version": "0.1.30",
+      "version": "0.1.31",
       "license": "AGPL-3.0-only",
       "dependencies": {
         "@earendil-works/pi-coding-agent": "1.5.2",

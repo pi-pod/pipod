@@ -119,6 +119,11 @@ export async function launchHostChild(
 ): Promise<PodLaunchResult> {
   await assertLaunchAllowed(undefined, args.userId);
   const host = args.hostPod;
+  // Co-located pods share the host's ~/.pi. Excluding them at lease time would not
+  // keep them from reading the custom key already materialized on the host.
+  if (Object.keys(host.resolved_config.customCredentialBindings ?? {}).length > 0) {
+    throw conflict("this host has custom account credentials and cannot accept co-located pods");
+  }
   const identityHost = await hostForPod(host);
   // A dedicated boat is still the owner's machine: co-locating onto it is the same
   // explicit choice as on a static host, and adds no boat and no boat time.

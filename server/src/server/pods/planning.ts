@@ -22,6 +22,7 @@ import {
   resolvePodCredentialContract,
   resolveRequiredCredentialProviders,
 } from "../model-credentials/dependencies.js";
+import { planCustomCredentials } from "../model-credentials/custom.js";
 import { classifyCredentialMeta } from "../model-credentials/login.js";
 import { servingCredentialMetas, type ServingCredentialMeta } from "../model-credentials/sharing.js";
 import { checkProviderCredential, resolveSecrets } from "../secrets/store.js";
@@ -255,6 +256,7 @@ function reconnectRequiredError(providerId: string, requiredBy: string, sharedBy
  */
 export function planLaunchCredentials(args: {
   metas: ServingCredentialMeta[];
+  customReady?: readonly string[];
   /** An absent `credentialProviders` is unpinned, as in any config frozen before the key existed. */
   config: Pick<PiPodConfig, "pi"> & Partial<Pick<PiPodConfig, "credentialProviders">>;
   piSettings: PlannedPiSettings | null;
@@ -264,13 +266,14 @@ export function planLaunchCredentials(args: {
   const credentialContract = resolvePodCredentialContract({
     modelProvider: modelProvider ?? "",
     packages,
-    accountProviders: args.metas.map((meta) => meta.providerId),
+    accountProviders: [...args.metas.map((meta) => meta.providerId), ...(args.customReady ?? [])],
     pinnedProviders: args.config.credentialProviders ?? null,
   }).filter((id) => id.length > 0);
   const leased = new Set(credentialContract);
-  const readyProviders = args.metas
-    .filter((meta) => classifyCredentialMeta(meta).state === "ready")
-    .map((meta) => meta.providerId);
+  const readyProviders = [...new Set([
+    ...args.metas.filter((meta) => classifyCredentialMeta(meta).state === "ready").map((meta) => meta.providerId),
+    ...(args.customReady ?? []),
+  ])].sort();
   const readyInContract = readyProviders.filter((id) => leased.has(id));
   const withheld = readyProviders.filter((id) => !leased.has(id));
   const required = resolveRequiredCredentialProviders({
@@ -482,12 +485,19 @@ export async function planPodLaunch(
       workdir: config.workdir,
     },
   );
+  const custom = includeUserBundle && !args.delegation
+    ? await planCustomCredentials({ orgId: args.orgId, userId: args.userId }, piSettings?.files.models)
+    : null;
   const planned = planLaunchCredentials({
     metas: credentialMetas,
+    customReady: custom?.ready,
     config,
     piSettings,
   });
   const { piAuth, credentialContract } = args.delegation ? delegateCredentials(planned, args.delegation) : planned;
+  const permittedProviders = new Set(credentialContract);
+  const customBindings = Object.fromEntries(Object.entries(custom?.bindings ?? {})
+    .filter(([id]) => permittedProviders.has(id)));
 
   const providerName = args.provider ?? (config.provider || null) ?? platformDefaultProvider(deps.env);
   assertProviderPermitted(policy, providerName);
@@ -742,6 +752,7 @@ export async function planPodLaunch(
       ? { bake: { digest: bakeDigest(composedBake), mode: "baked" as const, status: "pending" } }
       : {}),
     ...(piAuth ? { piAuthProviders: piAuth.providers } : {}),
+    ...(Object.keys(customBindings).length ? { customCredentialBindings: customBindings } : {}),
     // Recorded because an argument list cannot be asked afterwards which paths this launch
     // required: every later start probes exactly this list before Pi runs.
     ...(piResources ? { piResources } : {}),
@@ -763,6 +774,8 @@ export async function planPodLaunch(
     warnings: [
       ...resolved.warnings,
       ...planned.warnings,
+      ...(custom?.changed ?? []).map((id) =>
+        `custom provider ${id}: saved API key withheld because the account or launch configuration differs; check models.json and reconnect if the endpoint changed`),
       ...(retiredProjectInputsPresent ? [LEGACY_PROJECT_LAYERS_WARNING] : []),
       ...(template !== null && projectConfigRaw !== null ? [TEMPLATE_PROJECT_PREVIEW_WARNING] : []),
       ...(deps.env.PUBLIC_URL ? [] : [PUBLIC_URL_UNSET_WARNING]),

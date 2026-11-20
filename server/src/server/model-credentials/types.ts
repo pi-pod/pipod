@@ -12,7 +12,8 @@ export type CredentialReconnectReason =
   | "revoked"
   | "invalid_grant"
   | "missing_refresh_token"
-  | "migration_required";
+  | "migration_required"
+  | "provider_configuration_changed";
 
 export type CredentialStatus =
   | {
@@ -100,7 +101,7 @@ export interface ModelCredentialBroker {
     providerId: string,
     authType: BrokerAuthType,
     interaction: BrokerAuthInteraction,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; customBinding?: string | null },
   ): Promise<CredentialStatus>;
   lease(
     subject: CredentialSubject,

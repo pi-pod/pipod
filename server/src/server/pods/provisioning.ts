@@ -264,6 +264,7 @@ export async function materializeLaunchCredentialLease(args: {
   orgId: string;
   userId: string;
   credentialContract: readonly string[];
+  customCredentialBindings?: ResolvedConfigReport["customCredentialBindings"];
   config: PiPodConfig;
   piSettings: PlannedPiSettings | null;
 }): Promise<void> {
@@ -276,7 +277,10 @@ export async function materializeLaunchCredentialLease(args: {
   );
   const { lease, failures } = await leaseForPod(
     args.kek,
-    { id: args.podId, org_id: args.orgId, user_id: args.userId },
+    {
+      id: args.podId, org_id: args.orgId, user_id: args.userId,
+      resolved_config: { customCredentialBindings: args.customCredentialBindings },
+    },
     contract,
   );
   throwIfRequiredLeaseBlocked(required, lease, failures, modelProvider, packages);
@@ -1720,11 +1724,9 @@ async function provision(
         };
       };
 
-      await phase("materialize", () =>
-        Promise.all([
-          installPodSkill(sandbox, execEnv),
-          installProvisionShim(),
-          materializeLaunchCredentialLease({
+      await phase("materialize", () => {
+        const settings = installSettings();
+        const installAuth = () => materializeLaunchCredentialLease({
             kek: deps.kek,
             sandbox,
             execEnv,
@@ -1732,12 +1734,17 @@ async function provision(
             orgId: args.orgId,
             userId: args.userId,
             credentialContract: args.credentialContract,
+            customCredentialBindings: report.customCredentialBindings,
             config,
             piSettings: args.piSettings,
-          }),
-          installSettings(),
-        ]),
-      );
+          });
+        return Promise.all([
+          installPodSkill(sandbox, execEnv),
+          installProvisionShim(),
+          settings,
+          report.customCredentialBindings ? settings.then(installAuth) : installAuth(),
+        ]);
+      });
 
       if (isSandboxLaunch && createAttempt) {
         await assertCreateAttemptOwner({

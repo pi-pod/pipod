@@ -24,6 +24,7 @@ import {
   createModelCredentialBroker,
   listConnectableProviders,
 } from "./broker.js";
+import { accountCustomProviders, customStatus, listCustomCredentialMeta } from "./custom.js";
 import { brokerCapability, type BrokerCapability } from "./dependencies.js";
 import { leaseForPod } from "./lease.js";
 import {
@@ -69,6 +70,7 @@ const LoginTicketBody = z
   .object({
     authType: z.enum(["oauth", "api_key"]),
     podId: z.string().uuid().nullish(),
+    customBinding: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   })
   .strict();
 
@@ -283,7 +285,7 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
     async (req) => {
       const [listing, providers] = await Promise.all([
         broker.status(subjectOf(req.auth)),
-        listConnectableProviders(),
+        listConnectableProviders(subjectOf(req.auth)),
       ]);
       return { ...listing, providers };
     },
@@ -300,12 +302,24 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
       const authType = req.body.authType;
       const podId = req.body.podId ?? null;
       try {
-        await assertLoginCapability(providerId, authType);
+        const subject = subjectOf(req.auth);
+        const binding = req.body.customBinding;
+        if (binding) {
+          const custom = (await accountCustomProviders(subject)).get(providerId);
+          if (authType !== "api_key" || podId || custom?.binding !== binding) {
+            throw new HttpError(400, "credential_provider_unsupported", {
+              code: "credential_provider_unsupported", provider: providerId,
+              message: "Custom provider login requires an account API-key import for the current provider configuration.",
+            });
+          }
+        } else {
+          await assertLoginCapability(providerId, authType);
+        }
         if (podId) {
           const pod = await getPod(req.auth.orgId, podId);
           await assertPodAccess(pod, req.auth);
         }
-        const minted = await createLoginTicket(subjectOf(req.auth), providerId, authType, podId);
+        const minted = await createLoginTicket(subject, providerId, authType, podId, binding);
         await auditRoute(req.auth, "model_credentials.login_ticket", providerId, {
           outcome: "ok",
         });
@@ -334,7 +348,17 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
       try {
         // The credential that serves this person's pods: their own, else one shared with them.
         // Testing a shared one refreshes the owner's grant exactly as their own pods would.
-        const serving = await servingCredential(subjectOf(req.auth), providerId);
+        const subject = subjectOf(req.auth);
+        const serving = await servingCredential(subject, providerId);
+        if (!serving) {
+          const row = (await listCustomCredentialMeta(subject)).find((entry) => entry.provider_id === providerId);
+          if (row) {
+            const binding = (await accountCustomProviders(subject)).get(providerId)?.binding;
+            const status = customStatus(row, binding);
+            await auditRoute(req.auth, "model_credentials.test", providerId, { outcome: status.state, source: "own" });
+            return { status: { ...status, source: "own" as const } };
+          }
+        }
         const owner = serving?.owner;
         const source = serving?.sharedBy
           ? { source: "shared" as const, sharedBy: serving.sharedBy }
@@ -618,7 +642,7 @@ export function registerModelCredentialRoutes(app: FastifyInstance, deps: ModelC
           providerId,
           ticket.authType,
           interaction,
-          { signal: controller.signal },
+          { signal: controller.signal, customBinding: ticket.customBinding },
         );
         await applyLoginToPod(deps, ticket);
         finishSuccess(status);

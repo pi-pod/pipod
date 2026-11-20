@@ -40,6 +40,14 @@ export interface ModelCredentialEncryptionContext {
   readonly providerId: string;
 }
 
+export interface CustomModelCredentialEncryptionContext {
+  readonly kind: "custom_model_credential";
+  readonly orgId: string;
+  readonly userId: string;
+  readonly providerId: string;
+  readonly binding: string;
+}
+
 export interface PiAuthEncryptionContext {
   readonly kind: "pi_auth";
   readonly orgId: string;
@@ -75,6 +83,7 @@ export type EncryptionContext =
   | LimitedSignInEncryptionContext
   | SecretEncryptionContext
   | ModelCredentialEncryptionContext
+  | CustomModelCredentialEncryptionContext
   | PiAuthEncryptionContext
   | PiSettingsEncryptionContext
   | PodLaunchEnvEncryptionContext;
@@ -86,6 +95,7 @@ const DOMAIN_LABELS = {
   sandbox_host: "pipod-sandbox-host",
   secret: "pipod-secret",
   model_credential: "pipod-model-credential",
+  custom_model_credential: "pipod-custom-model-credential",
   pi_auth: "pipod-pi-auth",
   pi_settings: "pipod-pi-settings",
   pod_launch_env: "pipod-pod-launch-env",
@@ -100,6 +110,8 @@ function identityFields(context: EncryptionContext): readonly string[] {
       return [context.orgId, context.scopeType, context.scopeId, context.name];
     case "model_credential":
       return [context.orgId, context.userId, context.providerId];
+    case "custom_model_credential":
+      return [context.orgId, context.userId, context.providerId, context.binding];
     case "pi_auth":
       return [context.orgId, context.userId];
     case "pi_settings":
