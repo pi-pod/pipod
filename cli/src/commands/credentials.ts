@@ -5,6 +5,7 @@ import { execFile, spawn } from "node:child_process";
 import type { AccountClient, CredentialStatus } from "../account/api.js";
 import { requireAccountClient } from "../account/client.js";
 import { runCredentialLogin } from "../account/credential-login.js";
+import { customProviderBindings } from "../account/custom-provider.js";
 import { installedPiPackage } from "../client/piversion.js";
 import type {
   RemoteAuthEvent,
@@ -12,6 +13,7 @@ import type {
   RemoteAuthPrompt,
 } from "../client/runtime/auth-bridge.js";
 import { CancelledError, PiPodError } from "../errors.js";
+import { HOST_PI_AGENT_SUBPATH, hostHome } from "../hostconfig.js";
 import { info, out, warn } from "../log.js";
 import { confirm, isInteractive, promptSecret } from "../prompt.js";
 import { registerSecret } from "../redact.js";
@@ -109,15 +111,27 @@ async function connectCredential(
     }
   }
 
+  const client = clientFor(flags);
+  const local = fromPi ? readLocalCustomProviders(flags.home).get(providerId) : undefined;
+  const custom = apiKey
+    ? (await client.modelCredentials()).providers.find((provider) => provider.id === providerId)?.custom
+    : undefined;
+  if (fromPi && custom && custom.binding !== local?.binding) {
+    throw new PiPodError(`local and account configurations disagree for ${providerId}`, {
+      hint: `review the local models.json and the account endpoint (${custom.baseUrl}) before importing`,
+    });
+  }
   const terminal = flags.interaction ? null : terminalInteraction();
   try {
     const status = await connectOne(
-      clientFor(flags),
-      { providerId, authType: apiKey ? "api_key" : "oauth", importKey: fromPi },
+      client,
+      { providerId, authType: apiKey ? "api_key" : "oauth", importKey: fromPi, customBinding: custom?.binding },
       flags.interaction ?? terminal!.interaction,
       flags,
     );
-    info(`connected ${providerId} (${status.type}, ${status.state})`);
+    info(custom
+      ? `stored ${providerId} API key for ${custom.baseUrl} (not verified with the provider)`
+      : `connected ${providerId} (${status.type}, ${status.state})`);
     return 0;
   } finally {
     terminal?.dispose();
@@ -129,6 +143,7 @@ interface ConnectPlan {
   authType: "api_key" | "oauth";
   /** Answer the login's secret prompt from local pi instead of asking the user. */
   importKey: boolean;
+  customBinding?: string | undefined;
 }
 
 /** One provider's connect, shared by the single-provider command and the bulk sweep. */
@@ -155,6 +170,7 @@ async function connectOne(
     client,
     providerId: plan.providerId,
     authType: plan.authType,
+    ...(plan.customBinding ? { customBinding: plan.customBinding } : {}),
     interaction,
   });
 }
@@ -173,7 +189,7 @@ async function bulkConnect(args: string[], flags: CredentialsFlags): Promise<num
   const client = clientFor(flags);
   const { credentials, providers } = await client.modelCredentials();
   const stored = new Map(credentials.map((credential) => [credential.providerId, credential]));
-  const connectable = providers.filter((provider) => provider.brokerSupported);
+  const connectable = providers.filter((provider) => provider.brokerSupported && !provider.custom);
   const candidates = connectable.filter((provider) => stored.get(provider.id)?.state !== "ready");
   if (candidates.length === 0) {
     info("all connectable providers already have account credentials");
@@ -270,6 +286,15 @@ function withImportedKey(base: RemoteAuthInteraction, key: string): RemoteAuthIn
   };
 }
 
+function readLocalCustomProviders(home?: string) {
+  try {
+    const root = process.env["PI_CODING_AGENT_DIR"] || path.join(hostHome(home) ?? "", HOST_PI_AGENT_SUBPATH);
+    return customProviderBindings(JSON.parse(fs.readFileSync(path.join(root, "models.json"), "utf8")));
+  } catch {
+    return customProviderBindings(undefined);
+  }
+}
+
 /**
  * The key local pi would actually use — the bundled pi resolves auth.json `!command` and
  * `$ENV` references, so a raw auth.json copy would ship a reference that means nothing in a pod.
@@ -358,6 +383,10 @@ async function testCredential(args: string[], client: AccountClient): Promise<nu
   const { status } = await client.testModelCredential(providerId);
   out(formatStatus(status));
   if (status.state === "ready") return 0;
+  if (status.state === "reconnect_required" && status.reason === "provider_configuration_changed") {
+    info(`review the provider in models.json, then run \`pipod credentials connect ${providerId} --api-key\``);
+    return 1;
+  }
   info(
     status.sharedBy
       ? `${status.sharedBy} can reconnect it; \`pipod credentials connect ${providerId}\` connects your own instead`

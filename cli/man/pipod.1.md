@@ -416,12 +416,12 @@ reach pods or this machine.
 Actions:
   list                       The credential each provider uses, where it comes
                              from, and connectable providers (default)
-  connect                    Connect every provider your local pi is signed in to:
+  connect                    Connect every supported built-in provider your local pi is signed in to:
                              API keys are imported, everything else is a fresh
                              account login; ready credentials are left alone
   connect <provider>         Sign in to a provider (OAuth by default)
   reconnect <provider>       Redo the sign-in for a saved credential
-  test <provider>            Verify a saved credential against the provider
+  test <provider>            Check a saved credential's status
   remove <provider> [--yes]  Delete a saved credential (alias: rm)
   share <provider> --with <email>
                              Let a member of your organization use your
@@ -439,6 +439,16 @@ connect options:
 `connect` and `reconnect` need a person, for the browser sign-in or the hidden key prompt;
 `list` and `test` do not. A model-provider key is a credential here, not a secret: a template
 refuses one.
+
+Custom providers in your saved user `models.json` can use an account API key if all models use
+one HTTPS base URL and one OpenAI-compatible adapter (`openai-completions` or `openai-responses`).
+Use `pipod credentials connect <provider> --api-key --from-pi` after syncing the definition;
+local and saved endpoints must match. Or omit `--from-pi` to enter the key at the hidden prompt.
+The broker does not contact the custom endpoint, so `test` reports custody and configuration
+match, not remote key validity. Custom keys are not shared or bulk-imported. They are leased
+only to your matching pods, not delegated launches; a pod with such a key cannot host
+co-located pods because they share its Pi files. After an endpoint change, review the
+configuration, reconnect the key and launch a fresh pod.
 
 For each provider, at launch and at every token refresh, a pod uses its launcher's own
 credential if they have one, otherwise the one shared with them, otherwise none. Connecting

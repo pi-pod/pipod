@@ -17,6 +17,7 @@ export interface RunCredentialLoginOptions {
   providerId: string;
   authType: RemoteAuthType;
   podId?: string;
+  customBinding?: string;
   interaction: RemoteAuthInteraction;
   createWebSocket?: (url: string) => WebSocket;
 }
@@ -29,6 +30,7 @@ export async function runCredentialLogin(
   const ticket = await opts.client.createCredentialLoginTicket(opts.providerId, {
     authType: opts.authType,
     ...(opts.podId ? { podId: opts.podId } : {}),
+    ...(opts.customBinding ? { customBinding: opts.customBinding } : {}),
   });
   const url = opts.client.credentialLoginWsUrl(opts.providerId, ticket.ticket);
   let socket: WebSocket;

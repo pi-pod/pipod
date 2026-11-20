@@ -10,11 +10,13 @@
 import { audit } from "../audit.js";
 import { HttpError } from "../httperrors.js";
 import type { KekProvider } from "../secrets/crypto.js";
+import { accountCustomProviders, customStatus, deleteCustomCredential, listCustomCredentialMeta, storeCustomLogin } from "./custom.js";
 import { capabilityOf, pinnedPiProviders } from "./dependencies.js";
 import { acquireLease } from "./lease.js";
 import {
   classifyCredentialMeta,
   executeLogin,
+  runWithLoginDeadline,
   type LoginExec,
 } from "./login.js";
 import { type RefreshExec } from "./refresh.js";
@@ -45,14 +47,16 @@ export interface ConnectableProvider {
   oauth: { loginLabel: string } | null;
   apiKey: boolean;
   brokerSupported: boolean;
+  custom?: { baseUrl: string; binding: string };
 }
 
 /**
- * Broker-connectable Pi builtins, sorted by id. Named as pi names them ("OpenAI", "OpenAI Codex
+ * Broker-connectable Pi builtins and the account's supported custom providers, sorted by id.
+ * Builtins are named as pi names them ("OpenAI", "OpenAI Codex
  * (legacy)"); the OAuth flow's own name or label says what signing in uses, because a provider
  * may take a subscription sign-in and an API key alike.
  */
-export async function listConnectableProviders(): Promise<ConnectableProvider[]> {
+export async function listConnectableProviders(subject: CredentialSubject): Promise<ConnectableProvider[]> {
   const connectable: ConnectableProvider[] = [];
   for (const provider of (await pinnedPiProviders()).values()) {
     const capability = capabilityOf(provider);
@@ -66,6 +70,9 @@ export async function listConnectableProviders(): Promise<ConnectableProvider[]>
       apiKey: capability.apiKey,
       brokerSupported: true,
     });
+  }
+  for (const [id, custom] of await accountCustomProviders(subject)) {
+    connectable.push({ id, name: id, oauth: null, apiKey: true, brokerSupported: true, custom });
   }
   return connectable.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
@@ -121,7 +128,16 @@ export function createModelCredentialBroker(
   return {
     async status(subject: CredentialSubject): Promise<CredentialListing> {
       try {
-        const listing = await listCredentials(subject);
+        const [listing, custom] = await Promise.all([listCredentials(subject), listCustomCredentialMeta(subject)]);
+        if (custom.length) {
+          const providers = await accountCustomProviders(subject);
+          const builtins = new Set(listing.credentials.map((credential) => credential.providerId));
+          for (const row of custom) {
+            if (!builtins.has(row.provider_id)) {
+              listing.credentials.push({ ...customStatus(row, providers.get(row.provider_id)?.binding), source: "own" });
+            }
+          }
+        }
         await auditBroker({
           subject,
           action: "model_credentials.status",
@@ -145,13 +161,18 @@ export function createModelCredentialBroker(
       providerId: string,
       authType: BrokerAuthType,
       interaction: BrokerAuthInteraction,
-      opts?: { signal?: AbortSignal },
+      opts?: { signal?: AbortSignal; customBinding?: string | null },
     ): Promise<CredentialStatus> {
       try {
-        const status = await executeLogin(kek, subject, providerId, authType, interaction, {
-          signal: opts?.signal,
-          loginExec: seams?.loginExec,
-        });
+        const binding = opts?.customBinding;
+        const status = binding && authType === "api_key"
+          ? await runWithLoginDeadline(opts?.signal, interaction.signal, (signal) =>
+            storeCustomLogin(kek, subject, providerId, binding, {
+              ...interaction, signal, prompt: (prompt) => interaction.prompt({ ...prompt, signal }),
+            }))
+          : await executeLogin(kek, subject, providerId, authType, interaction, {
+            signal: opts?.signal, loginExec: seams?.loginExec,
+          });
         await auditBroker({
           subject,
           action: "model_credentials.login",
@@ -196,7 +217,7 @@ export function createModelCredentialBroker(
 
     async remove(subject: CredentialSubject, providerId: string): Promise<boolean> {
       try {
-        const removed = await deleteCredential(subject, providerId);
+        const removed = await deleteCredential(subject, providerId) || await deleteCustomCredential(subject, providerId);
         await auditBroker({
           subject,
           action: "model_credentials.remove",

@@ -477,7 +477,7 @@ export type CredentialStatus = (
       providerId: string;
       type: "oauth" | "api_key";
       state: "reconnect_required";
-      reason: "revoked" | "invalid_grant" | "missing_refresh_token" | "migration_required";
+      reason: "revoked" | "invalid_grant" | "missing_refresh_token" | "migration_required" | "provider_configuration_changed";
       revision: number;
     }
   | {
@@ -514,6 +514,7 @@ export interface ConnectableProvider {
   oauth: { loginLabel: string } | null;
   apiKey: boolean;
   brokerSupported: boolean;
+  custom?: { baseUrl: string; binding: string };
 }
 
 export interface CredentialErrorDetail {
@@ -1250,7 +1251,7 @@ export class AccountClient {
 
   createCredentialLoginTicket(
     providerId: string,
-    body: { authType: "oauth" | "api_key"; podId?: string },
+    body: { authType: "oauth" | "api_key"; podId?: string; customBinding?: string },
   ): Promise<{ ticket: string; expiresAt: string }> {
     return this.request(`/model-credentials/${encodeURIComponent(providerId)}/login-ticket`, {
       method: "POST",

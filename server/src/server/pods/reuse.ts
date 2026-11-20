@@ -179,6 +179,12 @@ export async function reusePod(
     throw conflict("this pod belongs to a different project or template");
   }
   assertReusableLaunchSettings(pod.resolved_config, plan);
+  const bindings = report.customCredentialBindings;
+  if (bindings && !isDeepStrictEqual(bindings, pod.resolved_config.customCredentialBindings)) {
+    // An older warm disk may already be shared with co-located pods. Never introduce a
+    // custom credential binding on a disk that was not created with that restriction.
+    throw conflict("custom provider credential bindings changed; launch a fresh pod");
+  }
   const previousImage = pod.resolved_config?.config?.image;
   // A pod that launched on a fallback tier before its full variant was built is still the
   // same runtime: whatever the image lacked (packages, bake layers) ran live at launch and
@@ -474,6 +480,7 @@ async function provisionReuse(
         orgId: pod.org_id,
         userId: pod.user_id,
         credentialContract: args.credentialContract,
+        customCredentialBindings: report.customCredentialBindings,
         config,
         piSettings: args.piSettings,
       }),

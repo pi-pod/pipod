@@ -22,6 +22,7 @@
 
 [shared]
 # sha256                                                            path
+70743c84f6599e5e4e5bd9c9e124b82822b563b7ee09d6cf44f4b05a98304769  account/custom-provider.ts
 dbe4518c76e0bc4aa84bd16a00acf896c8b3b232b6d884ef8094b5c694ec424b  account/ref.ts
 2defb1e7cbd4f824f5a001643fcf4b323ace60b47e9967d3542211cd9fa2e3ef  client/piversion.ts
 3de23f7b3f0f6b4b9b8f819c5349aa714b38fd103931c98405c5e59596312149  client/pod-title.ts

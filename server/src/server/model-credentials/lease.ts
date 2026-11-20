@@ -2,7 +2,9 @@
  * src/server/model-credentials/lease.ts — sanitized, provider-scoped access-token leases.
  *
  * A lease is what a pod may hold: OAuth entries with `refresh` stripped, plus api_key
- * entries unchanged. Acquisition walks providers serially so one request never holds many
+ * entries unchanged (custom keys are rendered as Pi auth.json literals). Custom credentials
+ * require an account registration, a matching frozen pod binding, and a matching stored key.
+ * Acquisition walks providers serially so one request never holds many
  * locked pool connections at once. A provider outage must not kill a working lease — if a
  * due refresh fails transiently and the current access token is still valid, that token
  * ships and no failure is recorded.
@@ -20,6 +22,7 @@ import { createHash } from "node:crypto";
 import { audit } from "../audit.js";
 import type { KekProvider } from "../secrets/crypto.js";
 import { ensureFreshCredential, MIN_VALIDITY_MS, type RefreshExec, type RefreshOutcome } from "./refresh.js";
+import { accountCustomProviders, readBoundCustomCredential, type PodCustomBindings } from "./custom.js";
 import { servingCredential } from "./sharing.js";
 import {
   NON_EXPIRING_SQL_CUTOFF_MS,
@@ -88,16 +91,33 @@ export async function acquireLease(
   subject: CredentialSubject,
   providerIds: readonly string[],
   minValidityMs: number,
-  opts?: { refreshExec?: RefreshExec },
+  opts?: { refreshExec?: RefreshExec; customBindings?: PodCustomBindings },
 ): Promise<LeaseResult> {
   const providers: CredentialLease["providers"] = {};
   const failures: Record<string, LeaseFailure> = {};
   const shared: LeaseResult["shared"] = {};
   const included: Array<[providerId: string, rowId: string, revision: number]> = [];
 
+  let registered: Awaited<ReturnType<typeof accountCustomProviders>> | undefined;
   for (const providerId of providerIds) {
     const serving = await servingCredential(subject, providerId);
     if (!serving) {
+      const bindings = opts?.customBindings;
+      const binding = bindings && Object.hasOwn(bindings, providerId) ? bindings[providerId] : undefined;
+      if (binding) {
+        registered ??= await accountCustomProviders(subject);
+        if (registered.get(providerId)?.binding !== binding) {
+          failures[providerId] = { state: "reconnect_required", reason: "provider_configuration_changed" };
+          continue;
+        }
+        const custom = await readBoundCustomCredential(kek, subject, providerId, binding);
+        if (custom) {
+          const revision = Number(custom.row.revision);
+          providers[providerId] = { entry: custom.entry, providerRevision: revision };
+          included.push([providerId, custom.row.id, revision]);
+          continue;
+        }
+      }
       failures[providerId] = { state: "missing" };
       continue;
     }
@@ -173,7 +193,7 @@ export async function acquireLease(
  */
 export async function leaseForPod(
   kek: KekProvider,
-  pod: { id: string; org_id: string; user_id: string },
+  pod: { id: string; org_id: string; user_id: string; resolved_config?: { customCredentialBindings?: PodCustomBindings } },
   providerIds: readonly string[],
   opts?: { heldRevision?: string; refreshExec?: RefreshExec },
 ): Promise<LeaseResult> {
@@ -182,7 +202,7 @@ export async function leaseForPod(
     { orgId: pod.org_id, userId: pod.user_id },
     providerIds,
     MIN_VALIDITY_MS,
-    { refreshExec: opts?.refreshExec },
+    { refreshExec: opts?.refreshExec, customBindings: pod.resolved_config?.customCredentialBindings },
   );
   if (result.lease.revision === opts?.heldRevision) return result;
   for (const [providerId, share] of Object.entries(result.shared)) {

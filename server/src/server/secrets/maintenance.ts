@@ -2,7 +2,7 @@
  * Operator key-lifecycle tooling (secure-secrets plan Phase 3): inventory, verify,
  * legacy-format migration, and KEK rewrapping across every encrypted table.
  *
- * Tables covered: `secrets`, `model_credentials`, `pi_auth`, `pod_launch_env`, and
+ * Tables covered include `secrets`, `model_credentials`, `custom_model_credentials`, `pi_auth`, `pod_launch_env`, and
  * `pi_settings` when it exists (migration 012 dropped it, so live databases report
  * it absent; retained legacy rows still migrate and rewrap like every other table —
  * the plan's retention decision governs deletion, never encryption migration).
@@ -137,6 +137,7 @@ interface Row {
   name?: string;
   user_id?: string;
   provider_id?: string;
+  provider_binding?: string;
   pod_id?: string;
   sign_in_id?: string;
   owner_user_id?: string | null;
@@ -209,6 +210,18 @@ const TABLE_SPECS: TableSpec[] = [
     idColumn: "id",
     identitySelect: "org_id, user_id, provider_id",
     buildContext: modelCredentialRowContext,
+  },
+  {
+    table: "custom_model_credentials",
+    idColumn: "id",
+    identitySelect: "org_id, user_id, provider_id, provider_binding",
+    buildContext: (row) => ({
+      kind: "custom_model_credential",
+      orgId: requireText(row.org_id),
+      userId: requireText(row.user_id),
+      providerId: requireText(row.provider_id),
+      binding: requireText(row.provider_binding),
+    }),
   },
   {
     table: "pi_auth",

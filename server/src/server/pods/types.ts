@@ -84,6 +84,8 @@ export interface ResolvedConfigReport {
   bake?: { digest: string; mode: "baked" | "live"; status: string; outputTail?: string };
   /** Provider ids the materialized pi sign-in covers (§7); names only, never values. */
   piAuthProviders?: string[];
+  /** Server-generated fingerprints of registered endpoints in the launch's Pi files. */
+  customCredentialBindings?: Readonly<Record<string, string>>;
   /** Non-secret progress for the selected Pi settings bundle materialized at launch. */
   piSettings?: {
     files: string[];
