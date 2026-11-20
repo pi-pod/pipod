@@ -102,6 +102,14 @@ export interface PiPodConfig {
    * (org → template → project) — a denial can never be un-set by a lower layer.
    */
   deniedProviders: string[];
+  /**
+   * Which of the launcher's connected model credentials a pod may hold. `null` (the default)
+   * is all of them: a model of any connected provider is always listable and usable. A list
+   * narrows the pod to those providers, plus whatever its own model and packages require — the
+   * way a template draws a boundary. Layers replace it like any array, so the last layer to set
+   * it wins; it is server-enforced and never sent to a client (`clientFacingConfig`).
+   */
+  credentialProviders: string[] | null;
   /** Reuse this repo+branch's newest stopped pod instead of creating one (§6.5). */
   reuse: boolean;
   idleTimeoutMinutes: number;
@@ -238,6 +246,7 @@ export const DEFAULT_CONFIG: Omit<PiPodConfig, "provider" | "image"> = {
     sessionNaming: "auto",
   },
   deniedProviders: [],
+  credentialProviders: null,
   // Off by default: a fresh pod per session is the documented contract. "reuse": true (or
   // --reuse) trades that for speed: the newest stopped pod for this repo+branch is started,
   // fast-forwarded, and re-inited on its warm disk; anything unsafe falls back to a fresh pod.
@@ -357,6 +366,12 @@ class Validator {
       return fallback;
     }
     return value;
+  }
+
+  nullableStringArray(pathStr: string, value: unknown, fallback: string[] | null): string[] | null {
+    if (value === undefined) return fallback;
+    if (value === null) return null;
+    return this.stringArray(pathStr, value, fallback ?? []);
   }
 
   stringArray(pathStr: string, value: unknown, fallback: string[]): string[] {
@@ -556,6 +571,7 @@ const TOP_LEVEL_KEYS = [
   "initOnFailure",
   "pi",
   "deniedProviders",
+  "credentialProviders",
   "reuse",
   "idleTimeoutMinutes",
   "archiveAfterMinutes",
@@ -691,6 +707,11 @@ export function validateConfig(raw: unknown): ParsedConfigResult {
       ),
     },
     deniedProviders: v.stringArray("deniedProviders", root["deniedProviders"], d.deniedProviders),
+    credentialProviders: v.nullableStringArray(
+      "credentialProviders",
+      root["credentialProviders"],
+      d.credentialProviders,
+    ),
     reuse: v.bool("reuse", root["reuse"], d.reuse),
     // 0 is meaningful here (auto-stop off), so the floor is 0 rather than 1.
     idleTimeoutMinutes: v.int("idleTimeoutMinutes", root["idleTimeoutMinutes"], d.idleTimeoutMinutes, {

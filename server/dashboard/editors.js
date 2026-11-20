@@ -227,7 +227,7 @@ function settingsSections({ pi, defaults, policy }) {
           rest: true,
           rows: 6,
           label: "Other configuration",
-          hint: "Any other key of .pi-pod/config.json, such as labels, image, workdir, deniedProviders or pi.chords.",
+          hint: "Any other key of .pi-pod/config.json, such as labels, image, workdir, credentialProviders (limit a pod to some of your connected model credentials), deniedProviders or pi.chords.",
         }),
       ],
     },

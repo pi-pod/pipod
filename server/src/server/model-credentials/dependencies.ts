@@ -146,29 +146,31 @@ export function resolveRequiredCredentialProviders(opts: {
 }
 
 /**
- * The pod's authorized credential-provider set: everything required for launch, plus any
- * stored account credentials that a selectable model would actually consume.
+ * The pod's authorized credential-provider set: everything the launch requires, plus the stored
+ * credentials serving the launcher that the pod may hold.
  *
- * Selectable ids are expanded through {@link credentialProvidersFor} before intersecting
- * account storage, so switching to `claude-bridge` leases `anthropic` rather than a
- * non-existent `claude-bridge` row.
+ * By default that is every one of them — what is connected is what a pod can use, whatever its
+ * settings happen to select, so a model of a connected provider is always listable. A credential
+ * awaiting a reconnect stays in the set: the lease skips it without a provider call, and the
+ * reconnect then reaches the pod on its next lease poll.
+ *
+ * `pinnedProviders` (the `credentialProviders` config) narrows that to the named providers. Ids
+ * are expanded through {@link credentialProvidersFor} before intersecting account storage, so
+ * pinning `claude-bridge` leases `anthropic` rather than a non-existent `claude-bridge` row.
  */
 export function resolvePodCredentialContract(opts: {
   modelProvider: string;
-  selectableProviders: readonly string[];
   packages: readonly string[];
   accountProviders: readonly string[];
+  /** `null` is unpinned: every stored credential. */
+  pinnedProviders: readonly string[] | null;
 }): string[] {
   const required = resolveRequiredCredentialProviders({
     modelProvider: opts.modelProvider,
     packages: opts.packages,
   });
+  if (opts.pinnedProviders === null) return uniqueSorted([...required, ...opts.accountProviders]);
   const account = new Set(opts.accountProviders);
-  const selectableDeps: string[] = [];
-  for (const providerId of opts.selectableProviders) {
-    for (const dep of credentialProvidersFor(providerId)) {
-      if (account.has(dep)) selectableDeps.push(dep);
-    }
-  }
-  return uniqueSorted([...required, ...selectableDeps]);
+  const pinned = opts.pinnedProviders.flatMap(credentialProvidersFor).filter((id) => account.has(id));
+  return uniqueSorted([...required, ...pinned]);
 }

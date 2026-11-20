@@ -295,6 +295,12 @@ export interface PiPodConfig {
   /** Canonical inactivity archive interval, counted from the moment a pod stops. */
   archiveAfterMinutes: number;
   labels: Record<string, string>;
+  /**
+   * Which of the launcher's connected model credentials a pod may hold: null (the default) is
+   * all of them, a list is only those providers plus what the launch's own model needs. The
+   * server enforces it and reports what a pod holds back as `pi auth providers`.
+   */
+  credentialProviders: string[] | null;
 }
 
 /** The managed image identity used when no layer pins one explicitly. */
@@ -335,6 +341,7 @@ export const DEFAULT_CONFIG: Omit<PiPodConfig, "image"> = {
   idleTimeoutMinutes: 15,
   archiveAfterMinutes: 60,
   labels: {},
+  credentialProviders: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -438,6 +445,12 @@ class Validator {
       return fallback;
     }
     return value;
+  }
+
+  nullableStringArray(pathStr: string, value: unknown, fallback: string[] | null): string[] | null {
+    if (value === undefined) return fallback;
+    if (value === null) return null;
+    return this.stringArray(pathStr, value, fallback ?? []);
   }
 
   stringArray(pathStr: string, value: unknown, fallback: string[]): string[] {
@@ -640,6 +653,7 @@ const TOP_LEVEL_KEYS = [
   "idleTimeoutMinutes",
   "archiveAfterMinutes",
   "labels",
+  "credentialProviders",
 ];
 
 export interface ParsedConfigResult {
@@ -775,6 +789,7 @@ export function validateConfig(raw: unknown): ParsedConfigResult {
       min: 0,
     }),
     labels: v.stringMap("labels", root["labels"], d.labels),
+    credentialProviders: v.nullableStringArray("credentialProviders", root["credentialProviders"], d.credentialProviders),
   };
 
   // Cross-field rules -------------------------------------------------------

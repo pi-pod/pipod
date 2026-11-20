@@ -122,8 +122,9 @@ sign-in, the server, your organization and roles, and what a launch here would r
 
 `pipod credentials connect` connects every provider your local pi is signed in to;
 `pipod credentials connect <provider>` signs in to one. The sign-ins belong to your account
-and apply to every pod you launch. Someone in your organization can instead share theirs with
-you (`pipod credentials share`); `pipod credentials` shows which one your pods use.
+and apply to every pod you launch, unless its template narrows them with `credentialProviders`
+(pipod-config(5)). Someone in your organization can instead share theirs with you
+(`pipod credentials share`); `pipod credentials` shows which one your pods use.
 
 ### 4. Organization defaults
 
@@ -408,7 +409,8 @@ changing plans, are a person's decisions: an agent may run `preview`, never `con
 Usage: pipod credentials [action]
 
 Manage account-scoped model-provider sign-ins. Connected credentials apply to
-every pod you launch; OAuth refresh tokens stay in server custody and never
+every pod you launch or reuse, unless its template narrows them with
+credentialProviders; OAuth refresh tokens stay in server custody and never
 reach pods or this machine.
 
 Actions:
