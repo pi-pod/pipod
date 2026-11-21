@@ -2807,7 +2807,7 @@ class SessionStream(
         itemId: String? = null,
         timestamp: Instant? = null,
     ) {
-        val resolvedKind = if (!kind.isNullOrEmpty()) kind else endKind(reason)
+        val resolvedKind = resolveEndKind(kind, reason)
         isStreaming = false
         isCompacting = false
         awaitingReply = false
@@ -3228,9 +3228,11 @@ class SessionStream(
          * an end that carries no `kind` — notably `pod_state: detached`, which
          * the gateway fans out right after every `session_ended`. Three reasons
          * used to fall through to "unavailable" here and put "This pod is
-         * unavailable" over a pod that had merely gone to sleep.
+         * unavailable" over a pod that had merely gone to sleep. `explicit_stop`
+         * is the one reason that deliberately differs; see [resolveEndKind].
          */
         fun endKind(reason: String?): String = when (reason) {
+            "explicit_stop" -> "asleep"
             "gateway_shutdown", "transport_lost", "handshake_failed", "persist_failed" -> "retryable"
             "idle_stop",
             "archived",
@@ -3244,6 +3246,18 @@ class SessionStream(
             "pi_exit" -> "exited"
             else -> "unavailable"
         }
+
+        /**
+         * The kind a session end is shown as: the server's when it sent one, else the reason's.
+         *
+         * The one exception is an explicit stop, which is the reader's own doing. The server's
+         * `sessionEndDisposition` has no case for `explicit_stop` and files it under
+         * "unavailable", and that kind is already stored in the history of every pod stopped that
+         * way. Believing it sends someone to "check" a pod they just put to sleep, so the reason
+         * decides.
+         */
+        fun resolveEndKind(kind: String?, reason: String?): String =
+            if (reason == "explicit_stop") "asleep" else if (!kind.isNullOrEmpty()) kind else endKind(reason)
 
         fun endMessage(kind: String, reason: String?): String = when {
             kind == "asleep" -> "Pod went to sleep. Your conversation and files are preserved."

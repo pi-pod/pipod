@@ -2832,7 +2832,7 @@ public final class SessionStream: ModelSelecting {
         reason: String?, kind: String?, itemId: String? = nil, timestamp: Date? = nil,
         closesTransport: Bool = true
     ) {
-        let resolvedKind = (kind?.isEmpty == false) ? kind! : SessionStream.endKind(reason)
+        let resolvedKind = SessionStream.resolveEndKind(kind: kind, reason: reason)
         streaming = false
         compacting = false
         awaitingReply = false
@@ -2882,6 +2882,8 @@ public final class SessionStream: ModelSelecting {
     /// merely asleep.
     public static func endKind(_ reason: String?) -> String {
         switch reason {
+        case "explicit_stop":
+            return "asleep"
         case "gateway_shutdown", "transport_lost", "handshake_failed", "persist_failed":
             return "retryable"
         case "idle_stop", "archived", "archive", "provider_stopped", "provider_archived",
@@ -2890,6 +2892,17 @@ public final class SessionStream: ModelSelecting {
         case "pi_exit": return "exited"
         default: return "unavailable"
         }
+    }
+
+    /// The kind a session end is shown as: the server's when it sent one, else the reason's.
+    ///
+    /// The one exception is an explicit stop, which is the reader's own doing. The server's
+    /// `sessionEndDisposition` has no case for `explicit_stop` and files it under "unavailable",
+    /// and that kind is already stored in the history of every pod stopped that way. Believing
+    /// it sends someone to "check" a pod they just put to sleep, so the reason decides.
+    static func resolveEndKind(kind: String?, reason: String?) -> String {
+        if reason == "explicit_stop" { return "asleep" }
+        return (kind?.isEmpty == false) ? kind! : endKind(reason)
     }
 
     public static func endMessage(kind: String, reason: String?) -> String {
