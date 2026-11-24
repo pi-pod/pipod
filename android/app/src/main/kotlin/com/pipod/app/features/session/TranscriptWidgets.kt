@@ -664,6 +664,7 @@ private fun DeliveryFooter(item: StreamItem, onRetry: () -> Unit, onDiscard: () 
     when (item.delivery) {
         StreamItemDelivery.DELIVERED -> Unit
         StreamItemDelivery.SENDING -> DeliveryLabel("Sending…", AppIcons.submit)
+        StreamItemDelivery.UNKNOWN -> DeliveryLabel("Delivery not confirmed", AppIcons.submit)
         StreamItemDelivery.WAITING_FOR_CONNECTION ->
             DeliveryLabel("Waiting for connection", AppIcons.schedule)
 
@@ -1030,6 +1031,7 @@ internal fun transcriptAccessibilityText(
         StreamItemDelivery.SENDING -> parts.add("Sending")
         StreamItemDelivery.WAITING_FOR_CONNECTION -> parts.add("Waiting for connection")
         StreamItemDelivery.SAVED_ON_SERVER -> parts.add("Saved on the server")
+        StreamItemDelivery.UNKNOWN -> parts.add("Delivery not confirmed")
         StreamItemDelivery.FAILED -> parts.add("Not delivered")
     }
     return parts.joinToString(", ")

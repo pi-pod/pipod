@@ -161,7 +161,7 @@ interface SessionTransport {
      */
     fun dispose() = disconnect(notify = false)
 
-    fun prompt(text: String, images: List<SessionImage>? = null): Boolean
+    fun prompt(text: String, images: List<SessionImage>?, requestId: String, queueAfterTurn: Boolean): Boolean
     fun interrupt(): Boolean
     fun requestModels(): Boolean
 
@@ -290,10 +290,12 @@ class SessionSocket(
         if (notify && wasConnected) onDisconnect?.invoke(null, null, null)
     }
 
-    override fun prompt(text: String, images: List<SessionImage>?): Boolean = send(
+    override fun prompt(text: String, images: List<SessionImage>?, requestId: String, queueAfterTurn: Boolean): Boolean = send(
         buildJsonObject {
             put("type", "prompt")
             put("text", text)
+            put("requestId", requestId)
+            put("streamingBehavior", if (queueAfterTurn) "followUp" else "steer")
             if (!images.isNullOrEmpty()) {
                 putJsonArray("images") { images.forEach { add(it.toJson()) } }
             }

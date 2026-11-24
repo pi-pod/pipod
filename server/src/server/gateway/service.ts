@@ -138,6 +138,7 @@ import {
   type WsSink,
 } from "./stream-fanout.js";
 import { blockingDialogId, liveDialogs, openDialog } from "./dialogs.js";
+import { admitLivePrompt, LIVE_PROMPT_ADMISSION_MS, LivePromptQueue, LivePromptRefused } from "./live-prompts.js";
 
 /**
  * Reserve a model/catalog operation before its first await. WebSocket receives
@@ -1054,6 +1055,7 @@ export class GatewayService {
       streamingUpdate: null,
       toolExecutionUpdates: new Map(),
       persistQueue: Promise.resolve(),
+      livePrompts: new LivePromptQueue(),
       modelCatalogQueue: Promise.resolve(),
       nameMirrorQueue: Promise.resolve(),
       activity: null as unknown as SessionActivityLease,
@@ -2345,7 +2347,7 @@ export class GatewayService {
         latestSeq: replayThrough,
         firstReplayedSeq,
         ...(firstAvailableSeq !== undefined ? { firstAvailableSeq } : {}),
-        state,
+        state: { ...(typeof state === "object" && state !== null ? state : {}), livePromptDelivery: true },
         shim: session.rpc.helloInfo,
         serverPiVersion: bundledPiVersion(),
       });
@@ -2423,6 +2425,10 @@ export class GatewayService {
       // A queued operation may reach the front after the session was replaced.
       // Do not start provider work for a stale session or send its result.
       if (!isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) return;
+      if (message.type === "prompt") {
+        await this.submitLivePrompt(session, message, args.sink);
+        return;
+      }
       // Pings are gateway-only. Every runtime-facing user command must fence
       // host sleep, including reads that do not acquire a semantic work lease.
       if (message.type !== "ping") await this.admitSessionHost(session);
@@ -2430,26 +2436,6 @@ export class GatewayService {
       // Revalidate ownership before touching credentials, Pi, or the sink.
       if (!isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) return;
       switch (message.type) {
-        case "prompt": {
-          // Validate before taking the dispatch lease: a rejected turn must cost no
-          // work-lease write and no busy mark on the session.
-          const { text, images } = preparePromptIngress({ text: message.text, images: message.images });
-          // A pi that has just started must be back on this pod's model before it takes a turn.
-          await session.selectionRestored;
-          if (!isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)) return;
-          await session.activity.grantDispatchLease();
-          await deliverUserPrompt({
-            text,
-            images,
-            persist: (payload) => this.persist(session, "user_prompt", payload),
-            fanOut: (seq, ts, payload) => {
-              // AgentSessionEvent also emits a user message; clients ignore that duplicate.
-              this.fanOut(session, { type: "event", seq, kind: "user_prompt", payload, ts });
-            },
-            prompt: () => session.rpc.prompt(text, images),
-          });
-          break;
-        }
         case "interrupt":
           await session.rpc.abort();
           break;
@@ -2742,6 +2728,68 @@ export class GatewayService {
       await new Promise<void>((resolve) => {
         setTimeout(resolve, TRANSPORT_RECONNECT_POLL_MS);
       });
+    }
+  }
+
+  private async submitLivePrompt(
+    session: ActiveSession,
+    message: Extract<ClientMessage, { type: "prompt" }>,
+    sink: WsSink,
+  ): Promise<void> {
+    const requestId = typeof message.requestId === "string" && /^[a-z0-9-]{1,64}$/i.test(message.requestId)
+      ? message.requestId : undefined;
+    const refuse = (error: unknown, known: boolean) => {
+      const description = error instanceof Error ? error.message : "Could not send the message.";
+      if (!requestId) throw error;
+      sink.send({
+        type: "rpc_result", id: requestId,
+        response: { type: "response", id: requestId, command: "live_prompt", success: false,
+          error: known ? description : "Could not confirm whether Pi received this message.",
+          deliveryUnknown: !known },
+      });
+    };
+    let ingress: ReturnType<typeof preparePromptIngress>;
+    try {
+      ingress = preparePromptIngress(message);
+      if (message.streamingBehavior !== undefined && message.streamingBehavior !== "steer" && message.streamingBehavior !== "followUp") {
+        throw new Error("Unknown message delivery mode.");
+      }
+    } catch (error) {
+      refuse(error, true);
+      return;
+    }
+    const deadline = Date.now() + LIVE_PROMPT_ADMISSION_MS;
+    const generation = session.rpc.transportGeneration;
+    const sessionFile = session.piSessionFile;
+    const isCurrent = () => isCurrentGatewaySession(session, this.sessions.get(session.pod.id) ?? null)
+      && session.rpc.transportGeneration === generation
+      && (sessionFile == null || session.piSessionFile === sessionFile);
+    const bytes = 2 * (ingress.text.length + (ingress.images ?? []).reduce((n, image) => n + image.data.length, 0));
+    try {
+      await session.livePrompts.enqueue(bytes, async () => {
+        if (!isCurrent()) throw new LivePromptRefused("The pod session changed before the message could be sent.");
+        await this.admitSessionHost(session);
+        await session.selectionRestored;
+        await admitLivePrompt({
+          rpc: session.rpc, ingress, deadline, isCurrent, behavior: message.streamingBehavior ?? "steer",
+          protectDispatch: async () => {
+            await this.admitSessionHost(session);
+            await session.activity.grantDispatchLease();
+          },
+          recordAcceptance: async () => {
+            // The echo confirms admission, not execution (Pi can still clear its queue).
+            const images = describePromptImages(ingress.images);
+            const payload: UserPromptPayload = {
+              text: ingress.text, ...(images ? { images } : {}), ...(requestId ? { requestId } : {}),
+            };
+            const { seq, ts } = await this.persist(session, "user_prompt", payload);
+            this.fanOut(session, { type: "event", seq, kind: "user_prompt", payload, ts });
+          },
+        });
+      });
+    } catch (error) {
+      if (error instanceof HttpError) throw error; // Preserve structured workstation close responses.
+      refuse(error, error instanceof LivePromptRefused);
     }
   }
 

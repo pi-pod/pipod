@@ -140,7 +140,9 @@ public protocol SessionTransport: AnyObject {
 
     func connect(ticket: String)
     func disconnect(notify: Bool)
-    @discardableResult func prompt(_ text: String, images: [SessionImage]) -> Bool
+    @discardableResult func prompt(
+        _ text: String, images: [SessionImage], requestID: String, queueAfterTurn: Bool
+    ) -> Bool
     @discardableResult func interrupt() -> Bool
     @discardableResult func requestModels() -> Bool
     /// Asks the pod which models its user keeps in scope; answered as
@@ -299,8 +301,13 @@ public final class SessionSocket: SessionTransport {
     // MARK: Client messages
 
     @discardableResult
-    public func prompt(_ text: String, images: [SessionImage] = []) -> Bool {
-        var body: [String: JSONValue] = ["type": .string("prompt"), "text": .string(text)]
+    public func prompt(
+        _ text: String, images: [SessionImage], requestID: String, queueAfterTurn: Bool
+    ) -> Bool {
+        var body: [String: JSONValue] = [
+            "type": .string("prompt"), "text": .string(text), "requestId": .string(requestID),
+            "streamingBehavior": .string(queueAfterTurn ? "followUp" : "steer"),
+        ]
         if !images.isEmpty { body["images"] = .array(images.map(\.json)) }
         return send(.object(body))
     }

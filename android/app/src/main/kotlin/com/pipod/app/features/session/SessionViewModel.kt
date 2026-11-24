@@ -48,6 +48,7 @@ data class SessionState(
             isRunning = stream.isRunning,
             isInterrupting = stream.isInterrupting,
             isConnected = stream.isConnected,
+            supportsLivePromptDelivery = stream.supportsLivePromptDelivery,
             canAttach = !isPickingImages && !launchFailed,
             isDisabled = launchFailed,
             usage = stream.usage,
@@ -151,7 +152,7 @@ class SessionViewModel(
         drafts.write(state.value.pod.id, text)
     }
 
-    fun send(): SlashCommandLocalAction? {
+    fun send(queueAfterTurn: Boolean = false): SlashCommandLocalAction? {
         val current = local.value
         val text = current.draft.trim()
         if (text.isEmpty() && current.attachments.isEmpty()) return null
@@ -177,7 +178,7 @@ class SessionViewModel(
         val staged = if (keepAttachments) emptyList() else current.attachments.toList()
         local.update { it.copy(draft = "", attachments = if (keepAttachments) it.attachments else emptyList(), attachError = null) }
         drafts.write(current.pod.id, "")
-        return stream.sendOrRunSlashCommand(text, staged)
+        return stream.sendOrRunSlashCommand(text, staged, queueAfterTurn)
     }
 
     fun interrupt() = stream.interrupt()
@@ -190,7 +191,7 @@ class SessionViewModel(
      */
     fun discardOutgoing(item: StreamItem) {
         val recovered = item.text
-        if (recovered.isNotEmpty()) {
+        if (item.delivery != com.pipod.app.core.session.StreamItemDelivery.UNKNOWN && recovered.isNotEmpty()) {
             val current = local.value.draft
             val merged = if (current.isEmpty()) recovered else "$current\n\n$recovered"
             onDraftChange(merged)

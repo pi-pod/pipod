@@ -60,6 +60,7 @@ public final class SessionStream: ModelSelecting {
     public private(set) var availableThinkingLevels: [String] = []
 
     public private(set) var isConnected = false
+    public private(set) var supportsLivePromptDelivery = false
     public private(set) var reconnecting = false
     public private(set) var reconnectAttempt = 0
     public private(set) var isOffline = false
@@ -253,6 +254,8 @@ public final class SessionStream: ModelSelecting {
     /// client put on a socket, plus everything the durable queue accepted. Their
     /// echo may arrive in a replay rather than live.
     @ObservationIgnored private var serverBoundItemIds: Set<String> = []
+    @ObservationIgnored private var followUpItemIDs: Set<String> = []
+    @ObservationIgnored private var livePromptItemIDs: Set<String> = []
     /// Of those, the ones still unconfirmed when the current attach began: the
     /// only bubbles a replayed `user_prompt` is allowed to adopt.
     @ObservationIgnored private var pendingEchoItemIds: Set<String> = []
@@ -1012,7 +1015,7 @@ public final class SessionStream: ModelSelecting {
     /// sheet or clipboard copy) when the command drives an app screen directly.
     @discardableResult
     public func sendOrRunSlashCommand(
-        _ text: String, attachments: [ChatAttachment] = []
+        _ text: String, attachments: [ChatAttachment] = [], queueAfterTurn: Bool = false
     ) -> SlashCommandLocalAction? {
         let evaluation = SlashCommandCatalog.evaluate(
             draft: text,
@@ -1022,7 +1025,7 @@ public final class SessionStream: ModelSelecting {
             availableThinkingLevels: availableThinkingLevels
         )
         if case .none = evaluation {
-            send(text, attachments: attachments)
+            send(text, attachments: attachments, queueAfterTurn: queueAfterTurn)
             return nil
         }
         guard case .valid(let command, let arguments, _, _, true, _) = evaluation,
@@ -1355,15 +1358,17 @@ public final class SessionStream: ModelSelecting {
     }
 
     @discardableResult
-    public func send(_ text: String, attachments: [ChatAttachment] = []) -> Bool {
+    public func send(
+        _ text: String, attachments: [ChatAttachment] = [], queueAfterTurn: Bool = false
+    ) -> Bool {
         guard pendingModel == nil, pendingThinkingLevel == nil else {
             blockedPromptDrafts.append(text)
             error = "Wait for the model change to finish before sending this message."
             return true
         }
-        let id = "\(localIDPrefix):\(syntheticId)"
+        let id = UUID().uuidString
+        if queueAfterTurn { followUpItemIDs.insert(id) }
         let isTooLong = text.utf16.count > SessionLimits.maxPromptTextChars
-        syntheticId -= 1
         let staged = attachments.map {
             StreamImageAttachment(
                 id: $0.id, name: $0.name, mimeType: $0.mimeType, bytes: $0.bytes
@@ -1411,6 +1416,8 @@ public final class SessionStream: ModelSelecting {
         }
         let text = items[index].text
         let staged = pendingAttachments.removeValue(forKey: id) ?? items[index].attachments
+        let queueAfterTurn = followUpItemIDs.remove(id) != nil
+        livePromptItemIDs.remove(id)
         items.remove(at: index)
         // The retry is a new turn with a new id; the old one can no longer be
         // adopted by anything.
@@ -1429,13 +1436,16 @@ public final class SessionStream: ModelSelecting {
                     mimeType: attachment.mimeType,
                     bytes: attachment.bytes
                 )
-            }
+            },
+            queueAfterTurn: queueAfterTurn
         )
     }
 
     public func discardOutgoing(_ id: String) {
         guard items.contains(where: { $0.id == id }) else { return }
         items.removeAll { $0.id == id }
+        followUpItemIDs.remove(id)
+        livePromptItemIDs.remove(id)
         pendingAttachments.removeValue(forKey: id)
         pendingEchoItemIds.remove(id)
         serverBoundItemIds.remove(id)
@@ -1465,10 +1475,19 @@ public final class SessionStream: ModelSelecting {
                 setDelivery(id, .waitingForConnection)
                 return
             }
-            guard let socket, socket.prompt(text, images: wireImages(id)) else {
+            let followUp = followUpItemIDs.contains(id)
+            if followUp && !supportsLivePromptDelivery {
+                setDelivery(id, .failed)
+                writeError("This server does not support queueing after the current turn.")
+                return
+            }
+            guard let socket, socket.prompt(
+                text, images: wireImages(id), requestID: id, queueAfterTurn: followUp
+            ) else {
                 setDelivery(id, .failed)
                 return
             }
+            if supportsLivePromptDelivery { livePromptItemIDs.insert(id) }
             // On the wire: the gateway persists this turn before it echoes it,
             // so a reconnect may find it in the replay rather than never at all.
             serverBoundItemIds.insert(id)
@@ -1681,16 +1700,19 @@ public final class SessionStream: ModelSelecting {
 
     private func adoptOutgoing(
         text: String, serverId: String, timestamp: Date?, imageCount: Int,
-        restrictedTo: Set<String>? = nil
+        restrictedTo: Set<String>? = nil, requestID: String? = nil
     ) -> Bool {
-        guard let index = items.firstIndex(where: {
-            $0.style == .user && $0.delivery != .delivered
-                && !queuedPromptItemIDs.values.contains($0.id) && $0.text == text
-                && $0.attachments.count == imageCount
-                && (restrictedTo?.contains($0.id) ?? true)
+        guard let index = items.firstIndex(where: { item in
+            guard item.style == .user, item.delivery != .delivered,
+                  !queuedPromptItemIDs.values.contains(item.id), item.text == text,
+                  item.attachments.count == imageCount else { return false }
+            if let requestID { return item.id == requestID }
+            return !livePromptItemIDs.contains(item.id) && (restrictedTo?.contains(item.id) ?? true)
         }) else { return false }
+        followUpItemIDs.remove(items[index].id)
         pendingAttachments.removeValue(forKey: items[index].id)
         pendingEchoItemIds.remove(items[index].id)
+        livePromptItemIDs.remove(items[index].id)
         serverBoundItemIds.remove(items[index].id)
         items[index].id = serverId
         items[index].delivery = .delivered
@@ -2027,6 +2049,21 @@ public final class SessionStream: ModelSelecting {
             bashSummaries.accept(id, text: text, items: &items)
             updateBashSummaries()
         case .rpcResult(let id, let response):
+            if response["command"]?.stringValue == "live_prompt" {
+                guard let item = items.first(where: { $0.id == id }),
+                      item.delivery == .sending || item.delivery == .unknown else { return }
+                let unknown = response["deliveryUnknown"]?.boolValue ?? true
+                if !unknown {
+                    livePromptItemIDs.remove(id)
+                    serverBoundItemIds.remove(id)
+                    pendingEchoItemIds.remove(id)
+                }
+                setDelivery(id, unknown ? .unknown : .failed)
+                awaitingReply = items.contains { $0.delivery == .sending }
+                updateRunningState()
+                if let message = response["error"]?.stringValue { writeError(message) }
+                return
+            }
             handleSlashRPCResult(id: id, response: response)
             usage.accept(id: id, response: response)
 
@@ -2150,6 +2187,7 @@ public final class SessionStream: ModelSelecting {
             appendReplayGapStatus(fromSeq: resumedFrom + 1, toSeq: firstAvailableSeq - 1)
         }
 
+        supportsLivePromptDelivery = state?["livePromptDelivery"]?.boolValue ?? false
         streaming = state?["isStreaming"]?.boolValue ?? false
         compacting = state?["isCompacting"]?.boolValue ?? false
         let pendingCount = state?["pendingMessageCount"]?.doubleValue ?? 0
@@ -2374,11 +2412,17 @@ public final class SessionStream: ModelSelecting {
                     queuedPromptID, text: text, serverId: id, timestamp: timestamp
                 )
             } else {
+                let requestID = payload["requestId"]?.stringValue
                 adopted = adoptOutgoing(
                     text: text, serverId: id, timestamp: timestamp,
                     imageCount: historyImages.count,
-                    restrictedTo: seq <= replayThroughSeq ? pendingEchoItemIds : nil
+                    restrictedTo: seq <= replayThroughSeq ? pendingEchoItemIds : nil,
+                    requestID: requestID
                 )
+                if adopted, requestID != nil {
+                    awaitingReply = items.contains { $0.delivery == .sending }
+                    updateRunningState()
+                }
             }
             if !adopted {
                 append(
