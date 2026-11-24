@@ -4,6 +4,7 @@ import type { Sandbox } from "../../core/providers/types.js";
 import type { PodRow } from "../pods/service.js";
 import type { SessionActivityLease } from "./activity.js";
 import type { OpenDialog } from "./dialogs.js";
+import type { LivePromptQueue } from "./live-prompts.js";
 import type { PiStartupCrash } from "./session-state.js";
 import type { WsSink } from "./stream-fanout.js";
 
@@ -31,6 +32,7 @@ export interface ActiveSession {
   /** Newest in-flight output per tool call; superseded by the durable tool_execution_end. */
   toolExecutionUpdates: Map<string, AgentSessionEvent>;
   persistQueue: Promise<void>;
+  livePrompts: LivePromptQueue;
   /** Serializes model/thinking mutations and catalog reads before they reach a client. */
   modelCatalogQueue: Promise<void>;
   /** Serializes mutable pod-name mirrors in the same order pi emitted them. */

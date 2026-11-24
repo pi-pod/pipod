@@ -69,6 +69,8 @@ export interface RemoteRpcClientOptions {
 
 export interface RpcRequestOptions {
   signal?: AbortSignal;
+  /** Observe the reply in wire order, before later events in the same input chunk. */
+  onResponse?: (response: RpcResponse) => void;
   /**
    * Fail the request rather than wait forever. Defaults to {@link QUERY_TIMEOUT_MS} for the
    * read-only `get_*` commands and to no deadline for everything else — a prompt runs for as
@@ -388,7 +390,18 @@ export abstract class RpcClientBase {
         timer = null;
         options.signal?.removeEventListener("abort", onAbort);
       };
-      this.pending.set(id, { resolve, reject, cleanup });
+      this.pending.set(id, {
+        resolve: (response) => {
+          try {
+            options.onResponse?.(response);
+            resolve(response);
+          } catch (error) {
+            reject(error);
+          }
+        },
+        reject,
+        cleanup,
+      });
       options.signal?.addEventListener("abort", onAbort, { once: true });
       if (options.signal?.aborted) onAbort();
     });
