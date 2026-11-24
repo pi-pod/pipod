@@ -197,6 +197,7 @@ public struct SessionView: View {
                     text: $draft,
                     placeholder: composerPlaceholder(stream),
                     onSend: { sendDraft(stream) },
+                    onQueue: { sendDraft(stream, queueAfterTurn: true) },
                     onChooseModel: { router.openModelPicker(podId: podId) },
                     onShowUsage: { showsUsage = true },
                     attachments: attachments,
@@ -643,7 +644,7 @@ public struct SessionView: View {
         stream?.retry(api)
     }
 
-    private func sendDraft(_ stream: SessionStream) {
+    private func sendDraft(_ stream: SessionStream, queueAfterTurn: Bool = false) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachments.isEmpty else { return }
         let evaluation = SlashCommandCatalog.evaluate(
@@ -668,7 +669,9 @@ public struct SessionView: View {
         if !keepAttachments { attachments = [] }
         attachError = nil
         followsLatest = true
-        if let localAction = stream.sendOrRunSlashCommand(text, attachments: staged) {
+        if let localAction = stream.sendOrRunSlashCommand(
+            text, attachments: staged, queueAfterTurn: queueAfterTurn
+        ) {
             switch localAction {
             case .openModelPicker:
                 router.openModelPicker(podId: podId)

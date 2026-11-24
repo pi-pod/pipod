@@ -22,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -98,6 +99,7 @@ data class ComposerState(
     val availableThinkingLevels: List<String> = emptyList(),
     val commandInFlight: Boolean = false,
     val modelSelectionInFlight: Boolean = false,
+    val supportsLivePromptDelivery: Boolean = false,
 ) {
     val slashEvaluation: SlashCommandDraftEvaluation
         get() = SlashCommandCatalog.evaluate(
@@ -115,8 +117,12 @@ data class ComposerState(
             (!slashEvaluation.isSlashInput || !commandInFlight) &&
             (text.trim().isNotEmpty() || attachments.isNotEmpty())
 
+    val showsQueueAction: Boolean
+        get() = isRunning && isConnected && supportsLivePromptDelivery && !slashEvaluation.isSlashInput
+
     val sendSemanticsLabel: String
-        get() = slashEvaluation.validCommand?.let { "Run ${it.displayName}" } ?: "Send message"
+        get() = slashEvaluation.validCommand?.let { "Run ${it.displayName}" }
+            ?: if (showsQueueAction) "Send to current turn" else "Send message"
 }
 
 /** Test handles the acceptance pass addresses the composer by. */
@@ -139,17 +145,15 @@ object ComposerTestTags {
  * Chat-style input pinned above the keyboard, plus the image staging strip for
  * turns that carry pictures.
  *
- * Ported from `pi-pod-flutter/lib/features/session/composer_bar.dart`. Send
- * stays available while pi is working so a follow-up can queue; Stop only
- * becomes actionable for the turn that can be interrupted, but keeps its place
- * in the bar so the field never resizes under a thumb that is already moving
- * toward Send.
+ * Send steers the current turn while Pi is working. Queue is a separate action
+ * for prompts that should wait until the turn finishes.
  */
 @Composable
 fun ComposerBar(
     state: ComposerState,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
+    onQueue: () -> Unit = {},
     onInterrupt: () -> Unit,
     modifier: Modifier = Modifier,
     onAttach: () -> Unit = {},
@@ -331,6 +335,11 @@ fun ComposerBar(
                         tint = if (state.canSend) appColors.accent else appColors.secondaryLabel,
                         modifier = Modifier.testTag(ComposerTestTags.SEND),
                     )
+                }
+                if (state.showsQueueAction && state.canSend) {
+                    TextButton(onClick = onQueue, modifier = Modifier.align(Alignment.End).testTag("composer-queue")) {
+                        Text("Queue after current turn")
+                    }
                 }
             }
         }

@@ -17,6 +17,7 @@ enum class StreamItemDelivery {
     SENDING,
     WAITING_FOR_CONNECTION,
     SAVED_ON_SERVER,
+    UNKNOWN,
     FAILED,
 }
 

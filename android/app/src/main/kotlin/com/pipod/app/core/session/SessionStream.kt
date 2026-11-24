@@ -103,6 +103,7 @@ data class SessionStreamState(
     val availableModels: List<ModelChoice> = emptyList(),
     val availableThinkingLevels: List<String> = emptyList(),
     val isConnected: Boolean = false,
+    val supportsLivePromptDelivery: Boolean = false,
     val reconnecting: Boolean = false,
     val reconnectAttempt: Int = 0,
     val isOffline: Boolean = false,
@@ -277,6 +278,7 @@ class SessionStream(
     private val expandedToolDetails = mutableSetOf<String>()
 
     private var isConnected = false
+    private var supportsLivePromptDelivery = false
     private var reconnecting = false
     private var reconnectAttempt = 0
     private var isOffline = false
@@ -377,6 +379,8 @@ class SessionStream(
      * the same instruction to the agent twice.
      */
     private val sendWatermarks = mutableMapOf<String, Long>()
+    private val livePromptItemIds = mutableSetOf<String>()
+    private val followUpItemIds = mutableSetOf<String>()
 
     private var isStreaming = false
     private var isCompacting = false
@@ -1106,6 +1110,7 @@ class SessionStream(
     fun sendOrRunSlashCommand(
         text: String,
         attachments: List<ChatAttachment> = emptyList(),
+        queueAfterTurn: Boolean = false,
     ): SlashCommandLocalAction? {
         val evaluation = synchronized(lock) {
             SlashCommandCatalog.evaluate(
@@ -1117,7 +1122,7 @@ class SessionStream(
             )
         }
         if (evaluation == SlashCommandDraftEvaluation.None) {
-            send(text, attachments)
+            send(text, attachments, queueAfterTurn)
             return null
         }
         val valid = evaluation as? SlashCommandDraftEvaluation.Valid ?: return null
@@ -1481,10 +1486,10 @@ class SessionStream(
         }
     }
 
-    fun send(text: String, attachments: List<ChatAttachment> = emptyList()) {
+    fun send(text: String, attachments: List<ChatAttachment> = emptyList(), queueAfterTurn: Boolean = false) {
         val id = synchronized(lock) {
-            val itemId = "$localIdPrefix:$syntheticId"
-            syntheticId -= 1
+            val itemId = UUID.randomUUID().toString()
+            if (queueAfterTurn) followUpItemIds.add(itemId)
             val staged = attachments.map {
                 StreamImageAttachment(id = it.id, name = it.name, mimeType = it.mimeType, bytes = it.bytes)
             }
@@ -1511,15 +1516,17 @@ class SessionStream(
     fun retrySend(id: String) {
         val retry = synchronized(lock) {
             val index = transcript.indexOfFirst { it.id == id }
-            if (index < 0) return
+            if (index < 0 || transcript[index].delivery == StreamItemDelivery.UNKNOWN) return
             val text = transcript[index].text
             val staged = pendingAttachments.remove(id) ?: transcript[index].attachments
             transcript.removeAt(index)
             sendWatermarks.remove(id)
+            livePromptItemIds.remove(id)
+            val queueAfterTurn = followUpItemIds.remove(id)
             // Reuse the attachments' stable ids: two same-named images keep
             // distinct identities through the retry instead of colliding on name.
             val stamp = microsecondsSinceEpoch(now())
-            text to staged.mapIndexed { position, attachment ->
+            val attachments = staged.mapIndexed { position, attachment ->
                 ChatAttachment(
                     id = attachment.id.ifEmpty { "retry-$stamp-$position" },
                     name = attachment.name,
@@ -1527,8 +1534,9 @@ class SessionStream(
                     bytes = attachment.bytes,
                 )
             }
+            Triple(text, attachments, queueAfterTurn)
         }
-        send(retry.first, retry.second)
+        send(retry.first, retry.second, retry.third)
     }
 
     fun discardOutgoing(id: String) {
@@ -1537,6 +1545,8 @@ class SessionStream(
             transcript.removeAll { it.id == id }
             pendingAttachments.remove(id)
             sendWatermarks.remove(id)
+            livePromptItemIds.remove(id)
+            followUpItemIds.remove(id)
             bump()
         }
     }
@@ -1553,10 +1563,18 @@ class SessionStream(
         val queue = synchronized(lock) {
             if (isConnected) {
                 val transport = socket
-                if (transport == null || !transport.prompt(text, wireImages(id))) {
+                val followUp = id in followUpItemIds
+                if (followUp && !supportsLivePromptDelivery) {
+                    setDelivery(id, StreamItemDelivery.FAILED)
+                    setError("This server does not support queueing after the current turn.")
+                    publish()
+                    return
+                }
+                if (transport == null || !transport.prompt(text, wireImages(id), id, followUp)) {
                     setDelivery(id, StreamItemDelivery.FAILED)
                     return
                 }
+                if (supportsLivePromptDelivery) livePromptItemIds.add(id)
                 pendingAttachments.remove(id)
                 setDelivery(id, StreamItemDelivery.SENDING)
                 awaitingReply = true
@@ -1653,18 +1671,22 @@ class SessionStream(
         timestamp: Instant?,
         seq: Long,
         imageCount: Int = 0,
+        requestId: String? = null,
     ): Boolean {
         val index = transcript.indexOfFirst {
             it.style == StreamItemStyle.USER &&
                 it.delivery != StreamItemDelivery.DELIVERED &&
                 it.text == text &&
                 it.attachments.size == imageCount &&
-                seq > (sendWatermarks[it.id] ?: 0L)
+                (if (requestId != null) it.id == requestId
+                 else it.id !in livePromptItemIds && seq > (sendWatermarks[it.id] ?: 0L))
         }
         if (index < 0) return false
         val local = transcript[index].id
         pendingAttachments.remove(local)
         sendWatermarks.remove(local)
+        livePromptItemIds.remove(local)
+        followUpItemIds.remove(local)
         transcript[index] = transcript[index].copy(
             id = serverId,
             delivery = StreamItemDelivery.DELIVERED,
@@ -1678,7 +1700,9 @@ class SessionStream(
         var changed = false
         for (index in transcript.indices) {
             if (transcript[index].delivery == StreamItemDelivery.SENDING) {
-                transcript[index] = transcript[index].copy(delivery = StreamItemDelivery.FAILED)
+                val delivery = if (transcript[index].id in livePromptItemIds) StreamItemDelivery.UNKNOWN
+                    else StreamItemDelivery.FAILED
+                transcript[index] = transcript[index].copy(delivery = delivery)
                 changed = true
             }
         }
@@ -2101,8 +2125,19 @@ class SessionStream(
                 updateBashSummaries()
             }
             is SessionServerMessage.RpcResult -> {
-                message.response?.let { handleSlashRpcResultLocked(message.id, it) }
-                usageTracker.accept(message.id, message.response)
+                val response = message.response
+                if (response?.string("command") == "live_prompt") {
+                    if (message.id !in livePromptItemIds) return
+                    val unknown = (response["deliveryUnknown"] as? JsonPrimitive)?.booleanOrNull ?: true
+                    if (!unknown) livePromptItemIds.remove(message.id)
+                    setDelivery(message.id, if (unknown) StreamItemDelivery.UNKNOWN else StreamItemDelivery.FAILED)
+                    awaitingReply = transcript.any { it.delivery == StreamItemDelivery.SENDING }
+                    updateRunningState()
+                    setError(response.string("error"))
+                } else {
+                    response?.let { handleSlashRpcResultLocked(message.id, it) }
+                    usageTracker.accept(message.id, response)
+                }
             }
 
             is SessionServerMessage.Error -> {
@@ -2181,6 +2216,7 @@ class SessionStream(
         // request after this hello, so the previous set is dropped first.
         remoteUi.resetForAttach()
         serverWatermark = maxOf(serverWatermark, message.latestSeq)
+        supportsLivePromptDelivery = (state?.get("livePromptDelivery") as? JsonPrimitive)?.booleanOrNull ?: false
         isStreaming = (state?.get("isStreaming") as? JsonPrimitive)?.booleanOrNull ?: false
         isCompacting = (state?.get("isCompacting") as? JsonPrimitive)?.booleanOrNull ?: false
         val pendingMessages = state?.integer("pendingMessageCount")
@@ -2341,7 +2377,13 @@ class SessionStream(
                 // prompts so replay stays complete, but they are protocol traffic
                 // rather than conversation.
                 if (isInternalPodCommand(text)) return
-                if (!adoptOutgoing(text, id, timestamp, seq, imageCount = historyImages.size)) {
+                val requestId = payload.string("requestId")
+                val adopted = adoptOutgoing(text, id, timestamp, seq, imageCount = historyImages.size, requestId = requestId)
+                if (adopted && requestId != null) {
+                    awaitingReply = transcript.any { it.delivery == StreamItemDelivery.SENDING }
+                    updateRunningState()
+                }
+                if (!adopted) {
                     append(
                         StreamItem(
                             id = id,
@@ -3025,6 +3067,7 @@ class SessionStream(
             availableModels = availableModels.toList(),
             availableThinkingLevels = availableThinkingLevels.toList(),
             isConnected = isConnected,
+            supportsLivePromptDelivery = supportsLivePromptDelivery,
             reconnecting = reconnecting,
             reconnectAttempt = reconnectAttempt,
             isOffline = isOffline,

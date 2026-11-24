@@ -4,15 +4,14 @@ import SwiftUI
 /// Chat-style input pinned above the keyboard, plus the image staging strip for
 /// turns that carry pictures.
 ///
-/// Send stays available while pi is working so a follow-up can queue; Stop only
-/// becomes actionable for the turn that can be interrupted, but keeps its place
-/// in the bar so the field never resizes under a thumb already moving toward
-/// Send.
+/// Send steers the current turn when Pi is working. Queue is a separate action
+/// for prompts that should wait until the turn finishes.
 struct ComposerBar: View {
     let stream: SessionStream
     @Binding var text: String
     let placeholder: String
     let onSend: () -> Void
+    let onQueue: () -> Void
     let onChooseModel: () -> Void
     let onShowUsage: () -> Void
 
@@ -52,7 +51,11 @@ struct ComposerBar: View {
         if let command = slashEvaluation.validCommand {
             return "Run \(command.displayName)"
         }
-        return "Send message"
+        return showsQueueAction ? "Send to current turn" : "Send message"
+    }
+
+    private var showsQueueAction: Bool {
+        stream.isRunning && stream.isConnected && stream.supportsLivePromptDelivery && !slashEvaluation.isSlashInput
     }
 
     /// UTF-16 units, because that is what the server counts: its check is
@@ -196,6 +199,12 @@ struct ComposerBar: View {
                 .disabled(!canSend)
                 .accessibilityLabel(sendAccessibilityLabel)
                 .accessibilityIdentifier("composer.send")
+            }
+            if showsQueueAction && canSend {
+                Button("Queue after current turn", action: onQueue)
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityIdentifier("composer.queue")
             }
         }
         .padding(.horizontal, 12)

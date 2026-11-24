@@ -277,6 +277,8 @@ export interface PromptImageDescriptor {
 export interface UserPromptPayload {
   text: string;
   images?: PromptImageDescriptor[];
+  /** Client correlation only, not an idempotency key. */
+  requestId?: string;
 }
 
 function decodedBytes(data: string): number {
@@ -490,7 +492,7 @@ export type ServerMessage =
   | { type: "error"; code: string; message: string; detail?: unknown };
 
 export type ClientMessage =
-  | { type: "prompt"; text?: string; images?: ImageContent[] }
+  | { type: "prompt"; text?: string; images?: ImageContent[]; requestId?: string; streamingBehavior?: "steer" | "followUp" }
   | { type: "interrupt" }
   | {
       type: "set";

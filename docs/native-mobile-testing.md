@@ -25,6 +25,25 @@ Completed **bash tool calls** show an AI caption by default. This uses the same 
 
 For a no-spend walkthrough start the dev fake provider with `FAKE_BASH_SUMMARIES=1` and send `TOOLS`. Check the completed and failed bash rows, a non-bash row, expansion, and `/summaries off`. Fixture captions are intentionally labeled as such; they prove native rendering and gateway routing, not supplier access.
 
+## Sending during a turn or compaction
+
+On a server that advertises live prompt delivery, **Send** during a turn steers
+Pi at its next opportunity; **Queue after current turn** submits a follow-up.
+Pi applies the pod’s `steeringMode` and `followUpMode` settings (`all` or
+`one-at-a-time`) to the corresponding queue. Both actions start a normal turn
+if Pi has already become idle by the time it receives the message.
+
+Start a turn with a tool that takes long enough to interact. Queue a recognizable
+message first, then steer with a different marker. Check that Pi takes the
+steering input before the follow-up. Repeat with multiple messages and the two
+batching settings. In a conversation with enough history to compact, run
+`/compact`, then submit two more messages before it finishes. Check that both
+run once, in the chosen order, and that they appear once after reopening.
+Repeat with an attached image. A rejected message must not appear in replay;
+if the connection drops before a verdict, the app must not offer an automatic
+resend. Compaction holds are bounded and live on the gateway, so closing the
+app does not cancel them. They are not durable across gateway replacement.
+
 ## Local API and debug sign-in
 
 The workspace Makefile starts the development API and mints a short-lived JWT.

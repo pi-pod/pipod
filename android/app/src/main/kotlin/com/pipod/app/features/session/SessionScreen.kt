@@ -104,6 +104,7 @@ import kotlinx.coroutines.launch
 data class SessionScreenActions(
     val onDraftChange: (String) -> Unit = {},
     val onSend: () -> Unit = {},
+    val onQueue: () -> Unit = {},
     val onInterrupt: () -> Unit = {},
     val onAttach: () -> Unit = {},
     val onRemoveAttachment: (String) -> Unit = {},
@@ -187,6 +188,7 @@ fun SessionScreen(
                     null -> Unit
                 }
             },
+            onQueue = { viewModel.send(queueAfterTurn = true) },
             onInterrupt = viewModel::interrupt,
             onAttach = pickImages,
             onRemoveAttachment = viewModel::removeAttachment,
@@ -402,6 +404,10 @@ fun SessionScreen(
                     onSend = {
                         followsLatest = true
                         actions.onSend()
+                    },
+                    onQueue = {
+                        followsLatest = true
+                        actions.onQueue()
                     },
                     onInterrupt = actions.onInterrupt,
                     onAttach = actions.onAttach,
